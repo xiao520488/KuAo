@@ -1,12 +1,37 @@
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import Header from '@/components/Header.vue'
 import CompetitionCard from '@/components/CompetitionCard.vue'
-import { getCompetitions } from '@/services/api'
+import BackToTop from '@/components/BackToTop.vue'
+import { getCompetitions, checkPrepared } from '@/services/api'
+import { authState } from '@/services/auth'
 
 const competitions = ref([])
 const loading = ref(true)
 const errorMsg = ref('')
+// 竞赛 ID -> 是否已加入备赛（登录后批量拉取）
+const preparedMap = ref({})
+
+// 并发查询每张卡片的备赛状态；未登录直接跳过（全部视为未加入）
+async function loadPreparedStates(list) {
+  if (!authState.user || !Array.isArray(list) || list.length === 0) {
+    preparedMap.value = {}
+    return
+  }
+  const results = await Promise.all(
+    list.map(async (item) => {
+      const id = item.id
+      if (id === null || id === undefined) return [null, false]
+      const ok = await checkPrepared(id)
+      return [String(id), ok]
+    })
+  )
+  const next = {}
+  for (const [key, ok] of results) {
+    if (key !== null) next[key] = ok
+  }
+  preparedMap.value = next
+}
 
 // ===== 筛选栏（当前为静态 UI，先把交互状态搭好，后端筛选参数后续接入） =====
 const subjects = ['全部科目', '工科', '理科', '文体', '商科', '综合', '计算机类', '创新创业']
@@ -105,12 +130,26 @@ async function loadCompetitions() {
   try {
     const list = await getCompetitions()
     competitions.value = list.map(mapToCard)
+    // 状态查询失败不影响列表展示
+    loadPreparedStates(competitions.value)
   } catch (err) {
     errorMsg.value = err?.message || '加载竞赛列表失败'
     competitions.value = []
   } finally {
     loading.value = false
   }
+}
+
+// 登录 / 退出后重新计算备赛状态
+watch(
+  () => authState.user,
+  () => loadPreparedStates(competitions.value)
+)
+
+// 卡片内切换备赛后同步本地状态，避免重新请求
+function onPreparationChange({ id, prepared }) {
+  if (id === null || id === undefined) return
+  preparedMap.value = { ...preparedMap.value, [String(id)]: prepared }
 }
 
 onMounted(loadCompetitions)
@@ -221,8 +260,13 @@ onMounted(loadCompetitions)
           :category="item.category"
           :sign-up-time="item.signUpTime"
           :contest-time="item.contestTime"
+          :prepared="preparedMap[String(item.id)] === true"
+          @preparation-change="onPreparationChange"
         />
       </div>
     </main>
+
+    <!-- 全局回到顶部 -->
+    <BackToTop />
   </div>
 </template>

@@ -80,3 +80,18 @@ JSON_REPAIR_ENABLED = _get_bool("JSON_REPAIR_ENABLED", True)
 # ------------------------------------------------------------
 DB_PATH = _get_str("DB_PATH", os.path.join(os.path.dirname(os.path.abspath(__file__)), "competitions.db"))
 CHROMA_DIR = _get_str("CHROMA_DIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), "chroma_db"))
+
+
+# ------------------------------------------------------------
+# 鉴权 / JWT（用户系统）
+# ------------------------------------------------------------
+# 生产环境务必通过 .env 覆盖 JWT_SECRET_KEY！
+JWT_SECRET_KEY = _get_str("JWT_SECRET_KEY", "dev-only-secret-key-please-change-in-prod-4f8a2c9e1b7d")
+JWT_ALGORITHM = _get_str("JWT_ALGORITHM", "HS256")
+JWT_EXPIRE_MINUTES = _get_int("JWT_EXPIRE_MINUTES", 60 * 24 * 7)
+
+# ------------------------------------------------------------
+# AI daily quota (per user, resets at local midnight)
+# ------------------------------------------------------------
+# Max AI calls per user per day. Set to 0 for unlimited (dev only).
+AI_DAILY_QUOTA = _get_int("AI_DAILY_QUOTA", 30)

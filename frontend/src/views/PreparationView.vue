@@ -3,32 +3,103 @@ import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import CompetitionCard from '@/components/CompetitionCard.vue'
 import Header from '@/components/Header.vue'
-import { getCompetitions } from '@/services/api'
-import { mapToCard } from '@/services/competitionMapper'
+import { getMyPreparations } from '@/services/api'
 
 const router = useRouter()
 
-// 备赛列表：来自后端 /api/competitions，字段经 mapToCard 映射为卡片 props
+// 备赛列表：来自后端 GET /api/preparations（需登录），字段经 mapToPrepCard 映射为卡片 props
 const list = ref([])
+const total = ref(0)
 const loading = ref(true)
 const errorMsg = ref('')
 
-async function loadCompetitions() {
+const MONTH_RE = /^\d{1,2}$/
+
+// 后端返回的月份字段可能是 1-12 的数字或完整日期，统一成「N 月」展示
+function toMonth(value) {
+  if (value === null || value === undefined || value === '') return null
+  const str = String(value).trim()
+
+  if (MONTH_RE.test(str)) {
+    const n = parseInt(str, 10)
+    return n >= 1 && n <= 12 ? n : null
+  }
+
+  const parts = str.split(/[-/.\sT:]+/).filter(Boolean)
+  if (parts.length >= 2) {
+    const m = parseInt(parts[1], 10)
+    if (m >= 1 && m <= 12) return m
+  }
+  return null
+}
+
+function formatSignUp(item) {
+  const start = toMonth(item.reg_start_month)
+  const end = toMonth(item.reg_end_month)
+
+  if (start && end) {
+    const crossYear =
+      item.reg_cross_year === true || item.reg_cross_year === 1 ||
+      item.reg_cross_year === '1' || item.reg_cross_year === 'true' ||
+      end < start
+    if (crossYear && end < start) return `${start} 月 - 次年 ${end} 月`
+    return `${start} 月 - ${end} 月`
+  }
+  if (start) return `${start} 月起`
+  if (end) return `截止 ${end} 月`
+  return '待公布'
+}
+
+const LEVEL_FALLBACK = {
+  national: '国家级',
+  provincial: '省级',
+  municipal: '市级',
+  regional: '区域级',
+  international: '国际级'
+}
+
+// 备赛条目 -> 卡片 props；competition_id 即真实竞赛 ID，保证详情/工作台跳转有效
+function mapToPrepCard(item) {
+  if (!item || item.competition_id === null || item.competition_id === undefined) return null
+  return {
+    id: item.competition_id,
+    title: item.name || '未命名竞赛',
+    level: item.level_label || LEVEL_FALLBACK[item.level] || item.level || '',
+    category: item.category || '',
+    image: item.image ?? item.cover ?? '',
+    signUpTime: formatSignUp(item),
+    contestTime: '待定'
+  }
+}
+
+// 卡片移出备赛后：本地剔除该项并同步总数，避免整页重拉导致闪烁
+function onPreparationChange({ id, prepared }) {
+  if (prepared) return
+  list.value = list.value.filter((item) => item.id !== id)
+  total.value = Math.max(0, total.value - 1)
+}
+
+async function loadPreparations() {
   loading.value = true
   errorMsg.value = ''
   try {
-    const data = await getCompetitions()
-    // mapToCard 对缺失真实 id 的条目返回 null，这里直接过滤掉，避免出现假 id 的卡片
-    list.value = (Array.isArray(data) ? data : []).map(mapToCard).filter(Boolean)
+    const { items, total: count } = await getMyPreparations()
+    list.value = items.map(mapToPrepCard).filter(Boolean)
+    total.value = count
   } catch (err) {
-    errorMsg.value = err?.message || '加载竞赛数据失败'
+    errorMsg.value = err?.message || '加载备赛列表失败'
     list.value = []
+    total.value = 0
   } finally {
     loading.value = false
   }
 }
 
-onMounted(loadCompetitions)
+onMounted(loadPreparations)
+
+function goCompetitions() {
+  router.push({ name: 'competitions' })
+}
 
 function goWorkspace(id) {
   router.push({ name: 'preparation-workspace', params: { id } })
@@ -39,10 +110,15 @@ function goWorkspace(id) {
   <div class="min-h-screen bg-slate-50">
     <Header />
 
-    <main class="mx-auto max-w-5xl px-6 py-12">
+    <main class="mx-auto max-w-5xl px-6 pb-24 pt-28">
       <header class="mb-10">
         <h1 class="text-3xl font-bold text-slate-900">我的备赛</h1>
-        <p class="mt-2 text-sm text-slate-500">选择一项竞赛，进入备赛工作台开始准备</p>
+        <p class="mt-2 text-sm text-slate-500">
+          <template v-if="total > 0">
+            共 {{ total }} 项竞赛，选择一项进入备赛工作台开始准备
+          </template>
+          <template v-else>选择一项竞赛，进入备赛工作台开始准备</template>
+        </p>
       </header>
 
       <!-- 加载态 -->
@@ -51,7 +127,7 @@ function goWorkspace(id) {
           <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" class="opacity-20" />
           <path d="M22 12a10 10 0 0 1-10 10" stroke="currentColor" stroke-width="3" stroke-linecap="round" />
         </svg>
-        <span class="text-sm font-medium">正在加载竞赛列表…</span>
+        <span class="text-sm font-medium">正在加载备赛列表…</span>
       </div>
 
       <!-- 错误态 -->
@@ -63,25 +139,46 @@ function goWorkspace(id) {
         <button
           type="button"
           class="mt-4 rounded-full bg-red-600 px-5 py-2 text-sm font-bold text-white hover:bg-red-700 transition-colors"
-          @click="loadCompetitions"
+          @click="loadPreparations"
         >
           重新加载
         </button>
       </div>
 
-      <!-- 空态 -->
+      <!-- 空态：未加入任何备赛 -->
       <div
         v-else-if="list.length === 0"
-        class="rounded-2xl border border-slate-200 bg-white px-6 py-16 text-center"
+        class="rounded-2xl border border-dashed border-slate-300 bg-white px-6 py-20 text-center"
       >
-        <p class="text-sm text-slate-400">暂无竞赛数据</p>
+        <div
+          class="mx-auto mb-5 flex h-14 w-14 items-center justify-center rounded-full bg-slate-100"
+        >
+          <svg class="h-7 w-7 text-slate-400" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M12 6v12m6-6H6" />
+          </svg>
+        </div>
+        <p class="font-bold text-slate-700">还没有加入任何备赛</p>
+        <p class="mt-1 text-sm text-slate-400">去竞赛列表挑一项感兴趣的，点击「加入备赛」即可开始</p>
+        <button
+          type="button"
+          class="mt-6 rounded-full bg-blue-600 px-6 py-2 text-sm font-bold text-white
+                 shadow-sm shadow-blue-600/25 transition-colors hover:bg-blue-700"
+          @click="goCompetitions"
+        >
+          去浏览竞赛
+        </button>
       </div>
 
       <!-- 列表 -->
       <div v-else class="flex flex-col gap-6">
         <div v-for="item in list" :key="item.id">
           <!-- 复用通用卡片：整卡/详情 -> 竞赛详情，备赛 -> 本页 -->
-          <CompetitionCard v-bind="item" hide-prep-btn />
+          <CompetitionCard
+            v-bind="item"
+            show-remove-btn
+            prepared
+            @preparation-change="onPreparationChange"
+          />
 
           <!-- 独立入口：进入该竞赛的备赛工作台 -->
           <div class="mt-3 flex justify-end">

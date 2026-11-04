@@ -183,3 +183,49 @@ CREATE INDEX IF NOT EXISTS idx_ideas_comp
     ON ideas (competition_id);
 CREATE UNIQUE INDEX IF NOT EXISTS ux_ideas_hash
     ON ideas (content_hash) WHERE content_hash IS NOT NULL;
+
+-- -----------------------------------------------------------------------------
+-- 7. users —— 用户账号（鉴权地基）
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS users (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    username      TEXT    NOT NULL,
+    password_hash TEXT    NOT NULL,
+    created_at    TEXT    NOT NULL DEFAULT (datetime('now', 'localtime'))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS ux_users_username
+    ON users (username);
+
+-- -----------------------------------------------------------------------------
+-- 8. user_preparations -- user prep list ("my preparation")
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS user_preparations (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id        INTEGER NOT NULL,
+    competition_id INTEGER NOT NULL,
+    created_at     TEXT    NOT NULL DEFAULT (datetime('now', 'localtime')),
+    FOREIGN KEY (user_id)        REFERENCES users (id)        ON DELETE CASCADE,
+    FOREIGN KEY (competition_id) REFERENCES competitions (id) ON DELETE CASCADE
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS ux_user_prep
+    ON user_preparations (user_id, competition_id);
+CREATE INDEX IF NOT EXISTS idx_user_prep_comp
+    ON user_preparations (competition_id);
+
+-- -----------------------------------------------------------------------------
+-- 9. ai_usage -- per-user daily AI quota counter
+--    One row per (user_id, usage_date). Used/limit compared atomically.
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS ai_usage (
+    user_id    INTEGER NOT NULL,
+    usage_date TEXT    NOT NULL,              -- 'YYYY-MM-DD' (local date)
+    used       INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT    NOT NULL DEFAULT (datetime('now', 'localtime')),
+    PRIMARY KEY (user_id, usage_date),
+    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_ai_usage_date
+    ON ai_usage (usage_date);

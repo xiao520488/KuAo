@@ -25,6 +25,7 @@ from contextlib import contextmanager
 import os
 import re
 import sqlite3
+from datetime import datetime
 
 # 数据库文件路径（与 db.py 同目录）
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "competitions.db")
@@ -596,3 +597,269 @@ def get_award_by_id(award_id: int) -> Optional[dict]:
         d["tech_stack"] = []
 
     return d
+
+
+# ============================================================
+# 七、用户账号（鉴权地基）
+# ============================================================
+
+def create_user(username: str, password_hash: str) -> int:
+    """
+    新增用户，返回自增 id。
+
+    依赖 schema_v2.sql 的 ux_users_username 唯一索引保证不会重名；
+    调用方（routers/auth.py）应先做一次 exists_user 预检以便返回友好错误，
+    但仍需在此捕获 IntegrityError 兜底并发抢注。
+    """
+    with get_conn() as conn:
+        conn.execute("CREATE TABLE IF NOT EXISTS users ("
+                     "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                     "username TEXT NOT NULL,"
+                     "password_hash TEXT NOT NULL,"
+                     "created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')))")
+        cur = conn.execute(
+            "INSERT INTO users (username, password_hash) VALUES (?, ?)",
+            (username, password_hash),
+        )
+        return int(cur.lastrowid)
+
+
+def get_user_by_username(username: str) -> Optional[dict]:
+    """按用户名查询用户，返回 {id, username, password_hash, created_at} 或 None。"""
+    with get_conn() as conn:
+        try:
+            row = conn.execute(
+                "SELECT id, username, password_hash, created_at "
+                "FROM users WHERE username = ?",
+                (username,),
+            ).fetchone()
+        except sqlite3.OperationalError:
+            # users 表尚未创建（老库未跑 init_db）
+            return None
+    return dict(row) if row else None
+
+
+def get_user_by_id(user_id: int) -> Optional[dict]:
+    """按 id 查询用户（不含密码哈希，供鉴权依赖返回当前用户信息）。"""
+    with get_conn() as conn:
+        try:
+            row = conn.execute(
+                "SELECT id, username, created_at FROM users WHERE id = ?",
+                (int(user_id),),
+            ).fetchone()
+        except sqlite3.OperationalError:
+            return None
+    return dict(row) if row else None
+
+
+# ============================================================
+# ai_usage: per-user daily AI quota (atomic consume)
+# ============================================================
+
+def _today_str() -> str:
+    """Local date as 'YYYY-MM-DD'. Quota resets at local midnight."""
+    return datetime.now().strftime("%Y-%m-%d")
+
+
+def consume_ai_quota(user_id: int, limit: int) -> dict:
+    """Atomically consume one AI call for today.
+
+    Concurrency
+    -----------
+    The whole operation is a *single* conditional UPDATE:
+
+        UPDATE ai_usage SET used = used + 1
+        WHERE user_id = ? AND usage_date = ? AND used < ?
+
+    SQLite serializes writes, so two simultaneous requests can never both
+    see ``used < limit`` and both increment past the cap. We rely on
+    ``cur.rowcount`` (1 == we won the slot, 0 == quota exhausted) instead of
+    a read-then-write, which would race.
+
+    The first call of the day creates the row with used=1 via the same
+    guarded INSERT (``used < limit`` is implied by 1 <= limit).
+
+    Returns
+    -------
+    dict with keys:
+        allowed (bool), used (int), limit (int), remaining (int)
+    On rejection ``used`` equals the exhausted value (== limit).
+    """
+    limit = int(limit)
+    uid = int(user_id)
+    today = _today_str()
+
+    # limit <= 0 means "unlimited" (dev escape hatch)
+    if limit <= 0:
+        return {"allowed": True, "used": 0, "limit": 0, "remaining": -1}
+
+    with get_conn() as conn:
+        # 1) fast path: row already exists for today -> guarded increment
+        cur = conn.execute(
+            "UPDATE ai_usage SET used = used + 1, "
+            "updated_at = datetime('now', 'localtime') "
+            "WHERE user_id = ? AND usage_date = ? AND used < ?",
+            (uid, today, limit),
+        )
+        if cur.rowcount == 1:
+            row = conn.execute(
+                "SELECT used FROM ai_usage WHERE user_id = ? AND usage_date = ?",
+                (uid, today),
+            ).fetchone()
+            used = int(row["used"])
+            return {
+                "allowed": True,
+                "used": used,
+                "limit": limit,
+                "remaining": max(limit - used, 0),
+            }
+
+        # 2) either no row yet, or quota exhausted -> disambiguate
+        row = conn.execute(
+            "SELECT used FROM ai_usage WHERE user_id = ? AND usage_date = ?",
+            (uid, today),
+        ).fetchone()
+
+        if row is not None:
+            # row exists and guard failed => exhausted
+            used = int(row["used"])
+            return {"allowed": False, "used": used, "limit": limit, "remaining": 0}
+
+        # 3) first call today: create the row with used=1.
+        #    INSERT OR IGNORE: if a concurrent request created it first,
+        #    rowcount == 0 and we fall back to the guarded UPDATE.
+        cur = conn.execute(
+            "INSERT OR IGNORE INTO ai_usage (user_id, usage_date, used) "
+            "VALUES (?, ?, 1)",
+            (uid, today),
+        )
+        if cur.rowcount == 1:
+            return {"allowed": True, "used": 1, "limit": limit,
+                    "remaining": max(limit - 1, 0)}
+
+        # lost the insert race -> retry the guarded increment once
+        cur = conn.execute(
+            "UPDATE ai_usage SET used = used + 1, "
+            "updated_at = datetime('now', 'localtime') "
+            "WHERE user_id = ? AND usage_date = ? AND used < ?",
+            (uid, today, limit),
+        )
+        row = conn.execute(
+            "SELECT used FROM ai_usage WHERE user_id = ? AND usage_date = ?",
+            (uid, today),
+        ).fetchone()
+        used = int(row["used"]) if row else limit
+        allowed = cur.rowcount == 1
+        return {
+            "allowed": allowed,
+            "used": used,
+            "limit": limit,
+            "remaining": max(limit - used, 0) if allowed else 0,
+        }
+
+
+def get_ai_quota(user_id: int, limit: int) -> dict:
+    """Peek at today's usage without consuming. Safe for /me-style display."""
+    limit = int(limit)
+    with get_conn() as conn:
+        try:
+            row = conn.execute(
+                "SELECT used FROM ai_usage WHERE user_id = ? AND usage_date = ?",
+                (int(user_id), _today_str()),
+            ).fetchone()
+        except sqlite3.OperationalError:
+            return {"used": 0, "limit": limit, "remaining": max(limit, 0)}
+    used = int(row["used"]) if row else 0
+    if limit <= 0:
+        return {"used": used, "limit": 0, "remaining": -1}
+    return {"used": used, "limit": limit, "remaining": max(limit - used, 0)}
+
+
+# ============================================================
+# user_preparations (auth-required): per-user prep list
+# ============================================================
+
+def add_preparation(user_id: int, competition_id: int) -> dict:
+    """Add a competition to the user's prep list.
+
+    Idempotent: repeated calls return the existing row instead of raising.
+    Returns {"id":..., "created": bool}
+    Raises ValueError if the competition does not exist.
+    """
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT id FROM competitions WHERE id = ?", (int(competition_id),)
+        ).fetchone()
+        if row is None:
+            raise ValueError("competition not found")
+
+        cur = conn.execute(
+            "INSERT OR IGNORE INTO user_preparations (user_id, competition_id) "
+            "VALUES (?, ?)",
+            (int(user_id), int(competition_id)),
+        )
+        created = cur.rowcount > 0
+        got = conn.execute(
+            "SELECT id FROM user_preparations WHERE user_id = ? AND competition_id = ?",
+            (int(user_id), int(competition_id)),
+        ).fetchone()
+    return {"id": got["id"] if got else None, "created": created}
+
+
+def remove_preparation(user_id: int, competition_id: int) -> bool:
+    """Remove a competition from the prep list. Returns True if a row was deleted."""
+    with get_conn() as conn:
+        cur = conn.execute(
+            "DELETE FROM user_preparations WHERE user_id = ? AND competition_id = ?",
+            (int(user_id), int(competition_id)),
+        )
+        return cur.rowcount > 0
+
+
+def list_preparations(user_id: int) -> list:
+    """List the user's prep items joined with competition info, newest first."""
+    with get_conn() as conn:
+        try:
+            rows = conn.execute(
+                """
+                SELECT p.id              AS prep_id,
+                       p.competition_id  AS competition_id,
+                       p.created_at      AS added_at,
+                       c.name            AS name,
+                       c.category        AS category,
+                       c.level           AS level,
+                       c.level_label     AS level_label,
+                       c.reg_start_month AS reg_start_month,
+                       c.reg_end_month   AS reg_end_month,
+                       c.reg_cross_year  AS reg_cross_year,
+                       c.official_url    AS official_url,
+                       c.summary         AS summary
+                FROM user_preparations p
+                JOIN competitions c ON c.id = p.competition_id
+                WHERE p.user_id = ?
+                ORDER BY p.created_at DESC, p.id DESC
+                """,
+                (int(user_id),),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            # table not created yet (init_db never ran)
+            return []
+    return [dict(r) for r in rows]
+
+
+def is_prepared(user_id: int, competition_id: int) -> bool:
+    """Whether the competition is already in the user's prep list."""
+    with get_conn() as conn:
+        try:
+            row = conn.execute(
+                "SELECT 1 FROM user_preparations WHERE user_id = ? AND competition_id = ?",
+                (int(user_id), int(competition_id)),
+            ).fetchone()
+        except sqlite3.OperationalError:
+            return False
+    return row is not None
+
+
+def exists_user(username: str) -> bool:
+    """用户名是否已存在。"""
+    return get_user_by_username(username) is not None

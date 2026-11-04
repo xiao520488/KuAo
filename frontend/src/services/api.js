@@ -12,11 +12,8 @@ const api = axios.create({
   }
 })
 
-// 请求拦截器（预留：后续可注入 token）
-api.interceptors.request.use(
-  (config) => config,
-  (error) => Promise.reject(error)
-)
+/** localStorage 中存放 access_token 的键名（与 services/auth.js 保持一致） */
+const TOKEN_KEY = 'access_token'
 
 /**
  * 把 FastAPI 的错误 detail 归一化成可读字符串。
@@ -34,7 +31,45 @@ function normalizeDetail(detail) {
   return ''
 }
 
-// 响应拦截器：统一剥掉 axios 的 data 包装，并归一化错误信息
+/** 读取 token（存储不可用时静默降级，不影响请求发出） */
+function readToken() {
+  try {
+    return localStorage.getItem(TOKEN_KEY) || ''
+  } catch {
+    return ''
+  }
+}
+
+/** 清理本地登录态（401 时调用） */
+function clearAuthStorage() {
+  try {
+    localStorage.removeItem(TOKEN_KEY)
+  } catch {
+    /* 忽略 */
+  }
+}
+
+/**
+ * 请求拦截器：自动携带 Token
+ * 登录/注册等公开接口无需鉴权，这里统一判断：有 token 就带上。
+ * 使用 config.headers.set 兼容 AxiosHeaders，避免直接赋值被覆盖。
+ */
+api.interceptors.request.use(
+  (config) => {
+    const token = readToken()
+    if (token) {
+      if (typeof config.headers?.set === 'function') {
+        config.headers.set('Authorization', `Bearer ${token}`)
+      } else {
+        config.headers = config.headers || {}
+        config.headers.Authorization = `Bearer ${token}`
+      }
+    }
+    return config
+  },
+  (error) => Promise.reject(error)
+)
+
 api.interceptors.response.use(
   (response) => response.data,
   (error) => {
@@ -43,6 +78,27 @@ api.interceptors.response.use(
     if (error.response) {
       // 服务端有响应但状态码非 2xx
       const { status, data } = error.response
+
+      // Token 失效 / 未登录：清掉本地凭证，并通知上层（Header 监听后回到未登录态）
+      if (status === 401) {
+        clearAuthStorage()
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('auth:unauthorized'))
+        }
+      }
+
+      // AI 每日配额用尽：派发全局事件，由 App.vue 里的 Toast 监听并提示
+      // 后端此时返回 { detail: "..." }，文案直接用 detail，不在前端硬编码
+      if (status === 429) {
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(
+            new CustomEvent('ai:quota-exceeded', {
+              detail: { message: normalizeDetail(data?.detail) }
+            })
+          )
+        }
+      }
+
       message = normalizeDetail(data?.detail) || data?.message || `请求失败（${status}）`
     } else if (error.code === 'ECONNABORTED') {
       message = '请求超时，请检查后端服务是否已启动'
@@ -53,6 +109,26 @@ api.interceptors.response.use(
     return Promise.reject(new Error(message))
   }
 )
+
+/**
+ * 查询当前用户今日 AI 配额（只读，不消耗次数）
+ *
+ * 后端返回：{ used, limit, remaining }
+ * - remaining 为 null 表示不限次数（后端 AI_DAILY_QUOTA=0）
+ * - 该接口可在页面加载时安全调用
+ *
+ * @returns {Promise<{ used: number, limit: number, remaining: number|null }>}
+ */
+export function getAiQuota() {
+  return api.get('/api/ai/quota').then((data) => ({
+    used: Number(data?.used) || 0,
+    limit: Number(data?.limit) || 0,
+    remaining:
+      data?.remaining === null || data?.remaining === undefined
+        ? null
+        : Number(data.remaining)
+  }))
+}
 
 /**
  * 把外部传入的竞赛 ID 规范化为正整数。
@@ -138,7 +214,7 @@ export function getCompetitionDetail(id) {
 
 /**
  * 单个获奖作品 AI 解析
- * POST /api/ai/analyze/work  body: { work_id, competition_id }
+ * POST /api/ai/analyze-work  body: { work_id, competition_id }
  *
  * @param {string|number} workId 作品 ID
  * @param {Object} [options]
@@ -157,14 +233,14 @@ export function analyzeWork(workId, options = {}) {
   const body = { work_id: wid }
   if (cid !== null) body.competition_id = cid
 
-  return api.post('/api/ai/analyze/work', body).then((data) => ({
+  return api.post('/api/ai/analyze-work', body).then((data) => ({
     analysis: typeof data?.analysis === 'string' ? data.analysis : ''
   }))
 }
 
 /**
  * 竞赛级获奖作品聚合分析（一键分析全部获奖作品的共性）
- * POST /api/ai/analyze/competition  body: { competition_id }
+ * POST /api/ai/analyze  body: { competition_id }
  *
  * @param {string|number} competitionId 竞赛 ID
  * @returns {Promise<{ analysis: string }>}
@@ -173,7 +249,7 @@ export function analyzeWorks(competitionId) {
   const cid = normalizeCompetitionId(competitionId)
   if (cid === null) return Promise.reject(new Error('竞赛 ID 无效'))
 
-  return api.post('/api/ai/analyze/competition', { competition_id: cid }).then((data) => ({
+  return api.post('/api/ai/analyze', { competition_id: cid }).then((data) => ({
     analysis: typeof data?.analysis === 'string' ? data.analysis : ''
   }))
 }
@@ -237,6 +313,47 @@ export function generatePlan(payload = {}) {
       reply: typeof data?.reply === 'string' ? data.reply : ''
     }
   })
+}
+
+// ---------------------------------------------------------------- preparations
+
+/**
+ * List the current user's prep items (newest first).
+ * Requires auth; the interceptor already unwraps to the response body.
+ */
+export function getMyPreparations() {
+  return api.get('/api/preparations').then((data) => ({
+    total: Number.isFinite(data?.total)
+      ? data.total
+      : Array.isArray(data?.items)
+        ? data.items.length
+        : 0,
+    items: Array.isArray(data?.items) ? data.items : []
+  }))
+}
+
+/** Whether a competition is already in my prep list. Always resolves to a boolean. */
+export function checkPrepared(competitionId) {
+  const cid = normalizeCompetitionId(competitionId)
+  if (cid === null) return Promise.resolve(false)
+  return api
+    .get(`/api/preparations/check/${cid}`)
+    .then((data) => data?.prepared === true)
+    .catch(() => false)
+}
+
+/** Add a competition to my prep list (idempotent on the server). */
+export function addPreparation(competitionId) {
+  const cid = normalizeCompetitionId(competitionId)
+  if (cid === null) return Promise.reject(new Error('竞赛 ID 无效'))
+  return api.post(`/api/preparations/${cid}`)
+}
+
+/** Remove a competition from my prep list. */
+export function removePreparation(competitionId) {
+  const cid = normalizeCompetitionId(competitionId)
+  if (cid === null) return Promise.reject(new Error('竞赛 ID 无效'))
+  return api.delete(`/api/preparations/${cid}`)
 }
 
 export default api

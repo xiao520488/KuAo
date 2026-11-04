@@ -13,16 +13,14 @@
 
 import logging
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
-
-import re
-from typing import Callable
 
 import llm
 from db import get_award_by_id, get_competition, list_awards_by_competition
+from security import current_ai_quota, require_ai_quota
 from models.schemas import Competition
 
 logger = logging.getLogger(__name__)
@@ -277,7 +275,10 @@ def _strip_marker(text: str) -> str:
         502: {"description": "大模型调用失败"},
     },
 )
-def generate_plan(req: PlanRequest) -> PlanResponse:
+def generate_plan(
+    req: PlanRequest,
+    _user: dict = Depends(require_ai_quota),  # 需登录
+) -> PlanResponse:
     """备赛教练：先反问收集信息，信息足够后再生成计划。"""
     # 显式传了 competition_id 却查不到 -> 明确报错，便于前端定位
     if req.competition_id is not None:
@@ -440,7 +441,10 @@ def _build_analyze_prompt(
         502: {"description": "大模型调用失败"},
     },
 )
-def analyze_work(req: AnalyzeRequest) -> AnalyzeResponse:
+def analyze_work(
+    req: AnalyzeRequest,
+    _user: dict = Depends(require_ai_quota),  # 需登录
+) -> AnalyzeResponse:
     """赛事获奖作品聚合分析：从库里取前 5 件获奖作品，总结共性特征与获奖套路。"""
     # 1. 校验竞赛存在
     try:
@@ -583,7 +587,10 @@ def _build_work_prompt(work: Dict[str, Any]) -> str:
         502: {"description": "大模型调用失败"},
     },
 )
-def analyze_single_work(req: WorkAnalyzeRequest) -> WorkAnalyzeResponse:
+def analyze_single_work(
+    req: WorkAnalyzeRequest,
+    _user: dict = Depends(require_ai_quota),  # 需登录
+) -> WorkAnalyzeResponse:
     """单作品深度解析。"""
     # 1. 校验作品存在
     try:
@@ -834,3 +841,16 @@ def search_competitions(req: SearchRequest) -> SearchResponse:
         query, req.top_k, len(items), "（已降级）" if retrieval_degraded else "",
     )
     return SearchResponse(query=query, total=len(items), items=items)
+
+
+# ---------------------------------------------------------------------------
+# GET /api/ai/quota  查询今日 AI 配额（只读，不扣减）
+# ---------------------------------------------------------------------------
+@router.get("/quota", summary="查询今日 AI 配额")
+def get_quota(quota: Dict[str, Any] = Depends(current_ai_quota)) -> Dict[str, Any]:
+    """返回当前用户今日 AI 用量：{used, limit, remaining}。
+
+    remaining 为 None 表示不限次数（AI_DAILY_QUOTA=0）。
+    本接口不消耗配额，可在页面加载时安全调用。
+    """
+    return quota

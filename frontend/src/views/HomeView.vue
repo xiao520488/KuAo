@@ -1,7 +1,8 @@
 <script setup>
-import { ref, watch, onBeforeUnmount } from 'vue'
+import { computed, ref, watch, onMounted, onBeforeUnmount } from 'vue'
 import Header from '@/components/Header.vue'
 import CompetitionCard from '@/components/CompetitionCard.vue'
+import BackToTop from '@/components/BackToTop.vue'
 import { useRoute, useRouter } from 'vue-router'
 import { getCompetitions, searchCompetitions } from '@/services/api'
 
@@ -12,6 +13,18 @@ const router = useRouter()
 const competitions = ref([])
 const loading = ref(true)
 const errorMsg = ref('')
+
+/* ---------------- 入场动效状态 ---------------- */
+// heroReady：首屏元素是否已就绪。挂载后下一帧置 true，触发 hero 元素滑入。
+// 用 ref + onMounted 而非纯 CSS animation，是为了让动画在「组件真正进入视口」时
+// 才开始，避免首屏白屏期间动画已播完。
+const heroReady = ref(false)
+// listAnimKey：列表动画批次号。仅在「数据首次到位 / 列表内容被替换」时自增，
+// 使 v-for 的 :key 前缀变化，从而重新挂载卡片、重放交错弹入动画。
+// 点卡片、加备赛等交互不会改它，因此不会干扰后续操作。
+const listAnimKey = ref(0)
+// 上一次参与动画的数据签名，用于判断列表是否真的变了
+let lastSignature = ''
 
 // 只取月份数字：兼容 "2025-03-01" / "2025.03.01" / "2025/3/5" / 纯数字月份 "3" / Date 字符串
 function toMonth(value) {
@@ -93,6 +106,7 @@ async function loadCompetitions() {
   try {
     const list = await getCompetitions()
     competitions.value = list.slice(0, 8).map(mapToCard)
+    bumpListAnimation()
   } catch (err) {
     errorMsg.value = err?.message || '加载竞赛数据失败'
     competitions.value = []
@@ -101,6 +115,28 @@ async function loadCompetitions() {
   }
 }
 
+
+/**
+ * 列表内容变化时递增批次号，重放交错入场动画
+ * 签名 = 卡片 id 顺序拼接；仅当内容真的变了才重放，
+ * 避免「点了备赛按钮 / 切换选中态」这类无关更新触发整列重播。
+ */
+function bumpListAnimation() {
+  const signature = competitions.value.map((c) => c.id).join('|')
+  if (signature === lastSignature) return
+  lastSignature = signature
+  listAnimKey.value += 1
+}
+
+onMounted(() => {
+  // 双 rAF：确保首帧已经绘制出「位移 + 透明」的初始态，
+  // 下一帧再切到终态，过渡才会真正发生（单帧内改值可能被浏览器合并而跳过动画）
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      heroReady.value = true
+    })
+  })
+})
 
 /* ---------------- AI 语义检索 ---------------- */
 const keyword = ref('')        // 搜索框绑定值
@@ -222,6 +258,7 @@ async function runSearch(rawQuery) {
     if (currentId !== requestId) return
 
     competitions.value = (res.items || []).map(mapToCard)
+    bumpListAnimation()
     searched.value = true
     // 检索后滚动到列表区，让用户立刻看到结果
     scrollToList()
@@ -240,11 +277,21 @@ async function runSearch(rawQuery) {
   }
 }
 
+// 平滑滚动到竞赛列表区：搜索成功后、「向下探索」按钮共用
 function scrollToList() {
   if (typeof document === 'undefined') return
   const el = document.getElementById('competition-list')
-  if (el && typeof el.scrollIntoView === 'function') {
+  if (!el) return
+
+  if (typeof el.scrollIntoView === 'function') {
     el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    return
+  }
+
+  // 兜底：极老浏览器不支持平滑滚动时，用 scrollTo 算绝对位置
+  if (typeof window !== 'undefined' && typeof window.scrollTo === 'function') {
+    const top = el.getBoundingClientRect().top + window.pageYOffset
+    window.scrollTo({ top, behavior: 'smooth' })
   }
 }
 
@@ -257,6 +304,23 @@ function scrollToList() {
  *   q 有值  → 回填输入框并检索
  *   q 为空  → 加载默认热门列表（仅首次挂载时需要，之后由 resetToDefault 负责）
  */
+/**
+ * 是否展示「查看更多」引导按钮
+ * 仅在默认「热门竞赛」态下出现：
+ *   - !searched   → 非 AI 检索结果态
+ *   - !loading    → 骨架屏已结束
+ *   - !searching  → 不在检索进行中
+ *   - 列表非空    → 避免空态下引导到列表页显得突兀
+ */
+const showViewMore = computed(
+  () => !searched.value && !loading.value && !searching.value && competitions.value.length > 0
+)
+
+/** 点击「查看更多」→ 前往竞赛列表页 */
+function goCompetitions() {
+  router.push('/competitions')
+}
+
 watch(
   () => route.query.q,
   (q, oldQ) => {
@@ -302,23 +366,30 @@ watch(
       <!-- 内容区：水平居中，整体上移，使胶囊搜索框落在视口垂直正中 -->
       <div class="flex flex-1 flex-col items-center justify-center px-6 pt-16 pb-52 text-center">
         <!-- 大标题 -->
-        <h1 class="text-4xl md:text-6xl font-extrabold tracking-tight text-slate-900">
+        <h1
+          class="hero-in text-4xl md:text-6xl font-extrabold tracking-tight text-slate-900"
+          :style="{ animationDelay: '0ms' }"
+        >
           大学生竞赛智库
         </h1>
 
         <!-- 副标题 -->
-        <p class="mt-6 max-w-none whitespace-nowrap text-xs sm:text-sm md:text-base leading-relaxed text-slate-500 font-medium">
+        <p
+          class="hero-in mt-6 max-w-none whitespace-nowrap text-xs sm:text-sm md:text-base leading-relaxed text-slate-500 font-medium"
+          :style="{ animationDelay: '120ms' }"
+        >
           库奥 | 这是一个融合大学生竞赛信息与AI技术的智库，致力于助你科学、系统地完成整个竞赛周期。
         </p>
 
         <!-- 搜索框 -->
         <div
-          class="mx-auto mt-12 flex w-full max-w-4xl items-center gap-3
+          class="hero-in mx-auto mt-12 flex w-full max-w-4xl items-center gap-3
                  rounded-full bg-white/90 backdrop-blur
                  px-6 py-3
                  shadow-xl shadow-slate-900/10 ring-1 ring-slate-200/70
                  transition-shadow focus-within:shadow-2xl focus-within:shadow-blue-600/10
-                 focus-within:ring-blue-300"
+                 focus-within:ring-blue-300/60"
+          :style="{ animationDelay: '240ms' }"
         >
           <!-- 放大镜 Icon -->
           <svg
@@ -333,7 +404,7 @@ watch(
           <input
             v-model="keyword"
             type="text"
-            placeholder="搜索竞赛名称、级别、专业方向……"
+            placeholder="输入比赛名称，或像聊天一样描述需求（如：我想找寒假能准备的算法赛）..."
             class="w-full bg-transparent text-base text-slate-800 placeholder:text-slate-400
                    font-medium focus:outline-none disabled:opacity-60"
             :disabled="searching"
@@ -379,11 +450,13 @@ watch(
       </div>
 
       <!-- 首屏底部居中：向下探索 -->
-      <a
-        href="#competition-list"
+      <button
+        type="button"
         class="absolute bottom-10 left-1/2 -translate-x-1/2
                flex flex-col items-center gap-2 text-slate-400
-               transition-colors hover:text-blue-600"
+               transition-colors hover:text-blue-600
+               focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 rounded-lg"
+        @click="scrollToList"
       >
         <span class="text-sm font-bold tracking-widest">向下探索</span>
         <svg
@@ -393,14 +466,13 @@ watch(
         >
           <path stroke-linecap="round" stroke-linejoin="round" d="M19 14l-7 7-7-7M19 5l-7 7-7-7" />
         </svg>
-      </a>
+      </button>
     </section>
 
     <!-- ========== 首屏之外的竞赛列表 ========== -->
     <section
       id="competition-list"
-      class="mx-auto w-[85%] max-w-6xl pt-24 pb-28"
-      style="scroll-margin-top: 96px"
+      class="mx-auto w-[85%] max-w-6xl pt-24 pb-28 scroll-mt-24"
     >
       <div class="mb-10 text-center">
         <h2 class="text-2xl font-extrabold tracking-tight text-slate-900">
@@ -475,10 +547,12 @@ watch(
       </div>
 
       <!-- 正常列表 -->
-      <div v-else class="space-y-6">
+      <div v-else :key="listAnimKey" class="space-y-6">
         <CompetitionCard
-          v-for="item in competitions"
-          :key="item.id"
+          v-for="(item, index) in competitions"
+          :key="listAnimKey + '-' + item.id"
+          class="card-in"
+          :style="{ animationDelay: index * 100 + 'ms' }"
           :image="item.image"
           :title="item.title"
           :level="item.level"
@@ -487,6 +561,84 @@ watch(
           :contest-time="item.contestTime"
         />
       </div>
+
+      <!-- 查看更多：仅在默认「热门竞赛」态下展示，居中吸引导流到完整列表 -->
+      <div v-if="showViewMore" class="mt-14 flex justify-center">
+        <button
+          type="button"
+          class="group inline-flex items-center gap-2 rounded-full
+                 bg-white px-7 py-3 text-sm font-bold text-slate-700
+                 ring-1 ring-slate-200 shadow-sm shadow-slate-900/5
+                 transition-all duration-300
+                 hover:-translate-y-0.5 hover:text-blue-600
+                 hover:ring-blue-200 hover:shadow-md hover:shadow-blue-600/10
+                 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500
+                 cursor-pointer"
+          @click="goCompetitions"
+        >
+          <span>查看全部竞赛</span>
+          <svg
+            class="h-4 w-4 transition-transform duration-300 group-hover:translate-x-1"
+            fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"
+            aria-hidden="true"
+          >
+            <path stroke-linecap="round" stroke-linejoin="round" d="M13 7l5 5-5 5M6 12h12" />
+          </svg>
+        </button>
+      </div>
     </section>
+
+    <!-- 全局回到顶部 -->
+    <BackToTop />
   </div>
 </template>
+
+<style scoped>
+/* ---------------- 首屏入场：由下往上 + 由浅入深 ---------------- */
+/* forwards 保持终态，避免动画结束后跳回初始的透明/位移态 */
+@keyframes fadeSlideUp {
+  from {
+    opacity: 0;
+    transform: translateY(24px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.hero-in {
+  opacity: 0;
+  animation: fadeSlideUp 0.7s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  /* 抬升到独立图层，保证 transform / opacity 走合成器 */
+  will-change: transform, opacity;
+}
+
+/* ---------------- 卡片：缩小 + 淡入 → 正常 ---------------- */
+@keyframes cardPopIn {
+  from {
+    opacity: 0;
+    transform: scale(0.94) translateY(16px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+.card-in {
+  opacity: 0;
+  animation: cardPopIn 0.55s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* ---------------- 减少动态效果偏好 ---------------- */
+/* 系统开启「减弱动态效果」时直接呈现终态，不做位移与缩放 */
+@media (prefers-reduced-motion: reduce) {
+  .hero-in,
+  .card-in {
+    animation: none;
+    opacity: 1;
+    transform: none;
+  }
+}
+</style>
