@@ -1,0 +1,11 @@
+venv/
+__pycache__/
+*.pyc
+*.db
+*.log
+.env
+agent2.py
+node_modules/
+dist/
+_*.py
+_*.txt
