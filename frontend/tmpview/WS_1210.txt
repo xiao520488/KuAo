@@ -1,5 +1,0 @@
-.markdown-body table { width: 100%; border-collapse: collapse; margin: 0.8em 0; font-size: 0.95em; }
-.markdown-body th, .markdown-body td { border: 1px solid #e2e8f0; padding: 6px 10px; text-align: left; }
-.markdown-body th { background: #f1f5f9; font-weight: 700; }
-.markdown-body hr { border: 0; border-top: 1px solid #e2e8f0; margin: 1.2em 0; }
-</style>
