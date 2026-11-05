@@ -1,0 +1,30 @@
+                 focus-within:ring-blue-300/60"
+          :style="{ animationDelay: '240ms' }"
+        >
+          <!-- 放大镜 Icon -->
+          <svg
+            class="h-6 w-6 shrink-0 text-slate-400"
+            fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"
+            aria-hidden="true"
+          >
+            <path stroke-linecap="round" stroke-linejoin="round"
+                  d="M21 21l-4.35-4.35M17 10.5a6.5 6.5 0 11-13 0 6.5 6.5 0 0113 0z" />
+          </svg>
+
+          <input
+            v-model="keyword"
+            type="text"
+            placeholder="输入比赛名称，或像聊天一样描述需求（如：我想找寒假能准备的算法赛）..."
+            class="w-full bg-transparent text-base text-slate-800 placeholder:text-slate-400
+                   font-medium focus:outline-none disabled:opacity-60"
+            :disabled="searching"
+            @keyup.enter="submitSearch"
+          />
+
+          <!-- 清空按钮：仅在有输入时显示 -->
+          <button
+            v-if="keyword"
+            type="button"
+            aria-label="清空搜索"
+            class="mr-1 shrink-0 rounded-full p-1.5 text-slate-400
+                   hover:bg-slate-100 hover:text-slate-600 transition-colors

@@ -144,14 +144,14 @@ onBeforeUnmount(() => {
 
         <!-- 面板 -->
         <div
-          class="relative w-full max-w-md rounded-2xl bg-white p-7
-                 shadow-2xl shadow-slate-900/20 ring-1 ring-slate-900/5"
+          class="relative w-full max-w-md rounded-2xl bg-white dark:bg-slate-800 p-7
+                 shadow-2xl shadow-slate-900/20 ring-1 ring-slate-900/5 dark:ring-white/10"
         >
           <!-- 关闭 -->
           <button
             type="button"
             class="absolute right-4 top-4 rounded-full p-1.5 text-slate-400
-                   hover:bg-slate-100 hover:text-slate-600 transition-colors"
+                   hover:bg-slate-100 dark:hover:bg-slate-700/60 hover:text-slate-600 dark:hover:text-slate-300 transition-colors"
             aria-label="关闭"
             @click="close"
           >
@@ -161,19 +161,19 @@ onBeforeUnmount(() => {
           </button>
 
           <!-- 标题 -->
-          <h2 class="text-xl font-extrabold tracking-tight text-slate-900">
+          <h2 class="text-xl font-extrabold tracking-tight text-slate-900 dark:text-slate-100">
             {{ isRegister ? '创建账号' : '欢迎回来' }}
           </h2>
-          <p class="mt-1 text-sm text-slate-500">
+          <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">
             {{ isRegister ? '注册后即可使用 AI 备赛助手' : '登录后继续你的备赛计划' }}
           </p>
 
           <!-- Tab 切换 -->
-          <div class="mt-5 grid grid-cols-2 gap-1 rounded-xl bg-slate-100 p-1">
+          <div class="mt-5 grid grid-cols-2 gap-1 rounded-xl bg-slate-100 dark:bg-slate-700/60 p-1">
             <button
               type="button"
               class="rounded-lg py-2 text-sm font-bold transition-colors"
-              :class="!isRegister ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'"
+              :class="!isRegister ? 'bg-white dark:bg-slate-800 text-blue-600 dark:text-blue-400 shadow-sm' : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200'"
               @click="switchTab('login')"
             >
               登录
@@ -181,7 +181,7 @@ onBeforeUnmount(() => {
             <button
               type="button"
               class="rounded-lg py-2 text-sm font-bold transition-colors"
-              :class="isRegister ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'"
+              :class="isRegister ? 'bg-white dark:bg-slate-800 text-blue-600 dark:text-blue-400 shadow-sm' : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200'"
               @click="switchTab('register')"
             >
               注册
@@ -191,56 +191,56 @@ onBeforeUnmount(() => {
           <!-- 表单 -->
           <form class="mt-5 space-y-4" @submit.prevent="onSubmit">
             <div>
-              <label class="mb-1.5 block text-sm font-bold text-slate-700">用户名</label>
+              <label class="mb-1.5 block text-sm font-bold text-slate-700 dark:text-slate-200">用户名</label>
               <input
                 ref="usernameInput"
                 v-model="username"
                 type="text"
                 autocomplete="username"
                 placeholder="请输入用户名"
-                class="w-full rounded-xl border border-slate-200 bg-slate-50/60 px-4 py-2.5
-                       text-sm font-medium text-slate-800 placeholder:text-slate-400
+                class="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50/60 dark:bg-slate-800/60 px-4 py-2.5
+                       text-sm font-medium text-slate-800 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500
                        outline-none transition-all
-                       focus:border-blue-400 focus:bg-white focus:ring-2 focus:ring-blue-500/20"
+                       focus:border-blue-400 dark:focus:border-blue-500 focus:bg-white dark:focus:bg-slate-800 focus:ring-2 focus:ring-blue-500/20 dark:focus:ring-blue-400/30"
                 :disabled="submitting"
               />
             </div>
 
             <div>
-              <label class="mb-1.5 block text-sm font-bold text-slate-700">密码</label>
+              <label class="mb-1.5 block text-sm font-bold text-slate-700 dark:text-slate-200">密码</label>
               <input
                 v-model="password"
                 type="password"
                 :autocomplete="isRegister ? 'new-password' : 'current-password'"
                 placeholder="请输入密码"
-                class="w-full rounded-xl border border-slate-200 bg-slate-50/60 px-4 py-2.5
-                       text-sm font-medium text-slate-800 placeholder:text-slate-400
+                class="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50/60 dark:bg-slate-800/60 px-4 py-2.5
+                       text-sm font-medium text-slate-800 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500
                        outline-none transition-all
-                       focus:border-blue-400 focus:bg-white focus:ring-2 focus:ring-blue-500/20"
+                       focus:border-blue-400 dark:focus:border-blue-500 focus:bg-white dark:focus:bg-slate-800 focus:ring-2 focus:ring-blue-500/20 dark:focus:ring-blue-400/30"
                 :disabled="submitting"
               />
             </div>
 
             <div v-if="isRegister">
-              <label class="mb-1.5 block text-sm font-bold text-slate-700">确认密码</label>
+              <label class="mb-1.5 block text-sm font-bold text-slate-700 dark:text-slate-200">确认密码</label>
               <input
                 v-model="confirmPassword"
                 type="password"
                 autocomplete="new-password"
                 placeholder="请再次输入密码"
-                class="w-full rounded-xl border border-slate-200 bg-slate-50/60 px-4 py-2.5
-                       text-sm font-medium text-slate-800 placeholder:text-slate-400
+                class="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50/60 dark:bg-slate-800/60 px-4 py-2.5
+                       text-sm font-medium text-slate-800 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500
                        outline-none transition-all
-                       focus:border-blue-400 focus:bg-white focus:ring-2 focus:ring-blue-500/20"
+                       focus:border-blue-400 dark:focus:border-blue-500 focus:bg-white dark:focus:bg-slate-800 focus:ring-2 focus:ring-blue-500/20 dark:focus:ring-blue-400/30"
                 :disabled="submitting"
               />
             </div>
 
             <!-- 错误提示 -->
-            <p v-if="errorMsg" class="flex items-start gap-1.5 text-sm font-medium text-red-500">
+            <p v-if="errorMsg" class="flex items-start gap-1.5 text-sm font-medium text-red-500 dark:text-red-400">
               <svg class="mt-0.5 h-4 w-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
                 <path stroke-linecap="round" stroke-linejoin="round"
-                      d="M12 9v4m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+                      d="M12 9v4m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 001.71-3L13.71 3.86a2 00-3.42 0z" />
               </svg>
               <span>{{ errorMsg }}</span>
             </p>
@@ -250,13 +250,13 @@ onBeforeUnmount(() => {
               type="submit"
               class="w-full rounded-xl bg-blue-600 py-2.5 text-sm font-bold text-white
                      shadow-md shadow-blue-600/25 transition-colors
-                     hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+                     hover:bg-blue-700 dark:hover:bg-blue-600 disabled:cursor-not-allowed disabled:opacity-60"
               :disabled="submitting"
             >
               <span v-if="submitting" class="inline-flex items-center gap-2">
                 <svg class="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none">
                   <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
-                  <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+                  <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 00-4 4H4z" />
                 </svg>
                 处理中…
               </span>
@@ -265,11 +265,11 @@ onBeforeUnmount(() => {
           </form>
 
           <!-- 底部切换 -->
-          <p class="mt-4 text-center text-sm text-slate-500">
+          <p class="mt-4 text-center text-sm text-slate-500 dark:text-slate-400">
             {{ isRegister ? '已有账号？' : '还没有账号？' }}
             <button
               type="button"
-              class="font-bold text-blue-600 hover:text-blue-700"
+              class="font-bold text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300"
               @click="switchTab(isRegister ? 'login' : 'register')"
             >
               {{ isRegister ? '去登录' : '立即注册' }}

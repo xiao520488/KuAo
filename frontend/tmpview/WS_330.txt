@@ -1,0 +1,110 @@
+  // 切换作品时清空上一篇的解析结果与错误，避免残留内容串台
+  selectedWork.value = work
+  workParsing.value = false
+  parsedWork.value = null
+  parsedText.value = ''
+  parseError.value = ''
+  workSavedAt.value = ''
+  originalTip.value = ''
+
+  // 命中缓存则直接回填，按钮自动变为「重新解析」
+  const cid = routedId.value
+  const cached = cid ? getWorkAnalysis(cid, work.id) : null
+  if (cached?.text) {
+    parsedText.value = cached.text
+    parsedWork.value = work.id
+    workSavedAt.value = formatSavedAt(cached.savedAt)
+  }
+}
+
+function closeWork() {
+  selectedWork.value = null
+  workParsing.value = false
+  parsedWork.value = null
+  parsedText.value = ''
+  parseError.value = ''
+  workSavedAt.value = ''
+  originalTip.value = ''
+}
+
+// 该作品是否已收录原文链接（后端接入爬虫后由 originUrl 提供）
+const hasOriginal = computed(() => Boolean(selectedWork.value?.originUrl))
+
+// 技术栈标签配色池：按索引轮换，视觉分层
+const TECH_TAG_STYLES = [
+  'bg-blue-50 text-blue-700 ring-blue-200',
+  'bg-violet-50 text-violet-700 ring-violet-200',
+  'bg-emerald-50 text-emerald-700 ring-emerald-200',
+  'bg-amber-50 text-amber-700 ring-amber-200',
+  'bg-rose-50 text-rose-700 ring-rose-200',
+  'bg-cyan-50 text-cyan-700 ring-cyan-200',
+]
+function techTagClass(index) {
+  return TECH_TAG_STYLES[index % TECH_TAG_STYLES.length]
+}
+
+// 级别 / 奖项等级中英文映射：后端可能返回英文枚举，统一转成中文展示
+const LEVEL_LABELS = {
+  national: '国家级',
+  provincial: '省级',
+  city: '市级',
+  school: '校级',
+  international: '国际级',
+}
+
+const AWARD_GRADE_LABELS = {
+  'first prize': '一等奖',
+  first: '一等奖',
+  firstprize: '一等奖',
+  'second prize': '二等奖',
+  second: '二等奖',
+  secondprize: '二等奖',
+  'third prize': '三等奖',
+  third: '三等奖',
+  thirdprize: '三等奖',
+  gold: '金奖',
+  silver: '银奖',
+  bronze: '铜奖',
+  'grand prize': '特等奖',
+  grand: '特等奖',
+  excellence: '优秀奖',
+  excellent: '优秀奖',
+  'honorable mention': '优胜奖',
+  honorable: '优胜奖',
+}
+
+// 通用翻译：先精确匹配，再忽略大小写 / 空格 / 连字符匹配，未命中则原样返回
+function translate(raw, dict) {
+  if (typeof raw !== 'string') return raw
+  const text = raw.trim()
+  if (!text) return raw
+  const key = text.toLowerCase()
+  if (dict[key]) return dict[key]
+  const compact = key.replace(/[\s_-]+/g, '')
+  for (const k of Object.keys(dict)) {
+    if (k.replace(/[\s_-]+/g, '') === compact) return dict[k]
+  }
+  return raw
+}
+
+function zhLevel(raw) {
+  return translate(raw, LEVEL_LABELS)
+}
+
+function zhAwardGrade(raw) {
+  return translate(raw, AWARD_GRADE_LABELS)
+}
+
+
+// 「查看完整原文」：暂无数据时给出温和提示，有链接时新窗口打开
+function openOriginal() {
+  const url = selectedWork.value?.originUrl
+  if (!url) {
+    originalTip.value = '作品原文暂未收录，待接入爬虫后可查看完整原文与论文。'
+    return
+  }
+  window.open(url, '_blank', 'noopener,noreferrer')
+}
+
+
+// Modal 内「AI 解析」：调用后端 /api/ai/analyze

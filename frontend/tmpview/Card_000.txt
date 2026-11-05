@@ -1,0 +1,110 @@
+<script setup>
+import { ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
+import { authState } from '../services/auth'
+import { addPreparation, removePreparation } from '../services/api'
+import { openAuthModal } from '../composables/useAuthModal'
+
+// 通用竞赛卡片：整卡/详情 -> 详情页，备赛 -> 备赛列表页
+const props = defineProps({
+  // 竞赛 ID，用于跳转详情页
+  id: { type: [String, Number], default: null },
+  title: { type: String, default: '竞赛名称' },
+  image: { type: String, default: '' },
+  // 报名时间
+  signUpTime: { type: String, default: '待公布' },
+  // 比赛时间
+  contestTime: { type: String, default: '待公布' },
+  // 竞赛级别标签，可选展示
+  level: { type: String, default: '' },
+  // 竞赛分类（学科/方向），可选展示
+  category: { type: String, default: '' },
+  // 是否隐藏"加入备赛"按钮（备赛列表页使用）
+  hidePrepBtn: { type: Boolean, default: false },
+  // 是否显示极简"移出备赛"按钮（备赛列表页使用，互斥于加入按钮）
+  showRemoveBtn: { type: Boolean, default: false },
+  // 当前用户是否已加入备赛（由父组件批量拉取后下发）
+  prepared: { type: Boolean, default: false }
+})
+
+const emit = defineEmits(['preparation-change'])
+
+const router = useRouter()
+
+// 整卡点击 -> 竞赛详情
+function goDetail() {
+  if (props.id !== null && props.id !== undefined) {
+    router.push({ name: 'competition-detail', params: { id: props.id } })
+  }
+}
+
+// 本地备赛状态：初始由父组件下发，之后本地乐观更新
+const isPrepared = ref(props.prepared)
+const pending = ref(false)
+
+watch(
+  () => props.prepared,
+  (v) => {
+    isPrepared.value = v
+  }
+)
+
+// 加入 / 移出备赛（未登录先弹登录框）
+async function togglePreparation() {
+  if (props.id === null || props.id === undefined) return
+
+  if (!authState.user) {
+    openAuthModal('login')
+    return
+  }
+
+  if (pending.value) return
+  pending.value = true
+
+  const next = !isPrepared.value
+  try {
+    if (next) {
+      await addPreparation(props.id)
+    } else {
+      await removePreparation(props.id)
+    }
+    isPrepared.value = next
+    emit('preparation-change', { id: props.id, prepared: next })
+  } catch (err) {
+    // 401 已由全局拦截器统一处理；其余错误保持原状态
+    console.error('[CompetitionCard] toggle preparation failed:', err)
+  } finally {
+    pending.value = false
+  }
+}
+
+// 备赛页专用：仅移出备赛，成功后由父组件刷新列表
+async function removeOnly() {
+  if (props.id === null || props.id === undefined) return
+
+  if (!authState.user) {
+    openAuthModal('login')
+    return
+  }
+
+  if (pending.value) return
+  pending.value = true
+
+  try {
+    await removePreparation(props.id)
+    isPrepared.value = false
+    emit('preparation-change', { id: props.id, prepared: false })
+  } catch (err) {
+    // 401 已由全局拦截器统一处理；其余错误保持原状态
+    console.error('[CompetitionCard] remove preparation failed:', err)
+  } finally {
+    pending.value = false
+  }
+}
+</script>
+
+<template>
+  <article
+    role="link"
+    tabindex="0"
+    class="card-in group flex gap-7 overflow-hidden rounded-2xl bg-white p-6 cursor-pointer

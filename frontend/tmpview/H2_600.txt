@@ -1,0 +1,30 @@
+    opacity: 0;
+    transform: translateY(24px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.hero-in {
+  opacity: 0;
+  animation: fadeSlideUp 0.7s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  /* 抬升到独立图层，保证 transform / opacity 走合成器 */
+  will-change: transform, opacity;
+}
+
+/* ---------------- 卡片：缩小 + 淡入 → 正常 ---------------- */
+@keyframes cardPopIn {
+  from {
+    opacity: 0;
+    transform: scale(0.94) translateY(16px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+.card-in {
+  opacity: 0;

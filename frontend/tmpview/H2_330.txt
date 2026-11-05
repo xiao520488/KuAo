@@ -1,0 +1,30 @@
+    if (val) {
+      keyword.value = val
+      runSearch(val)
+      return
+    }
+
+    // 无 q：首次挂载直接加载热门列表
+    if (oldQ === undefined) {
+      loadCompetitions()
+      return
+    }
+
+    // 原本有 q、现在被清掉（如点 Logo 返回首页）→ 恢复正常列表
+    resetToDefault()
+  },
+  { immediate: true }
+)
+</script>
+
+<template>
+  <div class="relative bg-slate-50">
+    <Header />
+
+    <!-- ========== 全屏 Hero 首屏 ========== -->
+    <section class="relative flex min-h-screen flex-col overflow-hidden">
+      <!-- 背景装饰光晕 -->
+      <div class="pointer-events-none absolute inset-0 -z-10">
+        <div class="absolute -top-32 left-1/2 -translate-x-1/2 h-[420px] w-[820px]
+                    rounded-full bg-blue-300/30 blur-3xl"></div>
+        <div class="absolute top-40 -left-24 h-[320px] w-[320px]

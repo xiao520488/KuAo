@@ -107,8 +107,8 @@ async function removeOnly() {
   <article
     role="link"
     tabindex="0"
-    class="card-in group flex gap-7 overflow-hidden rounded-2xl bg-white p-6 cursor-pointer
-           ring-1 ring-slate-200/70 shadow-sm
+    class="card-in group flex gap-7 overflow-hidden rounded-2xl bg-white dark:bg-slate-800 p-6 cursor-pointer
+           ring-1 ring-slate-200/70 dark:ring-slate-700 shadow-sm
            transition-all duration-200
            hover:shadow-lg hover:shadow-slate-900/10 hover:ring-blue-200"
     @click="goDetail"
@@ -116,7 +116,7 @@ async function removeOnly() {
   >
     <!-- 左：固定宽高比图片占位 -->
     <div class="relative w-52 shrink-0">
-      <div class="aspect-[4/3] w-full overflow-hidden rounded-xl bg-slate-100">
+      <div class="aspect-[4/3] w-full overflow-hidden rounded-xl bg-slate-100 dark:bg-slate-700/60">
         <img
           v-if="image"
           :src="image"
@@ -132,7 +132,7 @@ async function removeOnly() {
           <svg class="h-8 w-8 text-slate-300" fill="none" viewBox="0 0 24 24"
                stroke="currentColor" stroke-width="1.5" aria-hidden="true">
             <path stroke-linecap="round" stroke-linejoin="round"
-                  d="M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 2.25 0 013.182 0l2.909 2.909M18 6.75h.008v.008H18V6.75z" />
+                  d="M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 0l2.909 2.909M18 6.75h.008v.008H18V6.75z" />
           </svg>
         </div>
       </div>
@@ -143,7 +143,7 @@ async function removeOnly() {
       <!-- 标题 -->
       <div class="flex items-start gap-2">
         <h3
-          class="truncate text-xl font-bold text-slate-900 cursor-pointer
+          class="truncate text-xl font-bold text-slate-900 dark:text-slate-100 cursor-pointer
                  transition-colors duration-300 group-hover:text-blue-600"
           @click.stop="goDetail()"
         >
@@ -151,38 +151,38 @@ async function removeOnly() {
         </h3>
         <span
           v-if="level"
-          class="mt-1 shrink-0 rounded-full bg-blue-50 px-3 py-0.5
-                 text-xs font-bold text-blue-600"
+          class="mt-1 shrink-0 rounded-full bg-blue-50 dark:bg-blue-500/15 px-3 py-0.5
+                 text-xs font-bold text-blue-600 dark:text-blue-400"
         >
           {{ level }}
         </span>
         <span
           v-if="category"
-          class="mt-1 shrink-0 rounded-full bg-slate-100 px-3 py-0.5 text-xs font-medium text-slate-500"
+          class="mt-1 shrink-0 rounded-full bg-slate-100 dark:bg-slate-700/60 px-3 py-0.5 text-xs font-medium text-slate-500 dark:text-slate-400"
         >
           {{ category }}
         </span>
       </div>
 
       <!-- 中间：时间信息 -->
-      <div class="mt-4 space-y-2 text-base text-slate-500">
+      <div class="mt-4 space-y-2 text-base text-slate-500 dark:text-slate-400">
         <p class="flex items-center gap-2">
           <svg class="h-[18px] w-[18px] shrink-0 text-slate-400" fill="none" viewBox="0 0 24 24"
                stroke="currentColor" stroke-width="1.8" aria-hidden="true">
             <path stroke-linecap="round" stroke-linejoin="round"
-                  d="M12 6v6l4 2m6-2a10 10 0 11-20 0 10 10 0 0120 0z" />
+                  d="M12 6v6l4 2m6-2a10 10 0 1 1-20 0 10 10 0 0 1 20 0z" />
           </svg>
           <span class="font-medium text-slate-400">报名时间</span>
-          <span class="font-semibold text-slate-700">{{ signUpTime }}</span>
+          <span class="font-semibold text-slate-700 dark:text-slate-200">{{ signUpTime }}</span>
         </p>
         <p class="flex items-center gap-2">
           <svg class="h-[18px] w-[18px] shrink-0 text-slate-400" fill="none" viewBox="0 0 24 24"
                stroke="currentColor" stroke-width="1.8" aria-hidden="true">
             <path stroke-linecap="round" stroke-linejoin="round"
-                  d="M8 7V3m8 4V3M3.75 9h16.5M4.5 21h15a1.5 1.5 0 001.5-1.5V6a1.5 1.5 0 00-1.5-1.5h-15A1.5 1.5 0 003 6v13.5A1.5 1.5 0 004.5 21z" />
+                  d="M8 7V3m8 4V3M3.75 9h16.5M4.5 21h15a1.5 1.5 0 001.5-1.5V6a1.5 00-1.5-1.5h-15A1.5 003 6v13.5A1.5 004.5 21z" />
           </svg>
           <span class="font-medium text-slate-400">比赛时间</span>
-          <span class="font-semibold text-slate-700">{{ contestTime }}</span>
+          <span class="font-semibold text-slate-700 dark:text-slate-200">{{ contestTime }}</span>
         </p>
       </div>
 
@@ -190,8 +190,8 @@ async function removeOnly() {
       <div class="mt-auto flex items-center justify-end gap-3 pt-5" @click.stop>
         <button
           type="button"
-          class="rounded-full px-6 py-2 text-sm font-bold text-slate-600
-                 ring-1 ring-slate-200 hover:text-slate-900 hover:ring-slate-300
+          class="rounded-full px-6 py-2 text-sm font-bold text-slate-600 dark:text-slate-300
+                 ring-1 ring-slate-200 dark:ring-slate-700 hover:text-slate-900 dark:hover:text-white hover:ring-slate-300 dark:hover:ring-slate-600
                  transition-colors"
           @click="goDetail"
         >
@@ -205,8 +205,8 @@ async function removeOnly() {
                  disabled:cursor-not-allowed"
           :class="
             isPrepared
-              ? 'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200 hover:bg-emerald-100'
-              : 'bg-blue-600 text-white shadow-sm shadow-blue-600/25 hover:bg-blue-700'
+              ? 'bg-emerald-50 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 ring-1 ring-emerald-200 dark:ring-emerald-500/30 hover:bg-emerald-100'
+              : 'bg-blue-600 text-white shadow-sm shadow-blue-600/25 hover:bg-blue-700 dark:hover:bg-blue-600'
           "
           @click="togglePreparation"
         >
@@ -223,15 +223,15 @@ async function removeOnly() {
           title="移出备赛"
           aria-label="移出备赛"
           class="inline-flex items-center gap-1.5 rounded-full px-3 py-2 text-sm font-medium
-                 text-slate-400 ring-1 ring-slate-200 transition-colors
-                 hover:bg-rose-50 hover:text-rose-600 hover:ring-rose-200
+                 text-slate-400 ring-1 ring-slate-200 dark:ring-slate-700 transition-colors
+                 hover:bg-rose-50 dark:hover:bg-rose-500/10 hover:text-rose-600 hover:ring-rose-200
                  disabled:opacity-50 disabled:cursor-not-allowed"
           @click.stop="removeOnly"
         >
           <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24"
                stroke="currentColor" stroke-width="1.8" aria-hidden="true">
             <path stroke-linecap="round" stroke-linejoin="round"
-                  d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
+                  d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 00-7.5" />
           </svg>
           <span v-if="pending">移出中…</span>
           <span v-else>移出备赛</span>

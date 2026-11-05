@@ -1,0 +1,110 @@
+            <svg class="h-4 w-4" :fill="showFavorites ? 'currentColor' : 'none'" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round"
+                d="M11.48 3.5l2.31 4.68 5.16.75-3.73 3.64.88 5.14-4.62-2.43-4.62 2.43.88-5.14L3.01 8.93l5.16-.75z" />
+            </svg>
+            {{ showFavorites ? '查看全部' : '我的收藏' }}
+          </button>
+          <button
+            type="button"
+            class="inline-flex items-center gap-2 rounded-full bg-white px-4 py-2 text-xs font-bold
+                   text-blue-700 ring-1 ring-blue-200 transition-colors hover:bg-blue-100"
+            @click="refreshInspiration"
+          >
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h5M20 20v-5h-5M20 9a8 8 0 00-14.9-2M4 15a8 8 0 0014.9 2" />
+            </svg>
+            刷新
+          </button>
+        </div>
+      </div>
+
+      <!-- 收藏视图：空状态 -->
+      <div
+        v-if="showFavorites && favoriteList.length === 0"
+        class="flex flex-col items-center justify-center rounded-2xl bg-white py-16 text-center ring-1 ring-slate-200/70"
+      >
+        <div class="flex h-14 w-14 items-center justify-center rounded-2xl bg-amber-50">
+          <svg class="h-7 w-7 text-amber-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round"
+              d="M11.48 3.5l2.31 4.68 5.16.75-3.73 3.64.88 5.14-4.62-2.43-4.62 2.43.88-5.14L3.01 8.93l5.16-.75z" />
+          </svg>
+        </div>
+        <h3 class="mt-4 text-base font-bold text-slate-900">还没有收藏的灵感</h3>
+        <p class="mt-2 text-sm text-slate-500">在灵感卡片上点击「收藏」，即可在这里集中查看。</p>
+        <button
+          type="button"
+          class="mt-5 h-10 rounded-full bg-blue-600 px-6 text-sm font-bold text-white
+                 shadow-sm shadow-blue-600/25 transition-colors hover:bg-blue-700"
+          @click="showFavorites = false"
+        >
+          去看看灵感
+        </button>
+      </div>
+
+      <!-- 灵感卡片列表（全部 / 收藏） -->
+      <div v-else class="grid grid-cols-1 gap-5 sm:grid-cols-2">
+        <article
+          v-for="item in (showFavorites ? favoriteList : inspirations)"
+          :key="item.id"
+          class="flex flex-col rounded-2xl bg-white p-5 ring-1 ring-slate-200/70 shadow-sm transition-all
+                 hover:shadow-lg hover:shadow-slate-900/10"
+        >
+          <span class="mb-3 w-fit rounded-full bg-slate-100 px-2.5 py-1 text-xs font-bold text-slate-600">
+            {{ item.tag }}
+          </span>
+          <p class="text-sm leading-relaxed text-slate-700">{{ item.text }}</p>
+
+          <div class="mt-4 flex items-center justify-end">
+            <button
+              type="button"
+              class="inline-flex items-center gap-2 rounded-full px-4 py-1.5 text-xs font-bold transition-colors"
+              :class="item.favorite
+                ? 'bg-amber-50 text-amber-700 ring-1 ring-amber-200'
+                : 'text-slate-500 ring-1 ring-slate-200 hover:text-slate-900 hover:ring-slate-300'"
+              @click="toggleFavorite(item)"
+            >
+              <svg class="h-4 w-4" :fill="item.favorite ? 'currentColor' : 'none'" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M11.48 3.5l2.31 4.68 5.16.75-3.73 3.64.88 5.14-4.62-2.43-4.62 2.43.88-5.14L3.01 8.93l5.16-.75z" />
+              </svg>
+              {{ item.favorite ? '已收藏' : '收藏' }}
+            </button>
+          </div>
+        </article>
+      </div>
+    </section>
+    </main>
+  </div>
+</template>
+
+<style scoped>
+/* Markdown 计划正文排版 */
+.markdown-body { font-size: 14px; line-height: 1.75; color: #334155; }
+.markdown-body > *:first-child { margin-top: 0; }
+.markdown-body > *:last-child { margin-bottom: 0; }
+.markdown-body h1, .markdown-body h2, .markdown-body h3, .markdown-body h4 {
+  font-weight: 700; color: #0f172a; line-height: 1.35; margin: 1.25em 0 0.6em;
+}
+.markdown-body h1 { font-size: 1.35em; }
+.markdown-body h2 { font-size: 1.18em; }
+.markdown-body h3 { font-size: 1.05em; }
+.markdown-body h4 { font-size: 1em; }
+.markdown-body p { margin: 0.6em 0; }
+.markdown-body ul, .markdown-body ol { margin: 0.6em 0; padding-left: 1.4em; }
+.markdown-body ul { list-style: disc; }
+.markdown-body ol { list-style: decimal; }
+.markdown-body li { margin: 0.25em 0; }
+.markdown-body strong { font-weight: 700; color: #0f172a; }
+.markdown-body a { color: #2563eb; text-decoration: underline; }
+.markdown-body code {
+  background: #e2e8f0; border-radius: 4px; padding: 0.1em 0.35em;
+  font-size: 0.9em; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.markdown-body pre {
+  background: #0f172a; color: #e2e8f0; border-radius: 10px;
+  padding: 12px 14px; overflow-x: auto; margin: 0.8em 0;
+}
+.markdown-body pre code { background: transparent; padding: 0; color: inherit; }
+.markdown-body blockquote {
+  border-left: 3px solid #93c5fd; color: #475569;
+  margin: 0.8em 0; padding: 0.2em 0 0.2em 1em;
+}

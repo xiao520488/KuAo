@@ -1,0 +1,30 @@
+    return
+  }
+
+  const currentId = ++requestId
+
+  searching.value = true
+  // 关键：检索本身就是一次"首屏加载"。
+  // 跨页搜索时组件是全新挂载的，loading 还是初始值 true，
+  // 若不在这里接管，检索结束 searching 复位后，
+  // 模板里的 v-if="loading && !searching" 会重新命中，骨架屏永久卡住。
+  loading.value = true
+  searchError.value = ''
+
+  try {
+    const res = await searchCompetitions(q)
+
+    // 已被更新的请求取代（含组件卸载时自增的那次）→ 放弃结果
+    if (currentId !== requestId) return
+
+    competitions.value = (res.items || []).map(mapToCard)
+    bumpListAnimation()
+    searched.value = true
+    // 检索后滚动到列表区，让用户立刻看到结果
+    scrollToList()
+  } catch (err) {
+    if (currentId !== requestId) return
+    searchError.value = err?.message || 'AI 检索失败，请稍后重试'
+    competitions.value = []
+    searched.value = true
+  } finally {

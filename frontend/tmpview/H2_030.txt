@@ -1,0 +1,30 @@
+  if (value === null || value === undefined || value === '') return null
+  const str = String(value).trim()
+
+  // 纯数字：可能是月份(1-12)或时间戳
+  if (/^\d{1,2}$/.test(str)) {
+    const n = parseInt(str, 10)
+    return n >= 1 && n <= 12 ? n : null
+  }
+
+  // 带分隔符的日期：按 - . / 拆分，从候选中挑出 1-12 的月份
+  // 形如 2025-03-01：年份是 4 位，月份是第 2 段
+  const parts = str.split(/[-/.\sT:]+/).filter(Boolean)
+  if (parts.length >= 2) {
+    if (parts[0].length === 4) {
+      const m = parseInt(parts[1], 10)
+      if (m >= 1 && m <= 12) return m
+    }
+    // 形如 03-01（无年份）：第 1 段即月份
+    const m = parseInt(parts[0], 10)
+    if (m >= 1 && m <= 12) return m
+  }
+
+  // 兜底交给 Date 解析
+  const d = new Date(str)
+  if (!Number.isNaN(d.getTime())) return d.getMonth() + 1
+  return null
+}
+
+// 报名时间格式化为 "X 月 - Y 月"
+function formatSignUp(item) {

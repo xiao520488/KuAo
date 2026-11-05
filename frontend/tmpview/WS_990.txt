@@ -1,0 +1,110 @@
+              <div v-else-if="parseError" class="flex items-start gap-2 rounded-2xl bg-rose-50 p-4 text-sm text-rose-700">
+                <svg class="mt-0.5 h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v4m0 4h.01M12 3l9 16H3z" />
+                </svg>
+                <span>{{ parseError }}</span>
+              </div>
+
+              <!-- 解析结果 -->
+              <div
+                v-else-if="parsedWork === selectedWork.id && parsedText"
+                class="ai-markdown rounded-2xl border border-slate-200/80 bg-white px-5 py-4"
+                v-html="parsedHtml"
+              ></div>
+
+              <!-- 未解析提示 -->
+              <div v-else class="rounded-2xl border border-dashed border-slate-200 bg-slate-50/60 px-4 py-5 text-center text-sm text-slate-500">
+                点击右下角「AI 解析」，了解这篇作品的整体思路、模型选择与写作亮点。
+              </div>
+            </section>
+
+            <!-- 五、查看完整原文（预留入口） -->
+            <section class="mt-7">
+              <a
+                href="#"
+                class="group flex items-center justify-between rounded-2xl border border-slate-200 bg-slate-50 px-5 py-4 transition-colors"
+                :class="hasOriginal ? 'hover:border-blue-300 hover:bg-blue-50' : 'cursor-not-allowed opacity-70'"
+                :aria-disabled="!hasOriginal"
+                @click.prevent="openOriginal"
+              >
+                <div class="flex items-center gap-3">
+                  <span class="flex h-9 w-9 items-center justify-center rounded-xl bg-white ring-1 ring-slate-200">
+                    <svg class="h-4 w-4 text-slate-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6M9 8h6M7 3h7l5 5v13H7z" />
+                    </svg>
+                  </span>
+                  <div class="text-left">
+                    <p class="text-sm font-bold text-slate-800">查看完整原文 / 论文</p>
+                    <p class="mt-0.5 text-xs text-slate-400">
+                      {{ hasOriginal ? '在新窗口打开作品原文' : '后续接入爬虫后可用' }}
+                    </p>
+                  </div>
+                </div>
+                <span
+                  class="rounded-full px-3 py-1 text-xs font-bold"
+                  :class="hasOriginal ? 'bg-blue-600 text-white' : 'bg-slate-200 text-slate-500'"
+                >
+                  {{ hasOriginal ? '打开 →' : '暂未收录' }}
+                </span>
+              </a>
+
+              <!-- 暂无原文时的内联提示 -->
+              <p
+                v-if="originalTip"
+                class="mt-2 flex items-start gap-1.5 rounded-xl bg-amber-50 px-3 py-2 text-xs font-medium text-amber-700"
+              >
+                <svg class="mt-0.5 h-3.5 w-3.5 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4m0 4h.01M12 3l9 16H3z" />
+                </svg>
+                <span>{{ originalTip }}</span>
+              </p>
+            </section>
+          </div>
+
+          <!-- ===== 档案底部操作栏 ===== -->
+          <div class="flex shrink-0 items-center justify-end gap-3 border-t border-slate-100 bg-white px-7 py-4">
+            <button
+              type="button"
+              class="h-10 rounded-full px-5 text-sm font-bold text-slate-500 transition-colors hover:bg-slate-100"
+              @click="closeWork"
+            >
+              关闭
+            </button>
+            <button
+              type="button"
+              class="inline-flex h-10 items-center gap-2 rounded-full bg-blue-600 px-6 text-sm font-bold
+                     text-white shadow-sm shadow-blue-600/25 transition-colors hover:bg-blue-700
+                     disabled:cursor-not-allowed disabled:opacity-60"
+              :disabled="workParsing"
+              @click="parseWork"
+            >
+              <svg v-if="workParsing" class="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+              </svg>
+              {{ workParsing ? '解析中…' : (parsedWork === selectedWork.id ? '重新解析' : 'AI 解析') }}
+            </button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Tab 3：灵感工作台 -->
+    <section v-else>
+      <!-- 顶部提示语 + 切换/刷新 -->
+      <div class="mb-5 flex flex-wrap items-center justify-between gap-4 rounded-2xl bg-blue-50/70 p-5 ring-1 ring-blue-100">
+        <div>
+          <p class="text-sm font-bold text-blue-900">灵感库会持续为你推送建模思路、算法选型与写作技巧</p>
+          <p class="mt-1 text-xs font-medium text-blue-700/70">
+            已收藏 {{ favoriteList.length }} 条灵感，收藏内容保存在本地，方便随时回看。
+          </p>
+        </div>
+        <div class="flex shrink-0 items-center gap-2">
+          <button
+            type="button"
+            class="inline-flex items-center gap-2 rounded-full px-4 py-2 text-xs font-bold transition-colors"
+            :class="showFavorites
+              ? 'bg-blue-600 text-white shadow-sm shadow-blue-600/25'
+              : 'bg-white text-blue-700 ring-1 ring-blue-200 hover:bg-blue-100'"
+            @click="showFavorites = !showFavorites"
+          >

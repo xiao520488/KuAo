@@ -1,0 +1,94 @@
+        <CompetitionCard
+          v-for="(item, index) in competitions"
+          :key="listAnimKey + '-' + item.id"
+          class="card-in"
+          :style="{ animationDelay: index * 100 + 'ms' }"
+          :image="item.image"
+          :title="item.title"
+          :level="item.level"
+          :category="item.category"
+          :sign-up-time="item.signUpTime"
+          :contest-time="item.contestTime"
+        />
+      </div>
+
+      <!-- 查看更多：仅在默认「热门竞赛」态下展示，居中吸引导流到完整列表 -->
+      <div v-if="showViewMore" class="mt-14 flex justify-center">
+        <button
+          type="button"
+          class="group inline-flex items-center gap-2 rounded-full
+                 bg-white px-7 py-3 text-sm font-bold text-slate-700
+                 ring-1 ring-slate-200 shadow-sm shadow-slate-900/5
+                 transition-all duration-300
+                 hover:-translate-y-0.5 hover:text-blue-600
+                 hover:ring-blue-200 hover:shadow-md hover:shadow-blue-600/10
+                 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500
+                 cursor-pointer"
+          @click="goCompetitions"
+        >
+          <span>查看全部竞赛</span>
+          <svg
+            class="h-4 w-4 transition-transform duration-300 group-hover:translate-x-1"
+            fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"
+            aria-hidden="true"
+          >
+            <path stroke-linecap="round" stroke-linejoin="round" d="M13 7l5 5-5 5M6 12h12" />
+          </svg>
+        </button>
+      </div>
+    </section>
+
+    <!-- 全局回到顶部 -->
+    <BackToTop />
+  </div>
+</template>
+
+<style scoped>
+/* ---------------- 首屏入场：由下往上 + 由浅入深 ---------------- */
+/* forwards 保持终态，避免动画结束后跳回初始的透明/位移态 */
+@keyframes fadeSlideUp {
+  from {
+    opacity: 0;
+    transform: translateY(24px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.hero-in {
+  opacity: 0;
+  animation: fadeSlideUp 0.7s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  /* 抬升到独立图层，保证 transform / opacity 走合成器 */
+  will-change: transform, opacity;
+}
+
+/* ---------------- 卡片：缩小 + 淡入 → 正常 ---------------- */
+@keyframes cardPopIn {
+  from {
+    opacity: 0;
+    transform: scale(0.94) translateY(16px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+.card-in {
+  opacity: 0;
+  animation: cardPopIn 0.55s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* ---------------- 减少动态效果偏好 ---------------- */
+/* 系统开启「减弱动态效果」时直接呈现终态，不做位移与缩放 */
+@media (prefers-reduced-motion: reduce) {
+  .hero-in,
+  .card-in {
+    animation: none;
+    opacity: 1;
+    transform: none;
+  }
+}
+</style>

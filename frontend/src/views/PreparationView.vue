@@ -107,13 +107,13 @@ function goWorkspace(id) {
 </script>
 
 <template>
-  <div class="min-h-screen bg-slate-50">
+  <div class="min-h-screen bg-slate-50 dark:bg-slate-900">
     <Header />
 
-    <main class="mx-auto max-w-5xl px-6 pb-24 pt-28">
+    <main class="mx-auto max-w-5xl px-4 pb-24 pt-24 sm:px-6 sm:pt-28">
       <header class="mb-10">
-        <h1 class="text-3xl font-bold text-slate-900">我的备赛</h1>
-        <p class="mt-2 text-sm text-slate-500">
+        <h1 class="text-2xl font-bold text-slate-900 dark:text-slate-100 sm:text-3xl">我的备赛</h1>
+        <p class="mt-2 text-sm text-slate-500 dark:text-slate-400">
           <template v-if="total > 0">
             共 {{ total }} 项竞赛，选择一项进入备赛工作台开始准备
           </template>
@@ -125,7 +125,7 @@ function goWorkspace(id) {
       <div v-if="loading" class="flex items-center justify-center py-24 text-slate-400">
         <svg class="mr-3 h-5 w-5 animate-spin" viewBox="0 0 24 24" fill="none">
           <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" class="opacity-20" />
-          <path d="M22 12a10 10 0 0 1-10 10" stroke="currentColor" stroke-width="3" stroke-linecap="round" />
+          <path d="M22 12a10 10 0 1-10" stroke="currentColor" stroke-width="3" stroke-linecap="round" />
         </svg>
         <span class="text-sm font-medium">正在加载备赛列表…</span>
       </div>
@@ -133,9 +133,9 @@ function goWorkspace(id) {
       <!-- 错误态 -->
       <div
         v-else-if="errorMsg"
-        class="rounded-2xl border border-red-100 bg-red-50 px-6 py-10 text-center"
+        class="rounded-2xl border border-red-100 dark:border-red-500/30 bg-red-50 dark:bg-red-500/15 px-6 py-10 text-center"
       >
-        <p class="text-sm font-semibold text-red-600">{{ errorMsg }}</p>
+        <p class="text-sm font-semibold text-red-600 dark:text-red-400">{{ errorMsg }}</p>
         <button
           type="button"
           class="mt-4 rounded-full bg-red-600 px-5 py-2 text-sm font-bold text-white hover:bg-red-700 transition-colors"
@@ -148,21 +148,21 @@ function goWorkspace(id) {
       <!-- 空态：未加入任何备赛 -->
       <div
         v-else-if="list.length === 0"
-        class="rounded-2xl border border-dashed border-slate-300 bg-white px-6 py-20 text-center"
+        class="rounded-2xl border border-dashed border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 px-6 py-20 text-center"
       >
         <div
-          class="mx-auto mb-5 flex h-14 w-14 items-center justify-center rounded-full bg-slate-100"
+          class="mx-auto mb-5 flex h-14 w-14 items-center justify-center rounded-full bg-slate-100 dark:bg-slate-700/60"
         >
           <svg class="h-7 w-7 text-slate-400" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" d="M12 6v12m6-6H6" />
           </svg>
         </div>
-        <p class="font-bold text-slate-700">还没有加入任何备赛</p>
+        <p class="font-bold text-slate-700 dark:text-slate-200">还没有加入任何备赛</p>
         <p class="mt-1 text-sm text-slate-400">去竞赛列表挑一项感兴趣的，点击「加入备赛」即可开始</p>
         <button
           type="button"
           class="mt-6 rounded-full bg-blue-600 px-6 py-2 text-sm font-bold text-white
-                 shadow-sm shadow-blue-600/25 transition-colors hover:bg-blue-700"
+                 shadow-sm shadow-blue-600/25 transition-colors hover:bg-blue-700 dark:hover:bg-blue-600"
           @click="goCompetitions"
         >
           去浏览竞赛
@@ -170,7 +170,7 @@ function goWorkspace(id) {
       </div>
 
       <!-- 列表 -->
-      <div v-else class="flex flex-col gap-6">
+      <div v-else class="grid grid-cols-1 gap-6">
         <div v-for="item in list" :key="item.id">
           <!-- 复用通用卡片：整卡/详情 -> 竞赛详情，备赛 -> 本页 -->
           <CompetitionCard

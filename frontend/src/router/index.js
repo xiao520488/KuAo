@@ -23,6 +23,12 @@ const router = createRouter({
       component: () => import('@/views/CompetitionDetailView.vue')
     },
     {
+      path: '/profile',
+      name: 'profile',
+      meta: { requiresAuth: true },
+      component: () => import('@/views/ProfileView.vue')
+    },
+    {
       path: '/preparation',
       name: 'preparation',
       meta: { requiresAuth: true },

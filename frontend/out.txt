@@ -1,0 +1,78 @@
+332
+1  */
+2 function goHome() {
+3   const onHome = route.path === '/'
+4 
+5   if (onHome) {
+6     const hasQuery = Object.keys(route.query).length > 0
+7     // 无 query 时不重复导航，直接滚动即可（避免冗余导航报错）
+8     if (hasQuery) {
+9       router.replace({ path: '/', query: {} }).then(scrollToTop).catch(() => scrollToTop())
+10       return
+11     }
+12     scrollToTop()
+13     return
+14   }
+15 
+16   router.push({ path: '/', query: {} }).then(scrollToTop).catch(() => scrollToTop())
+17 }
+18 
+19 /** 平滑滚动到页面最顶部（兼容不支持 smooth 的老浏览器） */
+20 function scrollToTop() {
+21   if (typeof window === 'undefined') return
+22   if (typeof window.scrollTo === 'function') {
+23     try {
+24       window.scrollTo({ top: 0, behavior: 'smooth' })
+25       return
+26     } catch (e) {
+27       // 部分老浏览器不支持对象参数，落到下面的降级写法
+28     }
+29     window.scrollTo(0, 0)
+30   }
+31 }
+32 
+33 // 每项携带 path，active 由当前路由计算得出（不再写死）
+34 const navItems = [
+35   { label: '首页', path: '/' },
+36   { label: '竞赛', path: '/competitions' },
+37   { label: '备赛', path: '/preparation' }
+38 ]
+39 
+40 // 判断某项是否处于高亮：
+41 // - 首页 '/' 需精确匹配，避免所有路由都被当成首页
+42 // - 其它路径按前缀匹配，兼容子路由（如 /competitions/123）
+43 function isActive(item) {
+44   const current = route.path || '/'
+45   if (item.path === '/') {
+46     return current === '/'
+47   }
+48   return current === item.path || current.startsWith(item.path + '/')
+49 }
+50 
+51 // 供模板使用的带高亮状态的列表
+52 const navList = computed(() =>
+53   navItems.map((item) => ({ ...item, active: isActive(item) }))
+54 )
+55 
+56 /* ---------------- 登录 / 注册 ---------------- */
+57 // 弹窗宿主已上移到 App.vue，Header 只负责触发打开
+58 
+59 const user = computed(() => authState.user)
+60 const isLoggedIn = computed(() => !!authState.user)
+61 
+62 function openAuth(mode = 'login') {
+63   openAuthModal(mode)
+64 }
+65 
+66 // 登录/注册成功后的提示（轻量 toast）
+67 const toast = ref('')
+68 let toastTimer = null
+69 function showToast(msg) {
+70   toast.value = msg
+71   clearTimeout(toastTimer)
+72   toastTimer = setTimeout(() => (toast.value = ''), 2200)
+73 }
+74 
+75 // 弹窗宿主在 App.vue，这里改为监听登录态变化来做本地提示
+76 // 首次恢复会话（刷新页面）时不打扰用户，只提示「本次操作」带来的登录
+77 watch(

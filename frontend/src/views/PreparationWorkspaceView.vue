@@ -562,50 +562,50 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
 </script>
 
 <template>
-  <div class="min-h-screen bg-slate-50">
+  <div class="min-h-screen bg-slate-50 dark:bg-slate-900">
     <Header />
 
-    <main class="mx-auto w-full max-w-6xl px-6 pb-24 pt-28">
+    <main class="mx-auto w-full max-w-6xl px-4 pb-24 pt-24 sm:px-6 sm:pt-28">
     <!-- ========== 顶部固定区：竞赛小图 + 信息，不随 Tab 切换刷新 ========== -->
     <section
-      class="sticky top-16 z-20 -mx-6 mb-6 border-b border-slate-200 bg-white/90 px-6 py-4 backdrop-blur"
+      class="sticky top-16 z-20 -mx-4 mb-6 border-b border-slate-200 dark:border-slate-700 bg-white/90 dark:bg-slate-900/90 px-4 py-4 backdrop-blur sm:-mx-6 sm:px-6"
     >
       <div class="flex items-center gap-4">
-        <div class="h-16 w-24 shrink-0 overflow-hidden rounded-xl bg-slate-100 ring-1 ring-slate-200">
+        <div class="h-16 w-24 shrink-0 overflow-hidden rounded-xl bg-slate-100 dark:bg-slate-700/60 ring-1 ring-slate-200 dark:ring-slate-700">
           <img v-if="competition.image" :src="competition.image" alt="" class="h-full w-full object-cover" />
           <div v-else class="flex h-full w-full items-center justify-center">
             <svg class="h-6 w-6 text-slate-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+              <path stroke-linecap="round" stroke-linejoin="round" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 0L20 14m-6-6h.01M6 20h12a2 002-2V6a2 00-2-2H6a2 00-2 2v12a2 002 2z" />
             </svg>
           </div>
         </div>
 
         <div class="min-w-0">
-          <h1 class="truncate text-xl font-black tracking-tight text-slate-900">
+          <h1 class="truncate text-xl font-black tracking-tight text-slate-900 dark:text-slate-100">
             {{ competition.title }}
           </h1>
           <div class="mt-1.5 flex flex-wrap items-center gap-2 text-xs">
-            <span class="rounded-full bg-blue-50 px-2.5 py-1 font-bold text-blue-700">{{ zhLevel(competition.level) }}</span>
-            <span class="rounded-full bg-slate-100 px-2.5 py-1 font-bold text-slate-600">{{ competition.category }}</span>
+            <span class="rounded-full bg-blue-50 dark:bg-blue-500/15 px-2.5 py-1 font-bold text-blue-700 dark:text-blue-300">{{ zhLevel(competition.level) }}</span>
+            <span class="rounded-full bg-slate-100 dark:bg-slate-700/60 px-2.5 py-1 font-bold text-slate-600 dark:text-slate-300">{{ competition.category }}</span>
             <span class="font-medium text-slate-400">比赛时间</span>
-            <span class="font-semibold text-slate-700">{{ competition.contestTime }}</span>
+            <span class="font-semibold text-slate-700 dark:text-slate-200">{{ competition.contestTime }}</span>
             <span class="text-slate-300">·</span>
             <span class="font-medium text-slate-400">ID</span>
-            <span class="font-semibold text-slate-700">{{ routedId || '—' }}</span>
+            <span class="font-semibold text-slate-700 dark:text-slate-200">{{ routedId || '—' }}</span>
           </div>
         </div>
       </div>
 
       <!-- Tab 导航 -->
-      <nav class="mt-4 flex items-center gap-2">
+      <nav class="mt-4 flex flex-nowrap items-center gap-2 overflow-x-auto pb-1 sm:flex-wrap sm:overflow-visible sm:pb-0">
         <button
           v-for="tab in tabs"
           :key="tab.key"
           type="button"
-          class="rounded-full px-5 py-2 text-sm font-bold transition-colors"
+          class="shrink-0 whitespace-nowrap rounded-full px-4 py-2 text-sm font-bold transition-colors sm:px-5"
           :class="activeTab === tab.key
             ? 'bg-slate-900 text-white shadow-sm'
-            : 'text-slate-500 hover:bg-slate-100 hover:text-slate-900'"
+            : 'text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700/60 hover:text-slate-900 dark:hover:text-white'"
           @click="activeTab = tab.key"
         >
           {{ tab.label }}
@@ -616,13 +616,13 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
     <!-- ========== 下方内容区：随 activeTab 切换 ========== -->
 
     <!-- Tab 1：AI 备赛 -->
-    <section v-if="activeTab === 'ai'" ref="planBody" class="rounded-2xl bg-white p-6 ring-1 ring-slate-200/70 shadow-sm">
+    <section v-if="activeTab === 'ai'" ref="planBody" class="rounded-2xl bg-white dark:bg-slate-800 p-6 ring-1 ring-slate-200/70 dark:ring-slate-700 shadow-sm">
 
       <!-- 顶部操作条 -->
-      <div class="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 pb-4">
+      <div class="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 dark:border-slate-700 pb-4">
         <div>
-          <h2 class="text-base font-bold text-slate-900">AI 备赛计划</h2>
-          <p class="mt-1 text-xs text-slate-500">
+          <h2 class="text-base font-bold text-slate-900 dark:text-slate-100">AI 备赛计划</h2>
+          <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
             生成后可继续对话补充信息，AI 会在原计划上增量调整
           </p>
         </div>
@@ -630,13 +630,13 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
           type="button"
           :disabled="generating"
           class="inline-flex h-10 items-center gap-2 rounded-full bg-blue-600 px-6 text-sm font-bold
-                 text-white shadow-sm shadow-blue-600/25 transition-colors hover:bg-blue-700
+                 text-white shadow-sm shadow-blue-600/25 transition-colors hover:bg-blue-700 dark:hover:bg-blue-600
                  disabled:cursor-not-allowed disabled:opacity-60"
           @click="startPlan"
         >
           <svg v-if="generating" class="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
             <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
-            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 00-4 4H4z" />
           </svg>
           <svg v-else class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round"
@@ -649,41 +649,41 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
       <!-- 错误提示 -->
       <div
         v-if="errorMsg"
-        class="mt-4 flex items-start gap-2 rounded-xl bg-red-50 px-4 py-3 text-sm text-red-600 ring-1 ring-red-100"
+        class="mt-4 flex items-start gap-2 rounded-xl bg-red-50 dark:bg-red-500/15 px-4 py-3 text-sm text-red-600 dark:text-red-400 ring-1 ring-red-100"
       >
         <svg class="mt-0.5 h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v4m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+          <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v4m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 001.71-3L13.71 3.86a2 00-3.42 0z" />
         </svg>
         <span>{{ errorMsg }}</span>
       </div>
 
       <!-- 计划正文（Markdown） -->
-      <div v-if="hasPlan" class="mt-5 rounded-xl bg-slate-50/70 p-5 ring-1 ring-slate-200/60">
+      <div v-if="hasPlan" class="mt-5 rounded-xl bg-slate-50/70 dark:bg-slate-800/60 p-5 ring-1 ring-slate-200/60 dark:ring-slate-700">
         <div class="markdown-body" v-html="planHtml"></div>
       </div>
 
       <!-- 未生成计划：空状态 -->
       <div v-else-if="!generating" class="flex flex-col items-center justify-center py-16 text-center">
-        <div class="flex h-16 w-16 items-center justify-center rounded-2xl bg-blue-50">
-          <svg class="h-8 w-8 text-blue-600" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+        <div class="flex h-16 w-16 items-center justify-center rounded-2xl bg-blue-50 dark:bg-blue-500/15">
+          <svg class="h-8 w-8 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6M9 8h6M7 3h7l5 5v13H7z" />
           </svg>
         </div>
-        <h3 class="mt-5 text-lg font-bold text-slate-900">还没有备赛计划</h3>
-        <p class="mt-2 max-w-md text-sm leading-relaxed text-slate-500">
+        <h3 class="mt-5 text-lg font-bold text-slate-900 dark:text-slate-100">还没有备赛计划</h3>
+        <p class="mt-2 max-w-md text-sm leading-relaxed text-slate-500 dark:text-slate-400">
           在下方输入框告诉我你的目标、基础和时间安排，AI 会先了解你的情况；信息足够后立刻给出完整计划。
         </p>
       </div>
 
       <!-- 生成中骨架 -->
       <div v-else class="mt-5 space-y-3" aria-busy="true">
-        <div class="h-4 w-1/3 animate-pulse rounded bg-slate-100"></div>
-        <div class="h-3 w-full animate-pulse rounded bg-slate-100"></div>
-        <div class="h-3 w-11/12 animate-pulse rounded bg-slate-100"></div>
-        <div class="h-3 w-4/5 animate-pulse rounded bg-slate-100"></div>
-        <div class="h-4 w-1/4 animate-pulse rounded bg-slate-100"></div>
-        <div class="h-3 w-full animate-pulse rounded bg-slate-100"></div>
-        <div class="h-3 w-3/4 animate-pulse rounded bg-slate-100"></div>
+        <div class="h-4 w-1/3 animate-pulse rounded bg-slate-100 dark:bg-slate-700/60"></div>
+        <div class="h-3 w-full animate-pulse rounded bg-slate-100 dark:bg-slate-700/60"></div>
+        <div class="h-3 w-11/12 animate-pulse rounded bg-slate-100 dark:bg-slate-700/60"></div>
+        <div class="h-3 w-4/5 animate-pulse rounded bg-slate-100 dark:bg-slate-700/60"></div>
+        <div class="h-4 w-1/4 animate-pulse rounded bg-slate-100 dark:bg-slate-700/60"></div>
+        <div class="h-3 w-full animate-pulse rounded bg-slate-100 dark:bg-slate-700/60"></div>
+        <div class="h-3 w-3/4 animate-pulse rounded bg-slate-100 dark:bg-slate-700/60"></div>
       </div>
 
       <!-- 对话区 -->
@@ -698,7 +698,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
             class="max-w-[80%] whitespace-pre-wrap rounded-2xl px-4 py-2.5 text-sm leading-relaxed"
             :class="m.role === 'user'
               ? 'bg-blue-600 text-white'
-              : 'bg-slate-100 text-slate-700'"
+              : 'bg-slate-100 dark:bg-slate-700/60 text-slate-700 dark:text-slate-200'"
           >{{ m.content }}</div>
         </div>
       </div>
@@ -710,8 +710,8 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
           type="text"
           :disabled="generating"
           placeholder="补充你的时间安排或需求，例如：我每天只有 2 小时"
-          class="h-11 flex-1 rounded-full bg-slate-50 px-5 text-sm text-slate-700
-                 outline-none ring-1 ring-slate-200 placeholder:text-slate-400
+          class="h-11 flex-1 rounded-full bg-slate-50 dark:bg-slate-900 px-5 text-sm text-slate-700 dark:text-slate-200
+                 outline-none ring-1 ring-slate-200 dark:ring-slate-700 placeholder:text-slate-400 dark:placeholder:text-slate-500
                  focus:ring-2 focus:ring-blue-500 disabled:opacity-60"
           @keydown.enter="send"
         />
@@ -719,7 +719,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
           type="button"
           :disabled="generating || !draft.trim()"
           class="inline-flex h-11 items-center gap-2 rounded-full bg-blue-600 px-6 text-sm font-bold
-                 text-white shadow-sm shadow-blue-600/25 transition-colors hover:bg-blue-700
+                 text-white shadow-sm shadow-blue-600/25 transition-colors hover:bg-blue-700 dark:hover:bg-blue-600
                  disabled:cursor-not-allowed disabled:opacity-60"
           @click="send"
         >
@@ -734,16 +734,16 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
     <!-- Tab 2：往年获奖作品 -->
     <section v-else-if="activeTab === 'works'">
       <!-- 顶部：一键 AI 分析全部获奖作品的共性 -->
-      <div class="mb-5 rounded-2xl bg-white p-5 ring-1 ring-slate-200/70 shadow-sm">
+      <div class="mb-5 rounded-2xl bg-white dark:bg-slate-800 p-5 ring-1 ring-slate-200/70 dark:ring-slate-700 shadow-sm">
         <div class="flex flex-wrap items-center justify-between gap-4">
           <div class="min-w-0">
-            <h3 class="flex items-center gap-2 text-base font-bold text-slate-900">
-              <svg class="h-5 w-5 text-blue-600" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <h3 class="flex items-center gap-2 text-base font-bold text-slate-900 dark:text-slate-100">
+              <svg class="h-5 w-5 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" d="M12 3l1.9 4.6L18.5 9.5l-4.6 1.9L12 16l-1.9-4.6L5.5 9.5l4.6-1.9L12 3z" />
               </svg>
               获奖作品共性分析
             </h3>
-            <p class="mt-1 text-xs font-medium text-slate-500">
+            <p class="mt-1 text-xs font-medium text-slate-500 dark:text-slate-400">
               让 AI 横向对比历年获奖作品，总结选题偏好、建模套路与写作亮点，快速抓住评审口味。
             </p>
             <p v-if="commonSavedAt" class="mt-1 text-xs text-slate-400">上次分析：{{ commonSavedAt }}</p>
@@ -752,7 +752,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
           <button
             type="button"
             class="inline-flex h-11 shrink-0 items-center gap-2 rounded-full bg-blue-600 px-6 text-sm font-bold
-                   text-white shadow-sm shadow-blue-600/25 transition-colors hover:bg-blue-700
+                   text-white shadow-sm shadow-blue-600/25 transition-colors hover:bg-blue-700 dark:hover:bg-blue-600
                    disabled:cursor-not-allowed disabled:opacity-60"
             :disabled="commonLoading || !routedId"
             @click="runCommonAnalysis(hasCommon)"
@@ -762,20 +762,20 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
               class="h-4 w-4 animate-spin"
               fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"
             >
-              <path stroke-linecap="round" stroke-linejoin="round" d="M12 3a9 9 0 109 9" />
+              <path stroke-linecap="round" stroke-linejoin="round" d="M12 3a9 9 0 109" />
             </svg>
             {{ commonLoading ? '分析中…' : (hasCommon ? '重新分析共性' : 'AI 分析获奖作品共性') }}
           </button>
         </div>
 
         <!-- 共性报告正文 -->
-        <div v-if="commonLoading && !hasCommon" class="mt-5 space-y-2 rounded-2xl bg-slate-50 p-4">
-          <div class="h-3 w-2/3 animate-pulse rounded bg-slate-200"></div>
-          <div class="h-3 w-full animate-pulse rounded bg-slate-200"></div>
-          <div class="h-3 w-5/6 animate-pulse rounded bg-slate-200"></div>
+        <div v-if="commonLoading && !hasCommon" class="mt-5 space-y-2 rounded-2xl bg-slate-50 dark:bg-slate-900 p-4">
+          <div class="h-3 w-2/3 animate-pulse rounded bg-slate-200 dark:bg-slate-700"></div>
+          <div class="h-3 w-full animate-pulse rounded bg-slate-200 dark:bg-slate-700"></div>
+          <div class="h-3 w-5/6 animate-pulse rounded bg-slate-200 dark:bg-slate-700"></div>
         </div>
 
-        <div v-else-if="commonError" class="mt-5 flex items-start gap-2 rounded-2xl bg-rose-50 p-4 text-sm text-rose-700">
+        <div v-else-if="commonError" class="mt-5 flex items-start gap-2 rounded-2xl bg-rose-50 dark:bg-rose-500/15 p-4 text-sm text-rose-700 dark:text-rose-300">
           <svg class="mt-0.5 h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v4m0 4h.01M12 3l9 16H3z" />
           </svg>
@@ -784,7 +784,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
 
         <div
           v-else-if="hasCommon"
-          class="markdown-body mt-5 max-w-none rounded-2xl bg-slate-50 p-4 text-sm leading-relaxed text-slate-700"
+          class="markdown-body mt-5 max-w-none rounded-2xl bg-slate-50 dark:bg-slate-900 p-4 text-sm leading-relaxed text-slate-700 dark:text-slate-200"
           v-html="commonHtml"
         ></div>
       </div>
@@ -794,18 +794,18 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
         <div
           v-for="n in 6"
           :key="n"
-          class="h-64 animate-pulse rounded-2xl bg-white ring-1 ring-slate-200/70"
+          class="h-64 animate-pulse rounded-2xl bg-white dark:bg-slate-800 ring-1 ring-slate-200/70 dark:ring-slate-700"
         ></div>
       </div>
 
       <div
         v-else-if="worksError"
-        class="flex items-center justify-between gap-4 rounded-2xl bg-rose-50 p-5 text-sm text-rose-700"
+        class="flex items-center justify-between gap-4 rounded-2xl bg-rose-50 dark:bg-rose-500/15 p-5 text-sm text-rose-700 dark:text-rose-300"
       >
         <span>{{ worksError }}</span>
         <button
           type="button"
-          class="h-9 shrink-0 rounded-full bg-white px-4 text-sm font-bold text-rose-700 ring-1 ring-rose-200 hover:bg-rose-100"
+          class="h-9 shrink-0 rounded-full bg-white dark:bg-slate-800 px-4 text-sm font-bold text-rose-700 dark:text-rose-300 ring-1 ring-rose-200 dark:ring-rose-500/30 hover:bg-rose-100 dark:hover:bg-rose-500/20"
           @click="loadWorks"
         >
           重试
@@ -814,7 +814,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
 
       <div
         v-else-if="!works.length"
-        class="rounded-2xl bg-white p-10 text-center text-sm text-slate-500 ring-1 ring-slate-200/70"
+        class="rounded-2xl bg-white dark:bg-slate-800 p-10 text-center text-sm text-slate-500 dark:text-slate-400 ring-1 ring-slate-200/70 dark:ring-slate-700"
       >
         暂无获奖作品数据
       </div>
@@ -823,11 +823,11 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
         <article
           v-for="work in works"
           :key="work.id"
-          class="group flex cursor-pointer flex-col rounded-2xl bg-white p-5 ring-1 ring-slate-200/70
+          class="group flex cursor-pointer flex-col rounded-2xl bg-white dark:bg-slate-800 p-5 ring-1 ring-slate-200/70 dark:ring-slate-700
                  shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-lg hover:shadow-slate-900/10"
           @click="openWork(work)"
         >
-          <div class="mb-4 aspect-[4/3] w-full overflow-hidden rounded-xl bg-slate-100">
+          <div class="mb-4 aspect-[4/3] w-full overflow-hidden rounded-xl bg-slate-100 dark:bg-slate-700/60">
             <div class="flex h-full w-full items-center justify-center">
               <svg class="h-8 w-8 text-slate-300" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6M9 8h6M7 3h7l5 5v13H7z" />
@@ -835,14 +835,14 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
             </div>
           </div>
 
-          <h3 class="text-base font-bold leading-snug text-slate-900">{{ work.title }}</h3>
+          <h3 class="text-base font-bold leading-snug text-slate-900 dark:text-slate-100">{{ work.title }}</h3>
           <p class="mt-2 text-xs font-medium text-slate-400">{{ work.team }} · {{ work.year }}</p>
 
           <div class="mt-3 flex items-center justify-between">
-            <span class="rounded-full bg-amber-50 px-2.5 py-1 text-xs font-bold text-amber-700">
+            <span class="rounded-full bg-amber-50 dark:bg-amber-500/15 px-2.5 py-1 text-xs font-bold text-amber-700 dark:text-amber-300">
               {{ work.award }}
             </span>
-            <span class="text-xs font-bold text-blue-600 opacity-0 transition-opacity group-hover:opacity-100">
+            <span class="text-xs font-bold text-blue-600 dark:text-blue-400 opacity-0 transition-opacity group-hover:opacity-100">
               查看详情 →
             </span>
           </div>
@@ -856,12 +856,12 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
         class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm"
         @click.self="closeWork"
       >
-        <div class="flex max-h-[88vh] w-full max-w-3xl flex-col overflow-hidden rounded-3xl bg-white shadow-2xl">
+        <div class="flex max-h-[88vh] w-full max-w-3xl flex-col overflow-hidden rounded-3xl bg-white dark:bg-slate-800 shadow-2xl">
           <!-- ===== 档案头部：标题 + 基础信息 ===== -->
-          <div class="shrink-0 border-b border-slate-100 bg-gradient-to-br from-blue-50/80 via-white to-white px-7 pb-5 pt-6">
+          <div class="shrink-0 border-b border-slate-100 dark:border-slate-700 bg-gradient-to-br from-blue-50/80 via-white to-white px-7 pb-5 pt-6">
             <div class="flex items-start justify-between gap-4">
               <div class="min-w-0">
-                <h3 class="text-xl font-black leading-snug text-slate-900">
+                <h3 class="text-xl font-black leading-snug text-slate-900 dark:text-slate-100">
                   {{ selectedWork.title }}
                 </h3>
                 <!-- 基础信息徽章行：年份 / 奖项 / 组别 / 赛道 / 场次 -->
@@ -874,32 +874,32 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
                   </span>
                   <span
                     v-if="selectedWork.awardGrade"
-                    class="rounded-full bg-amber-100 px-3 py-1 text-xs font-bold text-amber-800 ring-1 ring-amber-200"
+                    class="rounded-full bg-amber-100 dark:bg-amber-500/20 px-3 py-1 text-xs font-bold text-amber-800 ring-1 ring-amber-200 dark:ring-amber-500/30"
                   >
                     {{ zhAwardGrade(selectedWork.awardGrade) }}
                   </span>
                   <span
                     v-if="selectedWork.level"
-                    class="rounded-full bg-emerald-50 px-3 py-1 text-xs font-bold text-emerald-700 ring-1 ring-emerald-200"
+                    class="rounded-full bg-emerald-50 dark:bg-emerald-500/15 px-3 py-1 text-xs font-bold text-emerald-700 dark:text-emerald-300 ring-1 ring-emerald-200 dark:ring-emerald-500/30"
                   >
                     {{ zhLevel(selectedWork.level) }}
                   </span>
                   <span
                     v-if="selectedWork.track"
-                    class="rounded-full bg-indigo-50 px-3 py-1 text-xs font-semibold text-indigo-700 ring-1 ring-indigo-200"
+                    class="rounded-full bg-indigo-50 dark:bg-indigo-500/15 px-3 py-1 text-xs font-semibold text-indigo-700 ring-1 ring-indigo-200"
                   >
                     {{ selectedWork.track }}
                   </span>
                   <span
                     v-if="selectedWork.session"
-                    class="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600"
+                    class="rounded-full bg-slate-100 dark:bg-slate-700/60 px-3 py-1 text-xs font-semibold text-slate-600 dark:text-slate-300"
                   >
                     {{ selectedWork.session }}
                   </span>
                 </div>
-                <p v-if="selectedWork.team" class="mt-2.5 flex items-center gap-1.5 text-xs font-medium text-slate-500">
+                <p v-if="selectedWork.team" class="mt-2.5 flex items-center gap-1.5 text-xs font-medium text-slate-500 dark:text-slate-400">
                   <svg class="h-3.5 w-3.5 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M17 20h5v-1a4 4 0 00-3-3.87M9 20H4v-1a4 4 0 013-3.87m6-1.13a4 4 0 10-4-4 4 4 0 004 4zm6-4a3 3 0 11-3-3" />
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M17 20h5v-1a4 4 0 00-3-3.87M9 20H4v-1a4 013-3.87m6-1.13a4 10-4-4 004 4zm6-4a3 3 11-3-3" />
                   </svg>
                   {{ selectedWork.team }}
                 </p>
@@ -907,7 +907,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
               <button
                 type="button"
                 class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-slate-400
-                       transition-colors hover:bg-slate-100 hover:text-slate-600"
+                       transition-colors hover:bg-slate-100 dark:hover:bg-slate-700/60 hover:text-slate-600 dark:hover:text-slate-300"
                 @click="closeWork"
               >
                 <svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
@@ -921,22 +921,22 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
           <div class="min-h-0 flex-1 overflow-y-auto px-7 py-6">
             <!-- 一、作品简介 -->
             <section>
-              <h4 class="mb-2.5 flex items-center gap-2 text-sm font-black text-slate-900">
+              <h4 class="mb-2.5 flex items-center gap-2 text-sm font-black text-slate-900 dark:text-slate-100">
                 <span class="flex h-5 w-5 items-center justify-center rounded-md bg-blue-600 text-[11px] font-black text-white">1</span>
                 作品简介
               </h4>
               <p
                 v-if="selectedWork.summary"
-                class="whitespace-pre-line text-sm leading-7 text-slate-600"
+                class="whitespace-pre-line text-sm leading-7 text-slate-600 dark:text-slate-300"
               >{{ selectedWork.summary }}</p>
-              <p v-else class="rounded-xl bg-slate-50 px-4 py-3 text-sm text-slate-400">
+              <p v-else class="rounded-xl bg-slate-50 dark:bg-slate-900 px-4 py-3 text-sm text-slate-400">
                 暂无简介，待数据接入后补充。
               </p>
             </section>
 
             <!-- 二、核心技术栈 -->
             <section class="mt-7">
-              <h4 class="mb-2.5 flex items-center gap-2 text-sm font-black text-slate-900">
+              <h4 class="mb-2.5 flex items-center gap-2 text-sm font-black text-slate-900 dark:text-slate-100">
                 <span class="flex h-5 w-5 items-center justify-center rounded-md bg-violet-600 text-[11px] font-black text-white">2</span>
                 核心技术栈
               </h4>
@@ -950,45 +950,45 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
                   {{ t }}
                 </span>
               </div>
-              <p v-else class="rounded-xl bg-slate-50 px-4 py-3 text-sm text-slate-400">
+              <p v-else class="rounded-xl bg-slate-50 dark:bg-slate-900 px-4 py-3 text-sm text-slate-400">
                 暂无技术栈信息。
               </p>
             </section>
 
             <!-- 三、核心亮点与创新点 -->
             <section class="mt-7">
-              <h4 class="mb-2.5 flex items-center gap-2 text-sm font-black text-slate-900">
+              <h4 class="mb-2.5 flex items-center gap-2 text-sm font-black text-slate-900 dark:text-slate-100">
                 <span class="flex h-5 w-5 items-center justify-center rounded-md bg-amber-500 text-[11px] font-black text-white">3</span>
                 核心亮点与创新点
               </h4>
               <div
                 v-if="selectedWork.highlights"
-                class="rounded-2xl border border-amber-200/70 bg-amber-50/50 px-5 py-4 text-sm leading-7 text-slate-700 whitespace-pre-line"
+                class="rounded-2xl border border-amber-200/70 dark:border-amber-500/30 bg-amber-50/50 dark:bg-amber-500/10 px-5 py-4 text-sm leading-7 text-slate-700 dark:text-slate-200 whitespace-pre-line"
               >{{ selectedWork.highlights }}</div>
-              <p v-else class="rounded-xl bg-slate-50 px-4 py-3 text-sm text-slate-400">
+              <p v-else class="rounded-xl bg-slate-50 dark:bg-slate-900 px-4 py-3 text-sm text-slate-400">
                 暂无亮点描述。
               </p>
             </section>
 
             <!-- 四、AI 深度解析 -->
             <section class="mt-7">
-              <h4 class="mb-2.5 flex items-center gap-2 text-sm font-black text-slate-900">
+              <h4 class="mb-2.5 flex items-center gap-2 text-sm font-black text-slate-900 dark:text-slate-100">
                 <span class="flex h-5 w-5 items-center justify-center rounded-md bg-slate-900 text-[10px] font-black text-white">AI</span>
                 智能解析
                 <span v-if="workSavedAt" class="text-xs font-medium text-slate-400">缓存于 {{ workSavedAt }}</span>
               </h4>
 
               <!-- 解析中 -->
-              <div v-if="workParsing" class="flex items-center gap-3 rounded-2xl bg-blue-50/70 p-4">
-                <svg class="h-5 w-5 animate-spin text-blue-600" fill="none" viewBox="0 0 24 24">
+              <div v-if="workParsing" class="flex items-center gap-3 rounded-2xl bg-blue-50/70 dark:bg-blue-500/15 p-4">
+                <svg class="h-5 w-5 animate-spin text-blue-600 dark:text-blue-400" fill="none" viewBox="0 0 24 24">
                   <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
-                  <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                  <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 5.373 12h4z" />
                 </svg>
                 <p class="text-sm font-bold text-blue-800">AI 正在解析作品结构…</p>
               </div>
 
               <!-- 解析失败 -->
-              <div v-else-if="parseError" class="flex items-start gap-2 rounded-2xl bg-rose-50 p-4 text-sm text-rose-700">
+              <div v-else-if="parseError" class="flex items-start gap-2 rounded-2xl bg-rose-50 dark:bg-rose-500/15 p-4 text-sm text-rose-700 dark:text-rose-300">
                 <svg class="mt-0.5 h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v4m0 4h.01M12 3l9 16H3z" />
                 </svg>
@@ -998,12 +998,12 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
               <!-- 解析结果 -->
               <div
                 v-else-if="parsedWork === selectedWork.id && parsedText"
-                class="ai-markdown rounded-2xl border border-slate-200/80 bg-white px-5 py-4"
+                class="ai-markdown rounded-2xl border border-slate-200/80 dark:border-slate-700 bg-white dark:bg-slate-800 px-5 py-4"
                 v-html="parsedHtml"
               ></div>
 
               <!-- 未解析提示 -->
-              <div v-else class="rounded-2xl border border-dashed border-slate-200 bg-slate-50/60 px-4 py-5 text-center text-sm text-slate-500">
+              <div v-else class="rounded-2xl border border-dashed border-slate-200 dark:border-slate-700 bg-slate-50/60 dark:bg-slate-800/60 px-4 py-5 text-center text-sm text-slate-500 dark:text-slate-400">
                 点击右下角「AI 解析」，了解这篇作品的整体思路、模型选择与写作亮点。
               </div>
             </section>
@@ -1012,19 +1012,19 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
             <section class="mt-7">
               <a
                 href="#"
-                class="group flex items-center justify-between rounded-2xl border border-slate-200 bg-slate-50 px-5 py-4 transition-colors"
-                :class="hasOriginal ? 'hover:border-blue-300 hover:bg-blue-50' : 'cursor-not-allowed opacity-70'"
+                class="group flex items-center justify-between rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 px-5 py-4 transition-colors"
+                :class="hasOriginal ? 'hover:border-blue-300 hover:bg-blue-50 dark:hover:bg-blue-500/15' : 'cursor-not-allowed opacity-70'"
                 :aria-disabled="!hasOriginal"
                 @click.prevent="openOriginal"
               >
                 <div class="flex items-center gap-3">
-                  <span class="flex h-9 w-9 items-center justify-center rounded-xl bg-white ring-1 ring-slate-200">
-                    <svg class="h-4 w-4 text-slate-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                  <span class="flex h-9 w-9 items-center justify-center rounded-xl bg-white dark:bg-slate-800 ring-1 ring-slate-200 dark:ring-slate-700">
+                    <svg class="h-4 w-4 text-slate-500 dark:text-slate-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
                       <path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6M9 8h6M7 3h7l5 5v13H7z" />
                     </svg>
                   </span>
                   <div class="text-left">
-                    <p class="text-sm font-bold text-slate-800">查看完整原文 / 论文</p>
+                    <p class="text-sm font-bold text-slate-800 dark:text-slate-100">查看完整原文 / 论文</p>
                     <p class="mt-0.5 text-xs text-slate-400">
                       {{ hasOriginal ? '在新窗口打开作品原文' : '后续接入爬虫后可用' }}
                     </p>
@@ -1032,7 +1032,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
                 </div>
                 <span
                   class="rounded-full px-3 py-1 text-xs font-bold"
-                  :class="hasOriginal ? 'bg-blue-600 text-white' : 'bg-slate-200 text-slate-500'"
+                  :class="hasOriginal ? 'bg-blue-600 text-white' : 'bg-slate-200 dark:bg-slate-700 text-slate-500 dark:text-slate-400'"
                 >
                   {{ hasOriginal ? '打开 →' : '暂未收录' }}
                 </span>
@@ -1041,7 +1041,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
               <!-- 暂无原文时的内联提示 -->
               <p
                 v-if="originalTip"
-                class="mt-2 flex items-start gap-1.5 rounded-xl bg-amber-50 px-3 py-2 text-xs font-medium text-amber-700"
+                class="mt-2 flex items-start gap-1.5 rounded-xl bg-amber-50 dark:bg-amber-500/15 px-3 py-2 text-xs font-medium text-amber-700 dark:text-amber-300"
               >
                 <svg class="mt-0.5 h-3.5 w-3.5 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4m0 4h.01M12 3l9 16H3z" />
@@ -1052,10 +1052,10 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
           </div>
 
           <!-- ===== 档案底部操作栏 ===== -->
-          <div class="flex shrink-0 items-center justify-end gap-3 border-t border-slate-100 bg-white px-7 py-4">
+          <div class="flex shrink-0 items-center justify-end gap-3 border-t border-slate-100 dark:border-slate-700 bg-white dark:bg-slate-800 px-7 py-4">
             <button
               type="button"
-              class="h-10 rounded-full px-5 text-sm font-bold text-slate-500 transition-colors hover:bg-slate-100"
+              class="h-10 rounded-full px-5 text-sm font-bold text-slate-500 dark:text-slate-400 transition-colors hover:bg-slate-100 dark:hover:bg-slate-700/60"
               @click="closeWork"
             >
               关闭
@@ -1063,14 +1063,14 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
             <button
               type="button"
               class="inline-flex h-10 items-center gap-2 rounded-full bg-blue-600 px-6 text-sm font-bold
-                     text-white shadow-sm shadow-blue-600/25 transition-colors hover:bg-blue-700
+                     text-white shadow-sm shadow-blue-600/25 transition-colors hover:bg-blue-700 dark:hover:bg-blue-600
                      disabled:cursor-not-allowed disabled:opacity-60"
               :disabled="workParsing"
               @click="parseWork"
             >
               <svg v-if="workParsing" class="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
                 <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
-                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 5.373 12h4z" />
               </svg>
               {{ workParsing ? '解析中…' : (parsedWork === selectedWork.id ? '重新解析' : 'AI 解析') }}
             </button>
@@ -1082,7 +1082,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
     <!-- Tab 3：灵感工作台 -->
     <section v-else>
       <!-- 顶部提示语 + 切换/刷新 -->
-      <div class="mb-5 flex flex-wrap items-center justify-between gap-4 rounded-2xl bg-blue-50/70 p-5 ring-1 ring-blue-100">
+      <div class="mb-5 flex flex-wrap items-center justify-between gap-4 rounded-2xl bg-blue-50/70 dark:bg-blue-500/15 p-5 ring-1 ring-blue-100 dark:ring-blue-500/30">
         <div>
           <p class="text-sm font-bold text-blue-900">灵感库会持续为你推送建模思路、算法选型与写作技巧</p>
           <p class="mt-1 text-xs font-medium text-blue-700/70">
@@ -1095,7 +1095,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
             class="inline-flex items-center gap-2 rounded-full px-4 py-2 text-xs font-bold transition-colors"
             :class="showFavorites
               ? 'bg-blue-600 text-white shadow-sm shadow-blue-600/25'
-              : 'bg-white text-blue-700 ring-1 ring-blue-200 hover:bg-blue-100'"
+              : 'bg-white dark:bg-slate-800 text-blue-700 dark:text-blue-300 ring-1 ring-blue-200 dark:ring-blue-500/30 hover:bg-blue-100 dark:hover:bg-blue-500/25'"
             @click="showFavorites = !showFavorites"
           >
             <svg class="h-4 w-4" :fill="showFavorites ? 'currentColor' : 'none'" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
@@ -1106,12 +1106,12 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
           </button>
           <button
             type="button"
-            class="inline-flex items-center gap-2 rounded-full bg-white px-4 py-2 text-xs font-bold
-                   text-blue-700 ring-1 ring-blue-200 transition-colors hover:bg-blue-100"
+            class="inline-flex items-center gap-2 rounded-full bg-white dark:bg-slate-800 px-4 py-2 text-xs font-bold
+                   text-blue-700 dark:text-blue-300 ring-1 ring-blue-200 dark:ring-blue-500/30 transition-colors hover:bg-blue-100 dark:hover:bg-blue-500/25"
             @click="refreshInspiration"
           >
             <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h5M20 20v-5h-5M20 9a8 8 0 00-14.9-2M4 15a8 8 0 0014.9 2" />
+              <path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h5M20 20v-5h-5M20 9a8 8 0 00-14.9-2M4 15a8 0014.9 2" />
             </svg>
             刷新
           </button>
@@ -1121,20 +1121,20 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
       <!-- 收藏视图：空状态 -->
       <div
         v-if="showFavorites && favoriteList.length === 0"
-        class="flex flex-col items-center justify-center rounded-2xl bg-white py-16 text-center ring-1 ring-slate-200/70"
+        class="flex flex-col items-center justify-center rounded-2xl bg-white dark:bg-slate-800 py-16 text-center ring-1 ring-slate-200/70 dark:ring-slate-700"
       >
-        <div class="flex h-14 w-14 items-center justify-center rounded-2xl bg-amber-50">
+        <div class="flex h-14 w-14 items-center justify-center rounded-2xl bg-amber-50 dark:bg-amber-500/15">
           <svg class="h-7 w-7 text-amber-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round"
               d="M11.48 3.5l2.31 4.68 5.16.75-3.73 3.64.88 5.14-4.62-2.43-4.62 2.43.88-5.14L3.01 8.93l5.16-.75z" />
           </svg>
         </div>
-        <h3 class="mt-4 text-base font-bold text-slate-900">还没有收藏的灵感</h3>
-        <p class="mt-2 text-sm text-slate-500">在灵感卡片上点击「收藏」，即可在这里集中查看。</p>
+        <h3 class="mt-4 text-base font-bold text-slate-900 dark:text-slate-100">还没有收藏的灵感</h3>
+        <p class="mt-2 text-sm text-slate-500 dark:text-slate-400">在灵感卡片上点击「收藏」，即可在这里集中查看。</p>
         <button
           type="button"
           class="mt-5 h-10 rounded-full bg-blue-600 px-6 text-sm font-bold text-white
-                 shadow-sm shadow-blue-600/25 transition-colors hover:bg-blue-700"
+                 shadow-sm shadow-blue-600/25 transition-colors hover:bg-blue-700 dark:hover:bg-blue-600"
           @click="showFavorites = false"
         >
           去看看灵感
@@ -1146,21 +1146,21 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
         <article
           v-for="item in (showFavorites ? favoriteList : inspirations)"
           :key="item.id"
-          class="flex flex-col rounded-2xl bg-white p-5 ring-1 ring-slate-200/70 shadow-sm transition-all
+          class="flex flex-col rounded-2xl bg-white dark:bg-slate-800 p-5 ring-1 ring-slate-200/70 dark:ring-slate-700 shadow-sm transition-all
                  hover:shadow-lg hover:shadow-slate-900/10"
         >
-          <span class="mb-3 w-fit rounded-full bg-slate-100 px-2.5 py-1 text-xs font-bold text-slate-600">
+          <span class="mb-3 w-fit rounded-full bg-slate-100 dark:bg-slate-700/60 px-2.5 py-1 text-xs font-bold text-slate-600 dark:text-slate-300">
             {{ item.tag }}
           </span>
-          <p class="text-sm leading-relaxed text-slate-700">{{ item.text }}</p>
+          <p class="text-sm leading-relaxed text-slate-700 dark:text-slate-200">{{ item.text }}</p>
 
           <div class="mt-4 flex items-center justify-end">
             <button
               type="button"
               class="inline-flex items-center gap-2 rounded-full px-4 py-1.5 text-xs font-bold transition-colors"
               :class="item.favorite
-                ? 'bg-amber-50 text-amber-700 ring-1 ring-amber-200'
-                : 'text-slate-500 ring-1 ring-slate-200 hover:text-slate-900 hover:ring-slate-300'"
+                ? 'bg-amber-50 dark:bg-amber-500/15 text-amber-700 dark:text-amber-300 ring-1 ring-amber-200 dark:ring-amber-500/30'
+                : 'text-slate-500 dark:text-slate-400 ring-1 ring-slate-200 dark:ring-slate-700 hover:text-slate-900 dark:hover:text-white hover:ring-slate-300 dark:hover:ring-slate-600'"
               @click="toggleFavorite(item)"
             >
               <svg class="h-4 w-4" :fill="item.favorite ? 'currentColor' : 'none'" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
@@ -1212,4 +1212,21 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
 .markdown-body th, .markdown-body td { border: 1px solid #e2e8f0; padding: 6px 10px; text-align: left; }
 .markdown-body th { background: #f1f5f9; font-weight: 700; }
 .markdown-body hr { border: 0; border-top: 1px solid #e2e8f0; margin: 1.2em 0; }
+
+/* ===== 暗色模式覆盖：AI 解析区在深色下必须保持足够对比度 ===== */
+.dark .markdown-body { color: #cbd5e1; }
+.dark .markdown-body h1,
+.dark .markdown-body h2,
+.dark .markdown-body h3,
+.dark .markdown-body h4,
+.dark .markdown-body strong { color: #f1f5f9; }
+.dark .markdown-body a { color: #60a5fa; }
+.dark .markdown-body code { background: #334155; color: #e2e8f0; }
+.dark .markdown-body pre { background: #020617; color: #e2e8f0; border: 1px solid #334155; }
+.dark .markdown-body pre code { background: transparent; color: inherit; }
+.dark .markdown-body blockquote { border-left-color: #3b82f6; color: #94a3b8; }
+.dark .markdown-body th,
+.dark .markdown-body td { border-color: #334155; }
+.dark .markdown-body th { background: #1e293b; color: #f1f5f9; }
+.dark .markdown-body hr { border-top-color: #334155; }
 </style>

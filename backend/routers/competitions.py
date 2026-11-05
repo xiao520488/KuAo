@@ -70,6 +70,7 @@ def _row_to_competition(row: Dict[str, Any]) -> Competition:
         intro=row.get("intro"),
         summary=row.get("summary"),
         tech_stack=_parse_tech_stack(row.get("tech_stack")),
+        full_process_guide=row.get("full_process_guide") or "",
         sort_order=row.get("sort_order"),
         created_at=row.get("created_at"),
     )

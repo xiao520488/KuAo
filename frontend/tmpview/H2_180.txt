@@ -1,0 +1,30 @@
+
+  const currentQ = typeof route.query.q === 'string' ? route.query.q.trim() : ''
+
+  if (currentQ === q) {
+    // URL 未变（重复搜同一关键词）→ watch 不触发，手动放行一次
+    runSearch(q)
+    return
+  }
+
+  // 统一走路由：状态变化完全由 URL 驱动
+  router.push({ path: '/', query: { q } })
+}
+
+/**
+ * 清空搜索：同样通过 URL 驱动，保证与 submitSearch 一致
+ */
+function submitReset() {
+  keyword.value = ''
+
+  // 有 q 时才需要改 URL，否则 watch 不会触发，手动恢复列表
+  if (route.query.q !== undefined) {
+    router.push({ path: '/', query: {} })
+    return
+  }
+
+  resetToDefault()
+}
+
+/**
+ * 请求序号：用于竞态隔离

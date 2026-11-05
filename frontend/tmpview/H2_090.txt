@@ -1,0 +1,30 @@
+  const level = item.level_label || LEVEL_FALLBACK[item.level] || item.level || ''
+  return {
+    id: item.id ?? index,
+    title: item.name || '未命名竞赛',
+    level,
+    category: item.category || item.subject || '',
+    image: item.image ?? item.cover ?? '',
+    signUpTime: formatSignUp(item),
+    contestTime: '待定'
+  }
+}
+
+async function loadCompetitions() {
+  loading.value = true
+  errorMsg.value = ''
+  try {
+    const list = await getCompetitions()
+    competitions.value = list.slice(0, 8).map(mapToCard)
+    bumpListAnimation()
+  } catch (err) {
+    errorMsg.value = err?.message || '加载竞赛数据失败'
+    competitions.value = []
+  } finally {
+    loading.value = false
+  }
+}
+
+
+/**
+ * 列表内容变化时递增批次号，重放交错入场动画

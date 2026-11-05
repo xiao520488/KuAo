@@ -69,11 +69,11 @@ onUnmounted(() => {
       type="button"
       class="fixed right-10 bottom-16 z-40 group
              inline-flex h-12 w-12 items-center justify-center
-             rounded-full bg-white text-slate-600
-             ring-1 ring-slate-200/80
+             rounded-full bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300
+             ring-1 ring-slate-200/80 dark:ring-slate-700
              shadow-lg shadow-slate-900/10
              transition-colors duration-300
-             hover:text-blue-600 hover:bg-blue-50 hover:ring-blue-200
+             hover:text-blue-600 dark:hover:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-500/15 hover:ring-blue-200
              hover:shadow-xl hover:shadow-blue-600/15
              focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500
              cursor-pointer"

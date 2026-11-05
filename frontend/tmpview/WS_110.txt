@@ -1,0 +1,110 @@
+const errorMsg = ref('')
+
+// 多轮对话历史：每轮 {"user": "...", "assistant": "..."}，拼接后作为 user_input
+const history = ref([])
+
+const planBody = ref(null)
+
+// 把 history + 本轮输入拼成后端要求的「完整背景」
+function buildUserInput(latest = '') {
+  const turns = history.value
+    .map((h, i) => `第${i + 1}轮\n用户：${h.user}\n助手：${h.assistant}`)
+    .join('\n\n')
+  if (!latest) return turns
+  return turns ? `${turns}\n\n本轮用户：${latest}` : `本轮用户：${latest}`
+}
+
+/** 切竞赛时重置 Tab1：清空计划正文、对话记录与错误，避免上个赛事的上下文串台 */
+function resetPlanState() {
+  plan.value = ''
+  history.value = []
+  messages.value = [
+    {
+      role: 'assistant',
+      content:
+        '你好，我是你的专属备赛教练。为了给你量身定制计划，' +
+        '请告诉我你的备赛目标、基础情况以及每天能投入的时间。'
+    }
+  ]
+  draft.value = ''
+  errorMsg.value = ''
+  generating.value = false
+}
+
+// 统一请求：拿后端返回后按 status 分流渲染
+async function requestPlan(latestInput = '') {
+  errorMsg.value = ''
+  // 请求前快照竞赛 id：响应回来时若已切到别的竞赛，直接丢弃，避免数据污染
+  const cid = routedId.value
+  if (!cid) throw new Error('竞赛 ID 缺失，请返回列表重新进入')
+  const res = await generatePlan({
+    competitionId: cid,
+    userInput: buildUserInput(latestInput),
+    currentPlan: hasPlan.value ? plan.value : null
+  })
+
+  // 竞赛已切换 → 本次结果作废，不写 plan / messages / history
+  if (routedId.value !== cid) return
+
+  const status = res?.status || 'plan'
+  const reply = (res?.reply || '').trim()
+
+  if (!reply) throw new Error('AI 未返回内容，请稍后重试')
+
+  if (status === 'ask') {
+    // 反问：只进对话气泡，不产生计划
+    messages.value.push({ role: 'assistant', content: reply })
+    history.value.push({ user: latestInput, assistant: reply })
+    return 'ask'
+  }
+
+  // plan / refine：正文即完整计划，原地替换
+  const isRefine = status === 'refine'
+  plan.value = reply
+  history.value.push({
+    user: latestInput,
+    assistant: isRefine ? '（已根据你的补充更新完整计划）' : '（已生成完整备赛计划）'
+  })
+  messages.value.push({
+    role: 'assistant',
+    content: isRefine ? '已根据你的补充更新计划，请查看上方计划区域。' : '已为你生成备赛计划，可继续补充信息让我调整。'
+  })
+  return status
+}
+
+// 「生成专属备赛计划」：首轮
+async function startPlan() {
+  if (generating.value) return
+  const cid = routedId.value
+  generating.value = true
+  try {
+    const status = await requestPlan('')
+    if (status === 'ask' && routedId.value === cid) {
+      // 反问场景：把输入框滚动到视野内，提示用户作答
+      await nextTick()
+      planBody.value?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    }
+  } catch (e) {
+    // 已切走则不回写错误，防止把旧竞赛的失败提示带到新竞赛
+    if (routedId.value !== cid) return
+    errorMsg.value = e?.message || '生成失败，请稍后重试'
+  } finally {
+    // 仅当仍是同一竞赛时才复位 loading，避免覆盖新竞赛的请求态
+    if (routedId.value === cid) generating.value = false
+  }
+}
+
+// 发送补充信息
+async function send() {
+  const text = draft.value.trim()
+  if (!text || generating.value) return
+  const cid = routedId.value
+  messages.value.push({ role: 'user', content: text })
+  draft.value = ''
+  generating.value = true
+  try {
+    await requestPlan(text)
+  } catch (e) {
+    if (routedId.value !== cid) return
+    errorMsg.value = e?.message || '更新失败，请稍后重试'
+  } finally {

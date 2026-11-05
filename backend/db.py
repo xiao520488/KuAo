@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
 比赛信息管理系统 - 数据访问层 (db.py)
 
@@ -18,6 +18,10 @@
   不传时行为与旧版完全一致，保证向后兼容。
 - 连接内统一开启 `PRAGMA foreign_keys = ON` 与 `busy_timeout`，
   降低并发写时的 "database is locked" 概率。
+
+【v3 新增字段】
+- competitions.full_process_guide (TEXT)：参赛全过程攻略（Markdown），
+  由离线脚本 generate_guides.py 调用大模型生成后回写。
 """
 
 from typing import Optional
@@ -92,6 +96,9 @@ def _enrich(row: dict) -> dict:
     row = dict(row)
     row["level"] = row.get("level") or "national"
     row["level_label"] = level_label_of(row)
+    # full_process_guide 兜底为空串，避免前端拿到 None 需额外判空
+    if row.get("full_process_guide") is None:
+        row["full_process_guide"] = ""
     return row
 
 
@@ -159,6 +166,8 @@ _MIGRATION_COLUMNS = {
     "intro": "TEXT",
     "summary": "TEXT",
     "tech_stack": "TEXT NOT NULL DEFAULT '[]'",
+    # 参赛全过程攻略（Markdown），由 generate_guides.py 离线生成回写
+    "full_process_guide": "TEXT",
 }
 
 
@@ -239,8 +248,8 @@ def add_competition(data: dict) -> int:
         cur = conn.execute(
             """INSERT INTO competitions
                (name, category, reg_start_month, reg_end_month, reg_cross_year,
-                official_url, level, level_label, sort_order)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                official_url, level, level_label, sort_order, full_process_guide)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 data.get("name"),
                 data.get("category"),
@@ -251,6 +260,7 @@ def add_competition(data: dict) -> int:
                 level,
                 data.get("level_label"),
                 data.get("sort_order"),
+                data.get("full_process_guide"),
             ),
         )
         return cur.lastrowid
@@ -262,7 +272,8 @@ def update_competition(cid: int, data: dict) -> None:
     """
     allowed = ("name", "category", "reg_start_month", "reg_end_month",
                "reg_cross_year", "official_url", "level", "level_label",
-               "sort_order", "intro", "summary", "tech_stack")
+               "sort_order", "intro", "summary", "tech_stack",
+               "full_process_guide")
     fields, values = [], []
     for key in allowed:
         if key in data:
@@ -279,6 +290,15 @@ def update_competition(cid: int, data: dict) -> None:
     with get_conn() as conn:
         conn.execute(
             f"UPDATE competitions SET {', '.join(fields)} WHERE id = ?", values
+        )
+
+
+def update_full_process_guide(cid: int, guide: str) -> None:
+    """仅更新某场比赛的参赛全过程攻略（供 generate_guides.py 回写使用）。"""
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE competitions SET full_process_guide = ? WHERE id = ?",
+            (guide, cid),
         )
 
 
@@ -398,468 +418,168 @@ def _fetch_source_url_map(conn, title_keys) -> dict:
 
     result = {}
     try:
-        # 依据原始标题批量取候选（IN 查询），再在内存里按归一化标题归组
-        placeholders = ",".join("?" * len(raw_titles))
-        sql = (
+        rows = conn.execute(
             "SELECT id, title, source_url FROM awards "
-            "WHERE title IN (%s) AND source_url IS NOT NULL AND TRIM(source_url) <> '' "
+            "WHERE source_url IS NOT NULL AND TRIM(source_url) <> '' "
             "ORDER BY id ASC"
-        ) % placeholders
-        cur = conn.execute(sql, raw_titles)
-        for row in cur.fetchall():
-            d = dict(row)
-            title = str(d.get("title") or "")
-            url = (d.get("source_url") or "").strip()
-            if not title or not url:
-                continue
-            key = re.sub(r"[\s\W_]+", "", title).lower()
-            # 归一化键优先；原始标题键作为补充（仅当尚未记录时）
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return {}
+
+    for r in rows:
+        title = r["title"]
+        url = (r["source_url"] or "").strip()
+        if not title or not url:
+            continue
+        for key in (title, _norm_title(title)):
             if key and key not in result:
                 result[key] = url
-            if title not in result:
-                result[title] = url
-    except Exception:
-        return {}
     return result
 
 
-def list_awards_by_competition(competition_id: int, limit: int = 5) -> list:
-    """按竞赛 id 取该赛事下的获奖作品，供 AI 聚合分析使用。
-
-    - 仅取 review_status != 'rejected' 的作品（被拒绝的脏数据不参与分析）
-    - 按 confidence 降序、id 降序，优先取更可信、更新的条目
-    - tech_stack 为 JSON 字符串，这里解析为 list；解析失败降级为空列表
-    - 返回字段：id / year / session / title / team / track /
-      award_grade / level / summary / tech_stack / highlights
-    """
-    import json
-
-    # 注意：这里不能直接 LIMIT，因为同一选题可能有多条记录
-    # （不同年份 / 省赛与国赛各一条），若先 LIMIT 再去重会导致返回条数不足。
-    # 因此先多取一些候选（limit * 5，上限 50），去重后再截断到 limit。
-    scan_limit = max(int(limit) * 5, int(limit))
-    scan_limit = min(scan_limit, 50)
-
-    sql = (
-        "SELECT id, year, session, title, team, track, "
-        "award_grade, level, summary, tech_stack, highlights, source_url "
-        "FROM awards WHERE competition_id = ? "
-        "AND COALESCE(review_status, 'pending') <> 'rejected' "
-        "ORDER BY COALESCE(confidence, 1.0) DESC, id DESC LIMIT ?"
-    )
-    with get_conn() as conn:
-        _ensure_source_url_column(conn)
-        rows = conn.execute(sql, (competition_id, scan_limit)).fetchall()
-
-        # ---- 批量回填 source_url（跨赛事同标题兜底）----
-        # 同一选题可能被收录进多场竞赛，链接往往只写在其中一条上。
-        # 这里一次查询取出「同标题 -> 非空 URL」映射，避免逐条 N+1 扫描。
-        title_keys = set()
-        for r in rows:
-            d = dict(r)
-            k = re.sub(r"[\s\W_]+", "", str(d.get("title") or "")).lower()
-            if k:
-                title_keys.add(k)
-                title_keys.add(str(d.get("title") or ""))
-
-        filled = _fetch_source_url_map(conn, title_keys)
-        if filled:
-            new_rows = []
-            for r in rows:
-                d = dict(r)
-                if not (d.get("source_url") or "").strip():
-                    k = re.sub(r"[\s\W_]+", "", str(d.get("title") or "")).lower()
-                    url = filled.get(k) or filled.get(str(d.get("title") or ""))
-                    if url:
-                        d["source_url"] = url
-                new_rows.append(d)
-            rows = new_rows
-
-    # ---- 按标题去重：同标题多条时优先保留带 source_url 的那条 ----
-    # rows 已按 COALESCE(confidence,1.0) DESC, id DESC 排序，
-    # 因此同标题下"第一个有链接的记录"即最优候选。
-    # 若整组都没有链接，则退化为保留排序最靠前的那条（原行为）。
-    grouped = {}          # title_key -> dict
-    order = []            # 保持首次出现顺序，保证结果按 confidence/id 排列
-    for r in rows:
-        d = dict(r)
-        title_key = re.sub(r"[\s\W_]+", "", str(d.get("title") or "")).lower()
-
-        if not title_key:                 # 标题为空：不参与去重，直接单独成组
-            order.append(d)
-            continue
-
-        if title_key not in grouped:
-            grouped[title_key] = d
-            order.append(title_key)
-            continue
-
-        # 已有同标题记录：仅当"保留的是无链接、当前这条有链接"时才替换
-        kept = grouped[title_key]
-        kept_url = (kept.get("source_url") or "").strip()
-        cur_url = (d.get("source_url") or "").strip()
-        if not kept_url and cur_url:
-            grouped[title_key] = d
-
-    result = []
-    for item in order:
-        if len(result) >= int(limit):
-            break
-        d = grouped[item] if isinstance(item, str) else item
-
-        raw_tech = d.get("tech_stack")
-        if isinstance(raw_tech, str) and raw_tech.strip():
-            try:
-                parsed = json.loads(raw_tech)
-            except (ValueError, TypeError):
-                parsed = [t.strip() for t in raw_tech.split(",") if t.strip()]
-            d["tech_stack"] = parsed if isinstance(parsed, list) else []
-        else:
-            d["tech_stack"] = []
-        result.append(d)
-    return result
+def _norm_title(title: Optional[str]) -> str:
+    """标题归一化：去空白与常见标点、转小写，用于跨赛事同标题匹配。"""
+    if not title:
+        return ""
+    t = re.sub(r"[\s\u3000]+", "", str(title))
+    t = re.sub(r"[，。、；：！？,.;:!?（）()\[\]【】《》\"'“”‘’\-—_/\\|]+", "", t)
+    return t.lower()
 
 
-# ============================================================
-# awards.source_url 列迁移（幂等）
-# ============================================================
-
-def _ensure_source_url_column(conn) -> None:
-    """确保 awards 表存在 source_url 列，不存在则 ALTER 加上。
-
-    幂等：通过 PRAGMA table_info 判断，已存在时直接返回。
-    异常处理：ALTER 失败不抛给调用方，仅记录并忽略，
-    避免老库/只读库导致整个查询链路 500。
-    """
-    try:
-        cols = {row[1] for row in conn.execute("PRAGMA table_info(awards)").fetchall()}
-        if not cols:
-            return  # 表还不存在，交给建表逻辑
-        if "source_url" in cols:
-            return
-        conn.execute("ALTER TABLE awards ADD COLUMN source_url TEXT")
-        conn.commit()
-    except sqlite3.OperationalError as exc:
-        # 并发下另一个进程已加列、或数据库只读 —— 都不应中断业务
-        try:
-            conn.rollback()
-        except Exception:
-            pass
-        if "duplicate column" not in str(exc).lower():
-            print(f"[db] ensure source_url 列失败（已忽略）: {exc}")
-    except Exception as exc:
-        try:
-            conn.rollback()
-        except Exception:
-            pass
-        print(f"[db] ensure source_url 列异常（已忽略）: {exc}")
-
-
-# ============================================================
-# 单条获奖作品（awards）查询
-# ============================================================
-
-def get_award_by_id(award_id: int) -> Optional[dict]:
-    """按作品 id 取单条获奖作品的完整信息，供单作品深度解析使用。
-
-    - 返回 None 表示作品不存在
-    - 已标记为 rejected 的作品同样返回 None（脏数据不对外暴露）
-    - tech_stack 为 JSON 字符串，解析为 list；解析失败降级为 []
-    - 返回字段：id / competition_id / year / session / title / team / track /
-      award_grade / level / summary / highlights / tech_stack
-    """
-    import json
-
-    sql = (
-        "SELECT id, competition_id, year, session, title, team, track, "
-        "award_grade, level, summary, highlights, tech_stack, source_url "
-        "FROM awards WHERE id = ? "
-        "AND COALESCE(review_status, 'pending') <> 'rejected'"
-    )
-    with get_conn() as conn:
-        _ensure_source_url_column(conn)
-        row = conn.execute(sql, (int(award_id),)).fetchone()
-    if row is None:
-        return None
-
+def _award_row_to_dict(row: sqlite3.Row, url_map: Optional[dict] = None) -> dict:
+    """把 awards 行转成对外 dict：解析 tech_stack，补 origin_url 兜底。"""
     d = dict(row)
-
     raw_tech = d.get("tech_stack")
-    if isinstance(raw_tech, str) and raw_tech.strip():
+    tech = []
+    if raw_tech:
         try:
+            import json
             parsed = json.loads(raw_tech)
+            if isinstance(parsed, list):
+                tech = [str(x) for x in parsed if str(x).strip()]
+            elif isinstance(parsed, str) and parsed.strip():
+                tech = [parsed.strip()]
         except (ValueError, TypeError):
-            parsed = [t.strip() for t in raw_tech.split(",") if t.strip()]
-        d["tech_stack"] = parsed if isinstance(parsed, list) else []
-    elif isinstance(raw_tech, list):
-        d["tech_stack"] = raw_tech
-    else:
-        d["tech_stack"] = []
+            tech = [s.strip() for s in str(raw_tech).split(",") if s.strip()]
+    d["tech_stack"] = tech
 
+    origin = (d.get("source_url") or "").strip()
+    if not origin and url_map:
+        title = d.get("title")
+        origin = (url_map.get(title or "")
+                  or url_map.get(_norm_title(title)) or "")
+    d["origin_url"] = origin or None
     return d
 
 
+def list_awards_by_competition(competition_id: int, limit: Optional[int] = None) -> list:
+    """按竞赛 id 查询获奖作品列表（按年份倒序、id 升序）。"""
+    sql = ("SELECT * FROM awards WHERE competition_id = ? "
+           "ORDER BY CASE WHEN year IS NULL THEN 1 ELSE 0 END ASC, "
+           "year DESC, id ASC")
+    params = [competition_id]
+    if limit:
+        sql += " LIMIT ?"
+        params.append(int(limit))
+    with get_conn() as conn:
+        rows = conn.execute(sql, params).fetchall()
+        url_map = _fetch_source_url_map(
+            conn, [r["title"] for r in rows if r["title"]]
+        )
+    return [_award_row_to_dict(r, url_map) for r in rows]
+
+
+def get_award_by_id(award_id: int) -> Optional[dict]:
+    """按 id 获取单条获奖作品，不存在返回 None。"""
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM awards WHERE id = ?", (award_id,)
+        ).fetchone()
+        if not row:
+            return None
+        url_map = _fetch_source_url_map(conn, [row["title"]] if row["title"] else [])
+    return _award_row_to_dict(row, url_map)
+
+
+def count_awards_by_competition(competition_id: int) -> int:
+    """统计某竞赛下的获奖作品数量。"""
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) AS c FROM awards WHERE competition_id = ?",
+            (competition_id,),
+        ).fetchone()
+    return int(row["c"]) if row else 0
+
+
 # ============================================================
-# 七、用户账号（鉴权地基）
+# 四、参赛全过程攻略（full_process_guide）
 # ============================================================
+
+def list_competitions_for_guide(only_missing: bool = False) -> list:
+    """返回用于生成攻略的比赛列表（id / name / category / official_url 等）。
+
+    参数:
+        only_missing: 为 True 时只返回 full_process_guide 为空或未填的比赛，
+                      便于脚本断点续跑、避免重复消耗大模型额度。
+    """
+    sql = ("SELECT id, name, category, level, level_label, official_url, "
+           "intro, summary, full_process_guide FROM competitions")
+    if only_missing:
+        sql += (" WHERE full_process_guide IS NULL "
+                "OR TRIM(full_process_guide) = ''")
+    sql += " ORDER BY id ASC"
+    with get_conn() as conn:
+        rows = conn.execute(sql).fetchall()
+    return [_enrich(r) for r in rows]
+
+
+def get_full_process_guide(cid: int) -> Optional[str]:
+    """读取某场比赛的参赛全过程攻略；比赛不存在返回 None。"""
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT full_process_guide FROM competitions WHERE id = ?", (cid,)
+        ).fetchone()
+    if row is None:
+        return None
+    return row["full_process_guide"] or ""
+
+
+# ============================================================
+# 五、兼容旧接口（保留占位，避免上层 import 失败）
+# ============================================================
+
+def now_str() -> str:
+    """返回当前本地时间字符串（YYYY-MM-DD HH:MM:SS）。"""
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def get_user_by_id(user_id):
+    """根据 user_id 查询 users 表，返回单条记录（fetchone）。"""
+    with get_conn() as conn:
+        return conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+
+
+def get_user_by_username(username):
+    """根据 username 查询 users 表，返回单条记录（fetchone）。"""
+    with get_conn() as conn:
+        return conn.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
+
 
 def create_user(username: str, password_hash: str) -> int:
     """
-    新增用户，返回自增 id。
+    新建用户，返回新用户 id。
 
-    依赖 schema_v2.sql 的 ux_users_username 唯一索引保证不会重名；
-    调用方（routers/auth.py）应先做一次 exists_user 预检以便返回友好错误，
-    但仍需在此捕获 IntegrityError 兜底并发抢注。
+    参数:
+        username: 用户名（调用方已归一化，唯一索引兜底）
+        password_hash: 已哈希的密码（bcrypt），严禁传明文
+    返回:
+        新插入记录的 id (int)
+    异常:
+        用户名重复时抛 sqlite3.IntegrityError（由上层转 409）
     """
     with get_conn() as conn:
-        conn.execute("CREATE TABLE IF NOT EXISTS users ("
-                     "id INTEGER PRIMARY KEY AUTOINCREMENT,"
-                     "username TEXT NOT NULL,"
-                     "password_hash TEXT NOT NULL,"
-                     "created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')))")
         cur = conn.execute(
             "INSERT INTO users (username, password_hash) VALUES (?, ?)",
             (username, password_hash),
         )
-        return int(cur.lastrowid)
-
-
-def get_user_by_username(username: str) -> Optional[dict]:
-    """按用户名查询用户，返回 {id, username, password_hash, created_at} 或 None。"""
-    with get_conn() as conn:
-        try:
-            row = conn.execute(
-                "SELECT id, username, password_hash, created_at "
-                "FROM users WHERE username = ?",
-                (username,),
-            ).fetchone()
-        except sqlite3.OperationalError:
-            # users 表尚未创建（老库未跑 init_db）
-            return None
-    return dict(row) if row else None
-
-
-def get_user_by_id(user_id: int) -> Optional[dict]:
-    """按 id 查询用户（不含密码哈希，供鉴权依赖返回当前用户信息）。"""
-    with get_conn() as conn:
-        try:
-            row = conn.execute(
-                "SELECT id, username, created_at FROM users WHERE id = ?",
-                (int(user_id),),
-            ).fetchone()
-        except sqlite3.OperationalError:
-            return None
-    return dict(row) if row else None
-
-
-# ============================================================
-# ai_usage: per-user daily AI quota (atomic consume)
-# ============================================================
-
-def _today_str() -> str:
-    """Local date as 'YYYY-MM-DD'. Quota resets at local midnight."""
-    return datetime.now().strftime("%Y-%m-%d")
-
-
-def consume_ai_quota(user_id: int, limit: int) -> dict:
-    """Atomically consume one AI call for today.
-
-    Concurrency
-    -----------
-    The whole operation is a *single* conditional UPDATE:
-
-        UPDATE ai_usage SET used = used + 1
-        WHERE user_id = ? AND usage_date = ? AND used < ?
-
-    SQLite serializes writes, so two simultaneous requests can never both
-    see ``used < limit`` and both increment past the cap. We rely on
-    ``cur.rowcount`` (1 == we won the slot, 0 == quota exhausted) instead of
-    a read-then-write, which would race.
-
-    The first call of the day creates the row with used=1 via the same
-    guarded INSERT (``used < limit`` is implied by 1 <= limit).
-
-    Returns
-    -------
-    dict with keys:
-        allowed (bool), used (int), limit (int), remaining (int)
-    On rejection ``used`` equals the exhausted value (== limit).
-    """
-    limit = int(limit)
-    uid = int(user_id)
-    today = _today_str()
-
-    # limit <= 0 means "unlimited" (dev escape hatch)
-    if limit <= 0:
-        return {"allowed": True, "used": 0, "limit": 0, "remaining": -1}
-
-    with get_conn() as conn:
-        # 1) fast path: row already exists for today -> guarded increment
-        cur = conn.execute(
-            "UPDATE ai_usage SET used = used + 1, "
-            "updated_at = datetime('now', 'localtime') "
-            "WHERE user_id = ? AND usage_date = ? AND used < ?",
-            (uid, today, limit),
-        )
-        if cur.rowcount == 1:
-            row = conn.execute(
-                "SELECT used FROM ai_usage WHERE user_id = ? AND usage_date = ?",
-                (uid, today),
-            ).fetchone()
-            used = int(row["used"])
-            return {
-                "allowed": True,
-                "used": used,
-                "limit": limit,
-                "remaining": max(limit - used, 0),
-            }
-
-        # 2) either no row yet, or quota exhausted -> disambiguate
-        row = conn.execute(
-            "SELECT used FROM ai_usage WHERE user_id = ? AND usage_date = ?",
-            (uid, today),
-        ).fetchone()
-
-        if row is not None:
-            # row exists and guard failed => exhausted
-            used = int(row["used"])
-            return {"allowed": False, "used": used, "limit": limit, "remaining": 0}
-
-        # 3) first call today: create the row with used=1.
-        #    INSERT OR IGNORE: if a concurrent request created it first,
-        #    rowcount == 0 and we fall back to the guarded UPDATE.
-        cur = conn.execute(
-            "INSERT OR IGNORE INTO ai_usage (user_id, usage_date, used) "
-            "VALUES (?, ?, 1)",
-            (uid, today),
-        )
-        if cur.rowcount == 1:
-            return {"allowed": True, "used": 1, "limit": limit,
-                    "remaining": max(limit - 1, 0)}
-
-        # lost the insert race -> retry the guarded increment once
-        cur = conn.execute(
-            "UPDATE ai_usage SET used = used + 1, "
-            "updated_at = datetime('now', 'localtime') "
-            "WHERE user_id = ? AND usage_date = ? AND used < ?",
-            (uid, today, limit),
-        )
-        row = conn.execute(
-            "SELECT used FROM ai_usage WHERE user_id = ? AND usage_date = ?",
-            (uid, today),
-        ).fetchone()
-        used = int(row["used"]) if row else limit
-        allowed = cur.rowcount == 1
-        return {
-            "allowed": allowed,
-            "used": used,
-            "limit": limit,
-            "remaining": max(limit - used, 0) if allowed else 0,
-        }
-
-
-def get_ai_quota(user_id: int, limit: int) -> dict:
-    """Peek at today's usage without consuming. Safe for /me-style display."""
-    limit = int(limit)
-    with get_conn() as conn:
-        try:
-            row = conn.execute(
-                "SELECT used FROM ai_usage WHERE user_id = ? AND usage_date = ?",
-                (int(user_id), _today_str()),
-            ).fetchone()
-        except sqlite3.OperationalError:
-            return {"used": 0, "limit": limit, "remaining": max(limit, 0)}
-    used = int(row["used"]) if row else 0
-    if limit <= 0:
-        return {"used": used, "limit": 0, "remaining": -1}
-    return {"used": used, "limit": limit, "remaining": max(limit - used, 0)}
-
-
-# ============================================================
-# user_preparations (auth-required): per-user prep list
-# ============================================================
-
-def add_preparation(user_id: int, competition_id: int) -> dict:
-    """Add a competition to the user's prep list.
-
-    Idempotent: repeated calls return the existing row instead of raising.
-    Returns {"id":..., "created": bool}
-    Raises ValueError if the competition does not exist.
-    """
-    with get_conn() as conn:
-        row = conn.execute(
-            "SELECT id FROM competitions WHERE id = ?", (int(competition_id),)
-        ).fetchone()
-        if row is None:
-            raise ValueError("competition not found")
-
-        cur = conn.execute(
-            "INSERT OR IGNORE INTO user_preparations (user_id, competition_id) "
-            "VALUES (?, ?)",
-            (int(user_id), int(competition_id)),
-        )
-        created = cur.rowcount > 0
-        got = conn.execute(
-            "SELECT id FROM user_preparations WHERE user_id = ? AND competition_id = ?",
-            (int(user_id), int(competition_id)),
-        ).fetchone()
-    return {"id": got["id"] if got else None, "created": created}
-
-
-def remove_preparation(user_id: int, competition_id: int) -> bool:
-    """Remove a competition from the prep list. Returns True if a row was deleted."""
-    with get_conn() as conn:
-        cur = conn.execute(
-            "DELETE FROM user_preparations WHERE user_id = ? AND competition_id = ?",
-            (int(user_id), int(competition_id)),
-        )
-        return cur.rowcount > 0
-
-
-def list_preparations(user_id: int) -> list:
-    """List the user's prep items joined with competition info, newest first."""
-    with get_conn() as conn:
-        try:
-            rows = conn.execute(
-                """
-                SELECT p.id              AS prep_id,
-                       p.competition_id  AS competition_id,
-                       p.created_at      AS added_at,
-                       c.name            AS name,
-                       c.category        AS category,
-                       c.level           AS level,
-                       c.level_label     AS level_label,
-                       c.reg_start_month AS reg_start_month,
-                       c.reg_end_month   AS reg_end_month,
-                       c.reg_cross_year  AS reg_cross_year,
-                       c.official_url    AS official_url,
-                       c.summary         AS summary
-                FROM user_preparations p
-                JOIN competitions c ON c.id = p.competition_id
-                WHERE p.user_id = ?
-                ORDER BY p.created_at DESC, p.id DESC
-                """,
-                (int(user_id),),
-            ).fetchall()
-        except sqlite3.OperationalError:
-            # table not created yet (init_db never ran)
-            return []
-    return [dict(r) for r in rows]
-
-
-def is_prepared(user_id: int, competition_id: int) -> bool:
-    """Whether the competition is already in the user's prep list."""
-    with get_conn() as conn:
-        try:
-            row = conn.execute(
-                "SELECT 1 FROM user_preparations WHERE user_id = ? AND competition_id = ?",
-                (int(user_id), int(competition_id)),
-            ).fetchone()
-        except sqlite3.OperationalError:
-            return False
-    return row is not None
-
-
-def exists_user(username: str) -> bool:
-    """用户名是否已存在。"""
-    return get_user_by_username(username) is not None
+        return cur.lastrowid

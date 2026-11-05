@@ -1,0 +1,150 @@
+1 |   openAuthModal(mode)
+2 | }
+3 | 
+4 | // 登录/注册成功后的提示（轻量 toast）
+5 | const toast = ref('')
+6 | let toastTimer = null
+7 | function showToast(msg) {
+8 |   toast.value = msg
+9 |   clearTimeout(toastTimer)
+10 |   toastTimer = setTimeout(() => (toast.value = ''), 2200)
+11 | }
+12 | 
+13 | // 弹窗宿主在 App.vue，这里改为监听登录态变化来做本地提示
+14 | // 首次恢复会话（刷新页面）时不打扰用户，只提示「本次操作」带来的登录
+15 | watch(
+16 |   () => authState.user,
+17 |   (u, old) => {
+18 |     if (u && !old) showToast(`欢迎，${u?.username || '用户'}`)
+19 |   }
+20 | )
+21 | 
+22 | /* ---------------- 用户下拉菜单 ---------------- */
+23 | const menuOpen = ref(false)
+24 | const userMenuRef = ref(null)
+25 | 
+26 | function toggleMenu() {
+27 |   menuOpen.value = !menuOpen.value
+28 | }
+29 | 
+30 | function onDocClick(e) {
+31 |   if (!menuOpen.value) return
+32 |   if (userMenuRef.value && !userMenuRef.value.contains(e.target)) {
+33 |     menuOpen.value = false
+34 |   }
+35 | }
+36 | 
+37 | async function onLogout() {
+38 |   menuOpen.value = false
+39 |   await logout()
+40 |   showToast('已退出登录')
+41 |   router.push('/')
+42 | }
+43 | 
+44 | onMounted(() => document.addEventListener('click', onDocClick))
+45 | onBeforeUnmount(() => {
+46 |   document.removeEventListener('click', onDocClick)
+47 |   clearTimeout(toastTimer)
+48 | })
+49 | </script>
+50 | 
+51 | <template>
+52 |   <header
+53 |     class="fixed top-0 inset-x-0 z-50 h-16
+54 |            bg-white/60 backdrop-blur-xl backdrop-saturate-150
+55 |            border-b border-white/40 shadow-sm shadow-slate-900/5"
+56 |   >
+57 |     <div class="mx-auto h-full max-w-7xl px-6 flex items-center justify-between">
+58 |       <!-- 左：Logo -->
+59 |       <button
+60 |         type="button"
+61 |         class="text-2xl font-extrabold tracking-tight text-slate-900 select-none
+62 |                cursor-pointer bg-transparent border-0 p-0
+63 |                focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 rounded-lg"
+64 |         aria-label="回到首页"
+65 |         @click="goHome"
+66 |       >
+67 |         库<span class="text-blue-600">奥</span>
+68 |       </button>
+69 | 
+70 |       <!-- 中：居中菜单 -->
+71 |       <nav class="hidden md:flex items-center gap-8 absolute left-1/2 -translate-x-1/2">
+72 |         <template v-for="item in navList" :key="item.label">
+73 |           <!-- 首页：走统一重置逻辑（清 query + 平滑回顶） -->
+74 |           <button
+75 |             v-if="item.path === '/'"
+76 |             type="button"
+77 |             class="text-base font-bold transition-colors cursor-pointer bg-transparent border-0 p-0
+78 |                    focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 rounded"
+79 |             :class="item.active
+80 |               ? 'text-blue-600'
+81 |               : 'text-slate-600 hover:text-slate-900'"
+82 |             @click="goHome"
+83 |           >
+84 |             {{ item.label }}
+85 |           </button>
+86 | 
+87 |           <!-- 其他导航项：保持原有 router-link 行为 -->
+88 |           <router-link
+89 |             v-else
+90 |             :to="item.path"
+91 |             class="text-base font-bold transition-colors"
+92 |             :class="item.active
+93 |               ? 'text-blue-600'
+94 |               : 'text-slate-600 hover:text-slate-900'"
+95 |           >
+96 |             {{ item.label }}
+97 |           </router-link>
+98 |         </template>
+99 |       </nav>
+100 | 
+101 |       <!-- 中右：全局搜索（胶囊状） -->
+102 |       <div class="hidden lg:block flex-1 max-w-xs mx-6">
+103 |         <div
+104 |           class="group flex items-center gap-2 rounded-full bg-slate-100/80
+105 |                  px-4 py-2 ring-1 ring-slate-200/70 transition-all
+106 |                  focus-within:bg-white focus-within:ring-blue-500/40"
+107 |         >
+108 |           <svg class="h-4 w-4 shrink-0 text-slate-400" fill="none" viewBox="0 0 24 24"
+109 |                stroke="currentColor" stroke-width="2" stroke-linecap="round"
+110 |                stroke-linejoin="round">
+111 |             <path
+112 |               stroke-linecap="round"
+113 |               d="M21 21l-4.35-4.35M17 10.5a6.5 6.5 0 11-13 0 6.5 6.5 0 0113 0z" />
+114 |           </svg>
+115 | 
+116 |           <input
+117 |             v-model="keyword"
+118 |             type="text"
+119 |             placeholder="搜索..."
+120 |             class="w-full min-w-0 bg-transparent text-sm font-medium text-slate-800
+121 |                    placeholder:text-slate-400 focus:outline-none"
+122 |             :disabled="searching"
+123 |             @keyup.enter="onSearch"
+124 |           />
+125 |         </div>
+126 |       </div>
+127 | 
+128 |       <!-- 右：登录/注册 或 用户菜单 -->
+129 |       <div class="flex items-center gap-3">
+130 |         <!-- 未登录 -->
+131 |         <template v-if="!isLoggedIn">
+132 |           <button
+133 |             class="px-4 py-2 text-sm font-bold text-slate-600 hover:text-slate-900 transition-colors"
+134 |             @click="openAuth('login')"
+135 |           >
+136 |             登录
+137 |           </button>
+138 |           <button
+139 |             class="px-5 py-2 text-sm font-bold text-white rounded-full
+140 |                    bg-blue-600 hover:bg-blue-700 shadow-md shadow-blue-600/25
+141 |                    transition-colors"
+142 |             @click="openAuth('register')"
+143 |           >
+144 |             注册
+145 |           </button>
+146 |         </template>
+147 | 
+148 |         <!-- 已登录：头像 + 下拉 -->
+149 |         <div v-else ref="userMenuRef" class="relative">
+150 |           <button

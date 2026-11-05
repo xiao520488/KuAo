@@ -1,0 +1,110 @@
+<script setup>
+import { ref, computed, onMounted, watch } from 'vue'
+import Header from '@/components/Header.vue'
+import CompetitionCard from '@/components/CompetitionCard.vue'
+import BackToTop from '@/components/BackToTop.vue'
+import { getCompetitions, checkPrepared } from '@/services/api'
+import { authState } from '@/services/auth'
+
+const competitions = ref([])
+const loading = ref(true)
+const errorMsg = ref('')
+// 竞赛 ID -> 是否已加入备赛（登录后批量拉取）
+const preparedMap = ref({})
+
+// 并发查询每张卡片的备赛状态；未登录直接跳过（全部视为未加入）
+async function loadPreparedStates(list) {
+  if (!authState.user || !Array.isArray(list) || list.length === 0) {
+    preparedMap.value = {}
+    return
+  }
+  const results = await Promise.all(
+    list.map(async (item) => {
+      const id = item.id
+      if (id === null || id === undefined) return [null, false]
+      const ok = await checkPrepared(id)
+      return [String(id), ok]
+    })
+  )
+  const next = {}
+  for (const [key, ok] of results) {
+    if (key !== null) next[key] = ok
+  }
+  preparedMap.value = next
+}
+
+// ===== 筛选栏（当前为静态 UI，先把交互状态搭好，后端筛选参数后续接入） =====
+const subjects = ['全部科目', '工科', '理科', '文体', '商科', '综合', '计算机类', '创新创业']
+const levels = ['全部级别', '国家级', '省级', '市级']
+
+const subject = ref('全部科目')
+const level = ref('全部级别')
+
+// 真正的筛选逻辑先保留骨架：目前只做展示，不需要筛选时直接返回全量
+const CATEGORY_KEYWORDS = {
+  工科: ['工科', '工程', '机械', '电子', '电气', '土木', '建筑', '材料', '自动化', '能源'],
+  理科: ['理科', '数学', '物理', '化学', '生物', '统计', '科学'],
+  文体: ['文体', '文艺', '文化', '体育', '演讲', '辩论', '书法', '设计', '艺术'],
+  商科: ['商科', '商业', '经济', '金融', '会计', '管理', '营销', '创业计划'],
+  综合: ['综合', '全能', '通识', '跨学科'],
+  计算机类: ['计算机', '编程', '算法', '软件', '人工智能', 'AI', '网络安全', '数据', '信息'],
+  创新创业: ['创新', '创业', '创造', '挑战杯', '互联网+'],
+}
+const matchCategory = (item, category) => {
+  if (category === '全部科目') return true
+  const keywords = CATEGORY_KEYWORDS[category] || []
+  const haystack = `${item.category || ''} ${item.subject || ''} ${item.title || ''}`
+  return keywords.some((kw) => haystack.includes(kw))
+}
+const filtered = computed(() => {
+  return competitions.value.filter((item) => {
+    const subjectOk = matchCategory(item, subject.value)
+    const levelOk = level.value === '全部级别' || item.level === level.value
+    return subjectOk && levelOk
+  })
+})
+
+// ---------- 数据格式化（与首页保持一致） ----------
+function toMonth(value) {
+  if (value === null || value === undefined || value === '') return null
+  const str = String(value).trim()
+
+  if (/^\d{1,2}$/.test(str)) {
+    const n = parseInt(str, 10)
+    return n >= 1 && n <= 12 ? n : null
+  }
+
+  const parts = str.split(/[-/.\sT:]+/).filter(Boolean)
+  if (parts.length >= 2) {
+    if (parts[0].length === 4) {
+      const m = parseInt(parts[1], 10)
+      if (m >= 1 && m <= 12) return m
+    }
+    const m = parseInt(parts[0], 10)
+    if (m >= 1 && m <= 12) return m
+  }
+  return null
+}
+
+function formatSignUp(item) {
+  const start = toMonth(item.reg_start_month)
+  const end = toMonth(item.reg_end_month)
+
+  if (start && end) {
+    const crossYear =
+      item.reg_cross_year === true || item.reg_cross_year === 1 ||
+      item.reg_cross_year === '1' || item.reg_cross_year === 'true' ||
+      end < start
+
+    if (crossYear && end < start) return `${start} 月 - 次年 ${end} 月`
+    return `${start} 月 - ${end} 月`
+  }
+  if (start) return `${start} 月起`
+  if (end) return `截止 ${end} 月`
+  return '待公布'
+}
+
+const LEVEL_FALLBACK = {
+  national: '国家级',
+  provincial: '省级',
+  municipal: '市级',

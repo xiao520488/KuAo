@@ -1,0 +1,45 @@
+            class="rounded-xl border-0 bg-slate-100 px-4 py-2 text-sm font-semibold
+                   text-slate-700 outline-none ring-1 ring-transparent
+                   transition focus:bg-white focus:ring-blue-500"
+          >
+            <option v-for="s in subjects" :key="s" :value="s">{{ s }}</option>
+          </select>
+        </label>
+
+        <!-- 级别 -->
+        <label class="flex items-center gap-2">
+          <span class="text-sm font-medium text-slate-400">筛选</span>
+          <select
+            v-model="level"
+            class="rounded-xl border-0 bg-slate-100 px-4 py-2 text-sm font-semibold
+                   text-slate-700 outline-none ring-1 ring-transparent
+                   transition focus:bg-white focus:ring-blue-500"
+          >
+            <option v-for="l in levels" :key="l" :value="l">{{ l }}</option>
+          </select>
+        </label>
+
+        <!-- 结果计数 -->
+        <span class="ml-auto text-sm text-slate-400">
+          {{ filtered.length }} 个结果
+        </span>
+      </section>
+
+      <!-- ========== 列表三态 ========== -->
+      <!-- Loading -->
+      <div v-if="loading" class="space-y-6">
+        <div
+          v-for="n in 4"
+          :key="n"
+          class="flex animate-pulse gap-7 rounded-2xl bg-white p-6 ring-1 ring-slate-200/70"
+        >
+          <div class="w-52 shrink-0">
+            <div class="aspect-[4/3] w-full rounded-xl bg-slate-100"></div>
+          </div>
+          <div class="flex-1 space-y-4 py-1">
+            <div class="h-6 w-1/2 rounded bg-slate-100"></div>
+            <div class="h-4 w-2/3 rounded bg-slate-100"></div>
+            <div class="h-4 w-1/3 rounded bg-slate-100"></div>
+          </div>
+        </div>
+      </div>

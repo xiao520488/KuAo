@@ -4,7 +4,8 @@ import Header from '@/components/Header.vue'
 import CompetitionCard from '@/components/CompetitionCard.vue'
 import BackToTop from '@/components/BackToTop.vue'
 import { useRoute, useRouter } from 'vue-router'
-import { getCompetitions, searchCompetitions } from '@/services/api'
+import { getCompetitions, searchCompetitions, checkPrepared } from '@/services/api'
+import { authState } from '@/services/auth'
 
 // 当前路由：监听 ?q= 变化，承接顶部/大搜索框的跳转
 const route = useRoute()
@@ -100,6 +101,41 @@ function mapToCard(item, index) {
   }
 }
 
+// preparedMap: competition id -> whether current user already joined preparation
+const preparedMap = ref({})
+
+// Batch-query preparation state for the given list (not logged in -> all false)
+async function loadPreparedStates(list) {
+  if (!authState.user || !Array.isArray(list) || list.length === 0) {
+    preparedMap.value = {}
+    return
+  }
+  try {
+    const results = await Promise.all(
+      list.map(async (item) => {
+        const id = item.id
+        if (id === null || id === undefined) return [null, false]
+        const ok = await checkPrepared(id)
+        return [String(id), ok]
+      })
+    )
+    const next = {}
+    for (const [key, ok] of results) {
+      if (key !== null) next[key] = ok
+    }
+    preparedMap.value = next
+  } catch (err) {
+    console.error('[HomeView] load prepared states failed:', err)
+    preparedMap.value = {}
+  }
+}
+
+// Card emits preparation-change -> keep local state in sync (no refetch)
+function onPreparationChange({ id, prepared }) {
+  if (id === null || id === undefined) return
+  preparedMap.value = { ...preparedMap.value, [String(id)]: prepared }
+}
+
 async function loadCompetitions() {
   loading.value = true
   errorMsg.value = ''
@@ -107,6 +143,7 @@ async function loadCompetitions() {
     const list = await getCompetitions()
     competitions.value = list.slice(0, 8).map(mapToCard)
     bumpListAnimation()
+    loadPreparedStates(competitions.value)
   } catch (err) {
     errorMsg.value = err?.message || '加载竞赛数据失败'
     competitions.value = []
@@ -348,7 +385,7 @@ watch(
 </script>
 
 <template>
-  <div class="relative bg-slate-50">
+  <div class="relative bg-slate-50 dark:bg-slate-900">
     <Header />
 
     <!-- ========== 全屏 Hero 首屏 ========== -->
@@ -367,7 +404,7 @@ watch(
       <div class="flex flex-1 flex-col items-center justify-center px-6 pt-16 pb-52 text-center">
         <!-- 大标题 -->
         <h1
-          class="hero-in text-4xl md:text-6xl font-extrabold tracking-tight text-slate-900"
+          class="hero-in text-3xl sm:text-4xl md:text-5xl lg:text-6xl font-extrabold tracking-tight text-slate-900 dark:text-slate-100"
           :style="{ animationDelay: '0ms' }"
         >
           大学生竞赛智库
@@ -375,7 +412,7 @@ watch(
 
         <!-- 副标题 -->
         <p
-          class="hero-in mt-6 max-w-none whitespace-nowrap text-xs sm:text-sm md:text-base leading-relaxed text-slate-500 font-medium"
+          class="hero-in mt-6 max-w-none text-xs leading-relaxed text-slate-500 dark:text-slate-400 font-medium sm:whitespace-nowrap sm:text-sm md:text-base"
           :style="{ animationDelay: '120ms' }"
         >
           库奥 | 这是一个融合大学生竞赛信息与AI技术的智库，致力于助你科学、系统地完成整个竞赛周期。
@@ -383,10 +420,10 @@ watch(
 
         <!-- 搜索框 -->
         <div
-          class="hero-in mx-auto mt-12 flex w-full max-w-4xl items-center gap-3
-                 rounded-full bg-white/90 backdrop-blur
+          class="hero-in mx-auto mt-12 flex w-[90%] max-w-4xl items-center gap-3 md:w-full
+                 rounded-full bg-white/90 dark:bg-slate-800/90 backdrop-blur
                  px-6 py-3
-                 shadow-xl shadow-slate-900/10 ring-1 ring-slate-200/70
+                 shadow-xl shadow-slate-900/10 ring-1 ring-slate-200/70 dark:ring-slate-700
                  transition-shadow focus-within:shadow-2xl focus-within:shadow-blue-600/10
                  focus-within:ring-blue-300/60"
           :style="{ animationDelay: '240ms' }"
@@ -398,14 +435,14 @@ watch(
             aria-hidden="true"
           >
             <path stroke-linecap="round" stroke-linejoin="round"
-                  d="M21 21l-4.35-4.35M17 10.5a6.5 6.5 0 11-13 0 6.5 6.5 0 0113 0z" />
+                  d="M21 21l-4.35-4.35M17 10.5a6.5 6.5 0 1 1-13 0 6.5 6.5 0 0 1 13 0z" />
           </svg>
 
           <input
             v-model="keyword"
             type="text"
             placeholder="输入比赛名称，或像聊天一样描述需求（如：我想找寒假能准备的算法赛）..."
-            class="w-full bg-transparent text-base text-slate-800 placeholder:text-slate-400
+            class="w-full bg-transparent text-base text-slate-800 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500
                    font-medium focus:outline-none disabled:opacity-60"
             :disabled="searching"
             @keyup.enter="submitSearch"
@@ -417,7 +454,7 @@ watch(
             type="button"
             aria-label="清空搜索"
             class="mr-1 shrink-0 rounded-full p-1.5 text-slate-400
-                   hover:bg-slate-100 hover:text-slate-600 transition-colors
+                   hover:bg-slate-100 dark:hover:bg-slate-700/60 hover:text-slate-600 dark:hover:text-slate-300 transition-colors
                    disabled:cursor-not-allowed disabled:opacity-50"
             :disabled="searching"
             @click="submitReset"
@@ -430,7 +467,7 @@ watch(
 
           <button
             class="shrink-0 rounded-full bg-blue-600 px-6 py-2.5 text-sm font-bold text-white
-                   shadow-md shadow-blue-600/30 hover:bg-blue-700 transition-colors
+                   shadow-md shadow-blue-600/30 hover:bg-blue-700 dark:hover:bg-blue-600 transition-colors
                    disabled:cursor-not-allowed disabled:opacity-60"
             :disabled="searching"
             @click="submitSearch"
@@ -454,7 +491,7 @@ watch(
         type="button"
         class="absolute bottom-10 left-1/2 -translate-x-1/2
                flex flex-col items-center gap-2 text-slate-400
-               transition-colors hover:text-blue-600
+               transition-colors hover:text-blue-600 dark:hover:text-blue-400
                focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 rounded-lg"
         @click="scrollToList"
       >
@@ -475,7 +512,7 @@ watch(
       class="mx-auto w-[85%] max-w-6xl pt-24 pb-28 scroll-mt-24"
     >
       <div class="mb-10 text-center">
-        <h2 class="text-2xl font-extrabold tracking-tight text-slate-900">
+        <h2 class="text-2xl font-extrabold tracking-tight text-slate-900 dark:text-slate-100">
           {{ searched ? '检索结果' : '热门竞赛' }}
         </h2>
         <p class="mt-2 text-sm font-medium text-slate-400">
@@ -485,9 +522,9 @@ watch(
 
       <!-- AI 检索中 -->
       <div v-if="searching" class="mb-8 flex items-center justify-center gap-3
-                                  rounded-2xl bg-blue-50/70 px-6 py-4 ring-1 ring-blue-100">
+                                  rounded-2xl bg-blue-50/70 dark:bg-blue-500/15 px-6 py-4 ring-1 ring-blue-100 dark:ring-blue-500/30">
         <span class="h-3 w-3 animate-ping rounded-full bg-blue-500"></span>
-        <p class="text-sm font-bold text-blue-700">AI 正在深度匹配...</p>
+        <p class="text-sm font-bold text-blue-700 dark:text-blue-300">AI 正在深度匹配...</p>
       </div>
 
       <!-- 加载中：骨架屏 -->
@@ -495,16 +532,16 @@ watch(
         <div
           v-for="n in 3"
           :key="n"
-          class="flex animate-pulse gap-7 rounded-2xl bg-white p-6 ring-1 ring-slate-200/70"
+          class="flex animate-pulse gap-7 rounded-2xl bg-white dark:bg-slate-800 p-6 ring-1 ring-slate-200/70 dark:ring-slate-700"
         >
-          <div class="w-52 shrink-0 rounded-xl bg-slate-200/80" style="aspect-ratio: 4 / 3"></div>
+          <div class="w-52 shrink-0 rounded-xl bg-slate-200/80 dark:bg-slate-700" style="aspect-ratio: 4 / 3"></div>
           <div class="flex flex-1 flex-col">
-            <div class="h-6 w-2/5 rounded bg-slate-200/80"></div>
-            <div class="mt-4 h-4 w-1/2 rounded bg-slate-200/60"></div>
-            <div class="mt-2 h-4 w-1/3 rounded bg-slate-200/60"></div>
+            <div class="h-6 w-2/5 rounded bg-slate-200/80 dark:bg-slate-700"></div>
+            <div class="mt-4 h-4 w-1/2 rounded bg-slate-200/60 dark:bg-slate-700"></div>
+            <div class="mt-2 h-4 w-1/3 rounded bg-slate-200/60 dark:bg-slate-700"></div>
             <div class="mt-auto flex justify-end gap-3 pt-5">
-              <div class="h-8 w-20 rounded-full bg-slate-200/60"></div>
-              <div class="h-8 w-20 rounded-full bg-slate-200/60"></div>
+              <div class="h-8 w-20 rounded-full bg-slate-200/60 dark:bg-slate-700"></div>
+              <div class="h-8 w-20 rounded-full bg-slate-200/60 dark:bg-slate-700"></div>
             </div>
           </div>
         </div>
@@ -513,20 +550,20 @@ watch(
       <!-- 请求失败 -->
       <div
         v-else-if="errorMsg"
-        class="rounded-2xl border border-red-100 bg-red-50/60 px-6 py-12 text-center"
+        class="rounded-2xl border border-red-100 dark:border-red-500/30 bg-red-50/60 dark:bg-red-500/10 px-6 py-12 text-center"
       >
-        <div class="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-red-100">
-          <svg class="h-6 w-6 text-red-500" fill="none" viewBox="0 0 24 24"
+        <div class="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-red-100 dark:bg-red-500/15">
+          <svg class="h-6 w-6 text-red-500 dark:text-red-400" fill="none" viewBox="0 0 24 24"
                stroke="currentColor" stroke-width="2" aria-hidden="true">
             <path stroke-linecap="round" stroke-linejoin="round"
                   d="M12 9v4m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
           </svg>
         </div>
-        <p class="mt-4 font-bold text-slate-700">竞赛数据加载失败</p>
-        <p class="mt-1 text-sm text-slate-500">{{ errorMsg }}</p>
+        <p class="mt-4 font-bold text-slate-700 dark:text-slate-200">竞赛数据加载失败</p>
+        <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">{{ errorMsg }}</p>
         <button
           class="mt-6 rounded-full bg-blue-600 px-6 py-2 text-sm font-bold text-white
-                 shadow-sm shadow-blue-600/25 hover:bg-blue-700 transition-colors"
+                 shadow-sm shadow-blue-600/25 hover:bg-blue-700 dark:hover:bg-blue-600 transition-colors"
           @click="loadCompetitions"
         >
           重新加载
@@ -536,9 +573,9 @@ watch(
       <!-- 空数据 -->
       <div
         v-else-if="competitions.length === 0"
-        class="rounded-2xl border border-dashed border-slate-200 px-6 py-16 text-center"
+        class="rounded-2xl border border-dashed border-slate-200 dark:border-slate-700 px-6 py-16 text-center"
       >
-        <p class="font-bold text-slate-500">
+        <p class="font-bold text-slate-500 dark:text-slate-400">
           {{ searched ? '未找到相关赛事，换个描述试试' : '暂无竞赛数据' }}
         </p>
         <p class="mt-1 text-sm text-slate-400">
@@ -551,6 +588,7 @@ watch(
         <CompetitionCard
           v-for="(item, index) in competitions"
           :key="listAnimKey + '-' + item.id"
+          :id="item.id"
           class="card-in"
           :style="{ animationDelay: index * 100 + 'ms' }"
           :image="item.image"
@@ -559,6 +597,8 @@ watch(
           :category="item.category"
           :sign-up-time="item.signUpTime"
           :contest-time="item.contestTime"
+          :prepared="preparedMap[String(item.id)] === true"
+          @preparation-change="onPreparationChange"
         />
       </div>
 
@@ -567,10 +607,10 @@ watch(
         <button
           type="button"
           class="group inline-flex items-center gap-2 rounded-full
-                 bg-white px-7 py-3 text-sm font-bold text-slate-700
-                 ring-1 ring-slate-200 shadow-sm shadow-slate-900/5
+                 bg-white dark:bg-slate-800 px-7 py-3 text-sm font-bold text-slate-700 dark:text-slate-200
+                 ring-1 ring-slate-200 dark:ring-slate-700 shadow-sm shadow-slate-900/5
                  transition-all duration-300
-                 hover:-translate-y-0.5 hover:text-blue-600
+                 hover:-translate-y-0.5 hover:text-blue-600 dark:hover:text-blue-400
                  hover:ring-blue-200 hover:shadow-md hover:shadow-blue-600/10
                  focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500
                  cursor-pointer"

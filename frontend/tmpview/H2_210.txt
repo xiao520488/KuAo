@@ -1,0 +1,30 @@
+ * 每次发起检索自增，只有"最后一次"请求的回调才允许改写 UI 状态，
+ * 避免快速切换页面/重复触发时旧请求覆盖新结果。
+ */
+let requestId = 0
+
+// 组件卸载标记：卸载后不再写响应式状态，防止幽灵更新
+// 注意：requestId / unmounted 都是每次 setup 新建的闭包变量，
+//      旧实例自增自己的 requestId 不会影响新实例的计数器，
+//      因此不会出现"旧组件卸载把新组件状态搞乱"的问题。
+let unmounted = false
+
+onBeforeUnmount(() => {
+  unmounted = true
+  // 只作废【本实例】的在途请求（闭包内独立计数器，不跨实例）。
+  // 自增后正在跑的请求 currentId !== requestId，会走 finally 但不再写状态。
+  requestId++
+})
+
+/**
+ * 执行 AI 检索
+ * 注意：本函数不再做 searching 死锁拦截，重复调用由 watch 单一入口保证，
+ *      竞态由 requestId 兜底，finally 无条件复位 searching。
+ * @param {string} [rawQuery] 传入检索词；不传则取输入框当前值
+ */
+async function runSearch(rawQuery) {
+  const q = String(rawQuery ?? keyword.value ?? '').trim()
+
+  // 空输入：不请求，直接回到默认列表
+  if (!q) {
+    resetToDefault()

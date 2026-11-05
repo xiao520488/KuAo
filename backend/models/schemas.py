@@ -8,6 +8,8 @@
 字段与 schema_v2.sql 中 competitions 表对齐。
 注意：技术栈（tech_stack）在数据库中以 TEXT 存储（JSON 数组字符串），
 这里对外统一暴露为 list[str]，屏蔽底层存储细节。
+参赛全过程攻略（full_process_guide）在库中为 TEXT（Markdown），
+对外原样暴露为 str，未生成时为空串。
 """
 
 from typing import List, Literal, Optional
@@ -40,6 +42,13 @@ class Competition(BaseModel):
     tech_stack: List[str] = Field(
         default_factory=list, description="涉及技术栈列表"
     )
+    full_process_guide: str = Field(
+        "",
+        description=(
+            "参赛全过程攻略（Markdown）：准备物品、参赛流程、展示与答辩方式、"
+            "是否需线下到场、避坑建议。未生成时为空串。"
+        ),
+    )
     sort_order: Optional[int] = Field(None, description="排序权重")
     created_at: Optional[str] = Field(None, description="创建时间（本地时间字符串）")
 
@@ -58,6 +67,13 @@ class Competition(BaseModel):
                 "intro": "全国大学生数学建模竞赛创办于1992年，每年一届。",
                 "summary": "国内影响力最大的基础性学科竞赛之一。",
                 "tech_stack": ["Python", "MATLAB", "LaTeX"],
+                "full_process_guide": (
+                    "## 一、准备物品\n- 电脑、LaTeX 模板、代码仓库\n\n"
+                    "## 二、参赛流程\n1. 报名\n2. 初赛\n3. 决赛\n\n"
+                    "## 三、展示与答辩\n提交论文 + 现场答辩\n\n"
+                    "## 四、是否需线下到场\n决赛需到指定地点\n\n"
+                    "## 五、避坑建议\n- 提前熟悉模板\n"
+                ),
                 "sort_order": 1,
                 "created_at": "2025-01-01 00:00:00",
             }
@@ -68,7 +84,7 @@ class Competition(BaseModel):
 class CompetitionDetail(Competition):
     """竞赛详情返回模型。
 
-    详情页包含列表的全部字段（含 summary 摘要），
+    详情页包含列表的全部字段（含 summary 摘要与 full_process_guide 攻略），
     直接继承 Competition，语义上表示单条完整记录。
     """
 

@@ -156,51 +156,51 @@ onMounted(loadCompetitions)
 </script>
 
 <template>
-  <div class="min-h-screen bg-slate-50">
+  <div class="min-h-screen bg-slate-50 dark:bg-slate-900">
     <Header />
 
     <main class="mx-auto w-[85%] max-w-6xl pb-24 pt-28">
       <!-- 页头 -->
       <div class="mb-8">
-        <h1 class="text-3xl font-black tracking-tight text-slate-900">全部竞赛</h1>
-        <p class="mt-2 text-sm text-slate-500">
+        <h1 class="text-3xl font-black tracking-tight text-slate-900 dark:text-slate-100">全部竞赛</h1>
+        <p class="mt-2 text-sm text-slate-500 dark:text-slate-400">
           共 {{ competitions.length }} 项竞赛，按科目与级别快速定位适合你的赛事
         </p>
       </div>
 
       <!-- ========== 顶部筛选栏 ========== -->
       <section
-        class="mb-6 flex flex-wrap items-center gap-3 rounded-2xl bg-white p-4
-               ring-1 ring-slate-200/70 shadow-sm"
+        class="mb-6 flex flex-col items-stretch gap-3 rounded-2xl bg-white dark:bg-slate-800 p-4
+               sm:flex-row sm:flex-wrap sm:items-center ring-1 ring-slate-200/70 dark:ring-slate-700 shadow-sm"
       >
         <!-- 科目 -->
-        <label class="flex items-center gap-2">
-          <span class="text-sm font-medium text-slate-400">科目</span>
+        <label class="flex flex-1 items-center gap-2 sm:flex-none">
+          <span class="shrink-0 text-sm font-medium text-slate-400">科目</span>
           <select
             v-model="subject"
-            class="rounded-xl border-0 bg-slate-100 px-4 py-2 text-sm font-semibold
-                   text-slate-700 outline-none ring-1 ring-transparent
-                   transition focus:bg-white focus:ring-blue-500"
+            class="w-full min-w-0 flex-1 rounded-xl border-0 bg-slate-100 dark:bg-slate-700/60 px-4 py-2 text-sm font-semibold
+                   text-slate-700 dark:text-slate-200 outline-none ring-1 ring-transparent
+                   transition focus:bg-white dark:focus:bg-slate-800 focus:ring-blue-500 sm:w-auto sm:flex-none"
           >
             <option v-for="s in subjects" :key="s" :value="s">{{ s }}</option>
           </select>
         </label>
 
         <!-- 级别 -->
-        <label class="flex items-center gap-2">
-          <span class="text-sm font-medium text-slate-400">筛选</span>
+        <label class="flex flex-1 items-center gap-2 sm:flex-none">
+          <span class="shrink-0 text-sm font-medium text-slate-400">筛选</span>
           <select
             v-model="level"
-            class="rounded-xl border-0 bg-slate-100 px-4 py-2 text-sm font-semibold
-                   text-slate-700 outline-none ring-1 ring-transparent
-                   transition focus:bg-white focus:ring-blue-500"
+            class="w-full min-w-0 flex-1 rounded-xl border-0 bg-slate-100 dark:bg-slate-700/60 px-4 py-2 text-sm font-semibold
+                   text-slate-700 dark:text-slate-200 outline-none ring-1 ring-transparent
+                   transition focus:bg-white dark:focus:bg-slate-800 focus:ring-blue-500 sm:w-auto sm:flex-none"
           >
             <option v-for="l in levels" :key="l" :value="l">{{ l }}</option>
           </select>
         </label>
 
         <!-- 结果计数 -->
-        <span class="ml-auto text-sm text-slate-400">
+        <span class="ml-auto hidden text-sm text-slate-400 sm:inline">
           {{ filtered.length }} 个结果
         </span>
       </section>
@@ -211,15 +211,15 @@ onMounted(loadCompetitions)
         <div
           v-for="n in 4"
           :key="n"
-          class="flex animate-pulse gap-7 rounded-2xl bg-white p-6 ring-1 ring-slate-200/70"
+          class="flex animate-pulse gap-7 rounded-2xl bg-white dark:bg-slate-800 p-6 ring-1 ring-slate-200/70 dark:ring-slate-700"
         >
           <div class="w-52 shrink-0">
-            <div class="aspect-[4/3] w-full rounded-xl bg-slate-100"></div>
+            <div class="aspect-[4/3] w-full rounded-xl bg-slate-100 dark:bg-slate-700/60"></div>
           </div>
           <div class="flex-1 space-y-4 py-1">
-            <div class="h-6 w-1/2 rounded bg-slate-100"></div>
-            <div class="h-4 w-2/3 rounded bg-slate-100"></div>
-            <div class="h-4 w-1/3 rounded bg-slate-100"></div>
+            <div class="h-6 w-1/2 rounded bg-slate-100 dark:bg-slate-700/60"></div>
+            <div class="h-4 w-2/3 rounded bg-slate-100 dark:bg-slate-700/60"></div>
+            <div class="h-4 w-1/3 rounded bg-slate-100 dark:bg-slate-700/60"></div>
           </div>
         </div>
       </div>
@@ -227,12 +227,12 @@ onMounted(loadCompetitions)
       <!-- 失败 -->
       <div
         v-else-if="errorMsg"
-        class="rounded-2xl border border-red-100 bg-red-50 px-6 py-16 text-center"
+        class="rounded-2xl border border-red-100 dark:border-red-500/30 bg-red-50 dark:bg-red-500/15 px-6 py-16 text-center"
       >
-        <p class="font-bold text-red-500">{{ errorMsg }}</p>
+        <p class="font-bold text-red-500 dark:text-red-400">{{ errorMsg }}</p>
         <button
           class="mt-6 rounded-full bg-blue-600 px-6 py-2 text-sm font-bold text-white
-                 shadow-sm shadow-blue-600/25 hover:bg-blue-700 transition-colors"
+                 shadow-sm shadow-blue-600/25 hover:bg-blue-700 dark:hover:bg-blue-600 transition-colors"
           @click="loadCompetitions"
         >
           重新加载
@@ -242,9 +242,9 @@ onMounted(loadCompetitions)
       <!-- 空数据 -->
       <div
         v-else-if="filtered.length === 0"
-        class="rounded-2xl border border-dashed border-slate-200 px-6 py-16 text-center"
+        class="rounded-2xl border border-dashed border-slate-200 dark:border-slate-700 px-6 py-16 text-center"
       >
-        <p class="font-bold text-slate-500">没有符合条件的竞赛</p>
+        <p class="font-bold text-slate-500 dark:text-slate-400">没有符合条件的竞赛</p>
         <p class="mt-1 text-sm text-slate-400">试试切换其他科目或级别</p>
       </div>
 

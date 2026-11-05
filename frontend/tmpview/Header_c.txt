@@ -1,0 +1,90 @@
+        class="text-2xl font-extrabold tracking-tight text-slate-900 select-none
+               cursor-pointer bg-transparent border-0 p-0
+               focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 rounded-lg"
+        aria-label="回到首页"
+        @click="goHome"
+      >
+        库<span class="text-blue-600">奥</span>
+      </button>
+
+      <!-- 中：居中菜单 -->
+      <nav class="hidden md:flex items-center gap-8 absolute left-1/2 -translate-x-1/2">
+        <template v-for="item in navList" :key="item.label">
+          <!-- 首页：走统一重置逻辑（清 query + 平滑回顶） -->
+          <button
+            v-if="item.path === '/'"
+            type="button"
+            class="text-base font-bold transition-colors cursor-pointer bg-transparent border-0 p-0
+                   focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 rounded"
+            :class="item.active
+              ? 'text-blue-600'
+              : 'text-slate-600 hover:text-slate-900'"
+            @click="goHome"
+          >
+            {{ item.label }}
+          </button>
+
+          <!-- 其他导航项：保持原有 router-link 行为 -->
+          <router-link
+            v-else
+            :to="item.path"
+            class="text-base font-bold transition-colors"
+            :class="item.active
+              ? 'text-blue-600'
+              : 'text-slate-600 hover:text-slate-900'"
+          >
+            {{ item.label }}
+          </router-link>
+        </template>
+      </nav>
+
+      <!-- 中右：全局搜索（胶囊状） -->
+      <div class="hidden lg:block flex-1 max-w-xs mx-6">
+        <div
+          class="group flex items-center gap-2 rounded-full bg-slate-100/80
+                 px-4 py-2 ring-1 ring-slate-200/70 transition-all
+                 focus-within:bg-white focus-within:ring-blue-500/40"
+        >
+          <svg class="h-4 w-4 shrink-0 text-slate-400" fill="none" viewBox="0 0 24 24"
+               stroke="currentColor" stroke-width="2" stroke-linecap="round"
+               stroke-linejoin="round">
+            <path
+              stroke-linecap="round"
+              d="M21 21l-4.35-4.35M17 10.5a6.5 6.5 0 11-13 0 6.5 6.5 0 0113 0z" />
+          </svg>
+
+          <input
+            v-model="keyword"
+            type="text"
+            placeholder="搜索..."
+            class="w-full min-w-0 bg-transparent text-sm font-medium text-slate-800
+                   placeholder:text-slate-400 focus:outline-none"
+            :disabled="searching"
+            @keyup.enter="onSearch"
+          />
+        </div>
+      </div>
+
+      <!-- 右：登录/注册 或 用户菜单 -->
+      <div class="flex items-center gap-3">
+        <!-- 未登录 -->
+        <template v-if="!isLoggedIn">
+          <button
+            class="px-4 py-2 text-sm font-bold text-slate-600 hover:text-slate-900 transition-colors"
+            @click="openAuth('login')"
+          >
+            登录
+          </button>
+          <button
+            class="px-5 py-2 text-sm font-bold text-white rounded-full
+                   bg-blue-600 hover:bg-blue-700 shadow-md shadow-blue-600/25
+                   transition-colors"
+            @click="openAuth('register')"
+          >
+            注册
+          </button>
+        </template>
+
+        <!-- 已登录：头像 + 下拉 -->
+        <div v-else ref="userMenuRef" class="relative">
+          <button

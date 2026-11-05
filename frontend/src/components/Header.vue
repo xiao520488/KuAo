@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { authState, logout } from '@/services/auth'
 import { authModalState, openAuthModal } from '@/composables/useAuthModal'
+import { isDark, toggleTheme } from '@/composables/useTheme'
 
 // 当前路由，用于动态判断导航高亮
 const route = useRoute()
@@ -91,6 +92,9 @@ const navList = computed(() =>
   navItems.map((item) => ({ ...item, active: isActive(item) }))
 )
 
+// mobile drawer shares the same nav data (with active highlight)
+const mobileNavList = navList
+
 /* ---------------- 登录 / 注册 ---------------- */
 // 弹窗宿主已上移到 App.vue，Header 只负责触发打开
 
@@ -141,30 +145,71 @@ async function onLogout() {
   router.push('/')
 }
 
+/* ---------------- mobile drawer ---------------- */
+const mobileOpen = ref(false)
+
+function toggleMobile() {
+  mobileOpen.value = !mobileOpen.value
+}
+
+function closeMobile() {
+  mobileOpen.value = false
+}
+
+// 抽屉内点导航：跳转后关闭
+function onMobileNav(item) {
+  closeMobile()
+  if (item.path === '/') {
+    goHome()
+  } else if (route.path !== item.path) {
+    router.push(item.path).then(scrollToTop).catch(() => scrollToTop())
+  }
+}
+
+// 抽屉内搜索：复用顶部搜索逻辑，并关闭抽屉
+function onMobileSearch() {
+  const q = keyword.value.trim()
+  if (!q || searching.value) return
+  closeMobile()
+  onSearch()
+}
+
+// 抽屉打开时锁定页面滚动
+watch(mobileOpen, (open) => {
+  if (typeof document === 'undefined') return
+  document.body.style.overflow = open ? 'hidden' : ''
+})
+
+// 路由变化时自动关闭抽屉
+watch(() => route.fullPath, () => {
+  if (mobileOpen.value) mobileOpen.value = false
+})
+
 onMounted(() => document.addEventListener('click', onDocClick))
 onBeforeUnmount(() => {
   document.removeEventListener('click', onDocClick)
   clearTimeout(toastTimer)
+  if (typeof document !== 'undefined') document.body.style.overflow = ''
 })
 </script>
 
 <template>
   <header
     class="fixed top-0 inset-x-0 z-50 h-16
-           bg-white/60 backdrop-blur-xl backdrop-saturate-150
+           bg-white/60 dark:bg-slate-900/70 backdrop-blur-xl backdrop-saturate-150
            border-b border-white/40 shadow-sm shadow-slate-900/5"
   >
     <div class="mx-auto h-full max-w-7xl px-6 flex items-center justify-between">
       <!-- 左：Logo -->
       <button
         type="button"
-        class="text-2xl font-extrabold tracking-tight text-slate-900 select-none
+        class="text-2xl font-extrabold tracking-tight text-slate-900 dark:text-slate-100 select-none
                cursor-pointer bg-transparent border-0 p-0
                focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 rounded-lg"
         aria-label="回到首页"
         @click="goHome"
       >
-        库<span class="text-blue-600">奥</span>
+        库<span class="text-blue-600 dark:text-blue-400">奥</span>
       </button>
 
       <!-- 中：居中菜单 -->
@@ -177,8 +222,8 @@ onBeforeUnmount(() => {
             class="text-base font-bold transition-colors cursor-pointer bg-transparent border-0 p-0
                    focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 rounded"
             :class="item.active
-              ? 'text-blue-600'
-              : 'text-slate-600 hover:text-slate-900'"
+              ? 'text-blue-600 dark:text-blue-400'
+              : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'"
             @click="goHome"
           >
             {{ item.label }}
@@ -190,8 +235,8 @@ onBeforeUnmount(() => {
             :to="item.path"
             class="text-base font-bold transition-colors"
             :class="item.active
-              ? 'text-blue-600'
-              : 'text-slate-600 hover:text-slate-900'"
+              ? 'text-blue-600 dark:text-blue-400'
+              : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'"
           >
             {{ item.label }}
           </router-link>
@@ -201,24 +246,24 @@ onBeforeUnmount(() => {
       <!-- 中右：全局搜索（胶囊状） -->
       <div class="hidden lg:block flex-1 max-w-xs mx-6">
         <div
-          class="group flex items-center gap-2 rounded-full bg-slate-100/80
-                 px-4 py-2 ring-1 ring-slate-200/70 transition-all
-                 focus-within:bg-white focus-within:ring-blue-500/40"
+          class="group flex items-center gap-2 rounded-full bg-slate-100/80 dark:bg-slate-700/60
+                 px-4 py-2 ring-1 ring-slate-200/70 dark:ring-slate-700 transition-all
+                 focus-within:bg-white dark:focus-within:bg-slate-800 focus-within:ring-blue-500/40"
         >
           <svg class="h-4 w-4 shrink-0 text-slate-400" fill="none" viewBox="0 0 24 24"
                stroke="currentColor" stroke-width="2" stroke-linecap="round"
                stroke-linejoin="round">
             <path
               stroke-linecap="round"
-              d="M21 21l-4.35-4.35M17 10.5a6.5 6.5 0 11-13 0 6.5 6.5 0 0113 0z" />
+              d="M21 21l-4.35-4.35M17 10.5a6.5 6.5 0 1 1-13 0 6.5 6.5 0 0 1 13 0z" />
           </svg>
 
           <input
             v-model="keyword"
             type="text"
             placeholder="搜索..."
-            class="w-full min-w-0 bg-transparent text-sm font-medium text-slate-800
-                   placeholder:text-slate-400 focus:outline-none"
+            class="w-full min-w-0 bg-transparent text-sm font-medium text-slate-800 dark:text-slate-100
+                   placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:outline-none"
             :disabled="searching"
             @keyup.enter="onSearch"
           />
@@ -226,18 +271,44 @@ onBeforeUnmount(() => {
       </div>
 
       <!-- 右：登录/注册 或 用户菜单 -->
-      <div class="flex items-center gap-3">
+      <div class="flex items-center gap-2 sm:gap-3">
+        <!-- AM-THEME-TOGGLE-START -->
+        <button
+          type="button"
+          class="hidden sm:inline-flex h-9 w-9 items-center justify-center rounded-full
+                 text-slate-600 hover:bg-slate-100 hover:text-slate-900
+                 dark:text-slate-300 dark:hover:bg-slate-700/60 dark:hover:text-white
+                 transition-colors cursor-pointer bg-transparent border-0 p-0
+                 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+          :aria-label="isDark ? '切换到浅色模式' : '切换到深色模式'"
+          :title="isDark ? '切换到浅色模式' : '切换到深色模式'"
+          @click="toggleTheme"
+        >
+          <svg v-if="isDark" class="h-5 w-5" fill="none" viewBox="0 0 24 24"
+               stroke="currentColor" stroke-width="2" stroke-linecap="round"
+               stroke-linejoin="round">
+            <circle cx="12" cy="12" r="4" />
+            <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41" />
+          </svg>
+          <svg v-else class="h-5 w-5" fill="none" viewBox="0 0 24 24"
+               stroke="currentColor" stroke-width="2" stroke-linecap="round"
+               stroke-linejoin="round">
+            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+          </svg>
+        </button>
+        <!-- AM-THEME-TOGGLE-END -->
+
         <!-- 未登录 -->
         <template v-if="!isLoggedIn">
           <button
-            class="px-4 py-2 text-sm font-bold text-slate-600 hover:text-slate-900 transition-colors"
+            class="px-4 py-2 text-sm font-bold text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors"
             @click="openAuth('login')"
           >
             登录
           </button>
           <button
             class="px-5 py-2 text-sm font-bold text-white rounded-full
-                   bg-blue-600 hover:bg-blue-700 shadow-md shadow-blue-600/25
+                   bg-blue-600 hover:bg-blue-700 dark:hover:bg-blue-600 shadow-md shadow-blue-600/25
                    transition-colors"
             @click="openAuth('register')"
           >
@@ -249,7 +320,7 @@ onBeforeUnmount(() => {
         <div v-else ref="userMenuRef" class="relative">
           <button
             class="flex items-center gap-2 rounded-full pl-1 pr-3 py-1
-                   hover:bg-slate-100 transition-colors"
+                   hover:bg-slate-100 dark:hover:bg-slate-700/60 transition-colors"
             @click.stop="toggleMenu"
           >
             <span
@@ -258,7 +329,7 @@ onBeforeUnmount(() => {
             >
               {{ (user?.username || 'U').charAt(0).toUpperCase() }}
             </span>
-            <span class="max-w-[8rem] truncate text-sm font-bold text-slate-700">
+            <span class="max-w-[8rem] truncate text-sm font-bold text-slate-700 dark:text-slate-200">
               {{ user?.username }}
             </span>
             <svg
@@ -282,24 +353,32 @@ onBeforeUnmount(() => {
             <div
               v-if="menuOpen"
               class="absolute right-0 mt-2 w-44 overflow-hidden rounded-xl
-                     bg-white p-1.5 shadow-xl shadow-slate-900/10 ring-1 ring-slate-900/5"
+                     bg-white dark:bg-slate-800 p-1.5 shadow-xl shadow-slate-900/10 ring-1 ring-slate-900/5 dark:ring-white/10"
             >
               <div class="px-3 py-2">
-                <p class="truncate text-sm font-bold text-slate-800">{{ user?.username }}</p>
+                <p class="truncate text-sm font-bold text-slate-800 dark:text-slate-100">{{ user?.username }}</p>
                 <p class="truncate text-xs text-slate-400">{{ user?.email || '已登录' }}</p>
               </div>
-              <div class="my-1 h-px bg-slate-100" />
+              <div class="my-1 h-px bg-slate-100 dark:bg-slate-700/60" />
+              <router-link
+                to="/profile"
+                class="block rounded-lg px-3 py-2 text-sm font-medium text-slate-600 dark:text-slate-300
+                       hover:bg-slate-50 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-white"
+                @click="menuOpen = false"
+              >
+                个人中心
+              </router-link>
               <router-link
                 to="/preparation"
-                class="block rounded-lg px-3 py-2 text-sm font-medium text-slate-600
-                       hover:bg-slate-50 hover:text-slate-900"
+                class="block rounded-lg px-3 py-2 text-sm font-medium text-slate-600 dark:text-slate-300
+                       hover:bg-slate-50 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-white"
                 @click="menuOpen = false"
               >
                 我的备赛
               </router-link>
               <button
                 class="block w-full rounded-lg px-3 py-2 text-left text-sm font-medium
-                       text-red-500 hover:bg-red-50"
+                       text-red-500 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-500/15"
                 @click="onLogout"
               >
                 退出登录
@@ -311,6 +390,177 @@ onBeforeUnmount(() => {
     </div>
 
     <!-- 轻量提示 -->
+      <!-- mobile hamburger (below md) -->
+      <button
+        type="button"
+        class="md:hidden grid h-10 w-10 shrink-0 place-items-center rounded-xl
+               text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700/60 transition-colors"
+        :aria-expanded="mobileOpen ? 'true' : 'false'"
+        aria-label="Menu"
+        @click.stop="toggleMobile"
+      >
+        <svg
+          v-if="!mobileOpen"
+          class="h-6 w-6"
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <path d="M4 6h16M4 12h16M4 18h16" />
+        </svg>
+        <svg
+          v-else
+          class="h-6 w-6"
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <path d="M6 6l12 12M18 6L6 18" />
+        </svg>
+      </button>
+
+    <!-- mobile drawer mask -->
+    <Transition
+      enter-active-class="transition-opacity duration-200"
+      enter-from-class="opacity-0"
+      enter-to-class="opacity-100"
+      leave-active-class="transition-opacity duration-150"
+      leave-from-class="opacity-100"
+      leave-to-class="opacity-0"
+    >
+      <div
+        v-if="mobileOpen"
+        class="fixed inset-0 z-40 bg-slate-900/30 backdrop-blur-sm md:hidden"
+        @click="closeMobile"
+      />
+    </Transition>
+
+    <!-- mobile drawer panel -->
+    <Transition
+      enter-active-class="transition duration-200 ease-out"
+      enter-from-class="opacity-0 -translate-y-3"
+      enter-to-class="opacity-100 translate-y-0"
+      leave-active-class="transition duration-150 ease-in"
+      leave-from-class="opacity-100 translate-y-0"
+      leave-to-class="opacity-0 -translate-y-3"
+    >
+      <div
+        v-if="mobileOpen"
+        class="fixed inset-x-0 top-16 z-40 mx-3 rounded-2xl border border-slate-200 dark:border-slate-700
+               bg-white dark:bg-slate-800 p-4 shadow-xl shadow-slate-900/10 md:hidden"
+      >
+        <div
+          class="flex items-center gap-2 rounded-full bg-slate-100/80 dark:bg-slate-700/60
+                 px-4 py-2 ring-1 ring-slate-200/70 dark:ring-slate-700
+                 focus-within:bg-white dark:focus-within:bg-slate-800 focus-within:ring-blue-500/40"
+        >
+          <svg class="h-4 w-4 shrink-0 text-slate-400" fill="none" viewBox="0 0 24 24"
+               stroke="currentColor" stroke-width="2" stroke-linecap="round"
+               stroke-linejoin="round">
+            <path
+              stroke-linecap="round"
+              d="M21 21l-4.35-4.35M17 10.5a6.5 6.5 0 1 1-13 0 6.5 6.5 0 0 1 13 0z" />
+          </svg>
+          <input
+            v-model="keyword"
+            type="text"
+            placeholder="搜索竞赛..."
+            class="w-full min-w-0 bg-transparent text-sm text-slate-700 dark:text-slate-200
+                   placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:outline-none"
+            @keyup.enter="onMobileSearch"
+          />
+        </div>
+
+        <nav class="mt-3 flex flex-col">
+          <button
+            v-for="item in mobileNavList"
+            :key="item.path"
+            type="button"
+            class="rounded-xl px-4 py-3 text-left text-base font-bold transition-colors"
+            :class="item.active
+              ? 'bg-blue-50 dark:bg-blue-500/15 text-blue-600 dark:text-blue-400'
+              : 'text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700/60'"
+            @click="onMobileNav(item)"
+          >
+            {{ item.label }}
+          </button>
+        </nav>
+
+        <div class="mt-3 border-t border-slate-200 dark:border-slate-700 pt-3">
+          <!-- AM-MOBILE-THEME-START -->
+          <button
+            type="button"
+            class="w-full rounded-xl px-4 py-3 flex items-center justify-between
+                   text-left text-base font-bold text-slate-700 dark:text-slate-200
+                   hover:bg-slate-100 dark:hover:bg-slate-700/60 transition-colors"
+            @click="toggleTheme"
+          >
+            <span>{{ isDark ? '浅色模式' : '深色模式' }}</span>
+            <svg v-if="isDark" class="h-5 w-5" fill="none" viewBox="0 0 24 24"
+                 stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                 stroke-linejoin="round">
+              <circle cx="12" cy="12" r="4" />
+              <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41" />
+            </svg>
+            <svg v-else class="h-5 w-5" fill="none" viewBox="0 0 24 24"
+                 stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                 stroke-linejoin="round">
+              <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+            </svg>
+          </button>
+          <!-- AM-MOBILE-THEME-END -->
+
+          <template v-if="!isLoggedIn">
+            <button
+              class="w-full rounded-xl px-4 py-3 text-left text-base font-bold
+                     text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700/60 transition-colors"
+              @click="closeMobile(); openAuth('login')"
+            >
+              登录
+            </button>
+            <button
+              class="mt-1 w-full rounded-xl px-4 py-3 text-left text-base font-bold
+                     text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-500/15 transition-colors"
+              @click="closeMobile(); openAuth('register')"
+            >
+              注册
+            </button>
+          </template>
+          <template v-else>
+            <router-link
+              to="/profile"
+              class="block w-full rounded-xl px-4 py-3 text-left text-base font-bold
+                     text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700/60 transition-colors"
+              @click="closeMobile"
+            >
+              个人中心
+            </router-link>
+            <router-link
+              to="/preparation"
+              class="block w-full rounded-xl px-4 py-3 text-left text-base font-bold
+                     text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700/60 transition-colors"
+              @click="closeMobile"
+            >
+              我的备赛
+            </router-link>
+            <button
+              class="mt-1 w-full rounded-xl px-4 py-3 text-left text-base font-bold
+                     text-red-500 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-500/15 transition-colors"
+              @click="closeMobile(); onLogout()"
+            >
+              退出登录
+            </button>
+          </template>
+        </div>
+      </div>
+    </Transition>
+
     <Transition
       enter-active-class="transition duration-200 ease-out"
       enter-from-class="opacity-0 translate-y-2"

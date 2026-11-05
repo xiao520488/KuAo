@@ -1,0 +1,110 @@
+    errorMsg.value = err?.message || '加载竞赛数据失败'
+    competitions.value = []
+  } finally {
+    loading.value = false
+  }
+}
+
+
+/**
+ * 列表内容变化时递增批次号，重放交错入场动画
+ * 签名 = 卡片 id 顺序拼接；仅当内容真的变了才重放，
+ * 避免「点了备赛按钮 / 切换选中态」这类无关更新触发整列重播。
+ */
+function bumpListAnimation() {
+  const signature = competitions.value.map((c) => c.id).join('|')
+  if (signature === lastSignature) return
+  lastSignature = signature
+  listAnimKey.value += 1
+}
+
+onMounted(() => {
+  // 双 rAF：确保首帧已经绘制出「位移 + 透明」的初始态，
+  // 下一帧再切到终态，过渡才会真正发生（单帧内改值可能被浏览器合并而跳过动画）
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      heroReady.value = true
+    })
+  })
+})
+
+/* ---------------- AI 语义检索 ---------------- */
+const keyword = ref('')        // 搜索框绑定值
+// 检索中标志：每次组件挂载都是全新实例，初始值绝对为 false
+// 只由 runSearch 的 finally 复位，避免跨组件实例状态污染
+const searching = ref(false)
+const searchError = ref('')    // 检索错误
+const searched = ref(false)    // 是否已执行过检索（决定列表标题/空态文案）
+
+
+function resetToDefault() {
+  keyword.value = ''
+  searched.value = false
+  searchError.value = ''
+  loadCompetitions()
+}
+
+/**
+ * 大搜索框唯一入口：只负责改地址栏，不直接发起请求
+ *
+ * 设计意图：
+ *   让 ?q= 成为唯一状态源（Single Source of Truth）。
+ *   无论顶部小搜索框还是首页大搜索框，都只 push 路由，
+ *   真正的检索统一交给下面的 watch(() => route.query.q) 执行。
+ *
+ * 好处：
+ *   - 两个入口行为完全一致，不会出现"一套状态两套逻辑"
+ *   - 浏览器前进/后退、刷新、分享链接都能正确复现检索结果
+ *
+ * 边界处理：
+ *   若当前 URL 的 q 已经等于目标值，router.push 不会产生变化，
+ *   watch 也就不会触发 → 此时需要主动 forceReload 一次。
+ */
+function submitSearch() {
+  const q = keyword.value.trim()
+
+  // 空输入：清空 q 回到默认列表（同样通过 URL 驱动）
+  if (!q) {
+    submitReset()
+    return
+  }
+
+  const currentQ = typeof route.query.q === 'string' ? route.query.q.trim() : ''
+
+  if (currentQ === q) {
+    // URL 未变（重复搜同一关键词）→ watch 不触发，手动放行一次
+    runSearch(q)
+    return
+  }
+
+  // 统一走路由：状态变化完全由 URL 驱动
+  router.push({ path: '/', query: { q } })
+}
+
+/**
+ * 清空搜索：同样通过 URL 驱动，保证与 submitSearch 一致
+ */
+function submitReset() {
+  keyword.value = ''
+
+  // 有 q 时才需要改 URL，否则 watch 不会触发，手动恢复列表
+  if (route.query.q !== undefined) {
+    router.push({ path: '/', query: {} })
+    return
+  }
+
+  resetToDefault()
+}
+
+/**
+ * 请求序号：用于竞态隔离
+ * 每次发起检索自增，只有"最后一次"请求的回调才允许改写 UI 状态，
+ * 避免快速切换页面/重复触发时旧请求覆盖新结果。
+ */
+let requestId = 0
+
+// 组件卸载标记：卸载后不再写响应式状态，防止幽灵更新
+// 注意：requestId / unmounted 都是每次 setup 新建的闭包变量，
+//      旧实例自增自己的 requestId 不会影响新实例的计数器，
+//      因此不会出现"旧组件卸载把新组件状态搞乱"的问题。
+let unmounted = false

@@ -1,6 +1,8 @@
 <script setup>
-import { ref, onMounted, watch } from 'vue'
+import { ref, onMounted, watch, computed } from 'vue'
 import { useRoute } from 'vue-router'
+import { marked } from 'marked'
+import DOMPurify from 'dompurify'
 import Header from '@/components/Header.vue'
 import { getCompetitionDetail } from '@/services/api'
 
@@ -71,29 +73,35 @@ watch(
     if (id !== undefined && route.name === 'competition-detail') loadDetail(id)
   }
 )
+
+// 参赛全流程攻略：Markdown 渲染 + XSS 净化
+const renderedGuide = computed(() => {
+  if (!detail.value?.full_process_guide) return ''
+  return DOMPurify.sanitize(marked.parse(detail.value.full_process_guide))
+})
 </script>
 
 <template>
-  <div class="min-h-screen bg-slate-50">
+  <div class="min-h-screen bg-slate-50 dark:bg-slate-900">
     <Header />
 
     <main class="mx-auto w-full max-w-6xl px-4 pb-24 pt-28 sm:px-6">
       <!-- 加载中 -->
       <div v-if="loading" class="space-y-6">
-        <div class="h-64 w-full animate-pulse rounded-2xl bg-slate-200"></div>
-        <div class="h-10 w-2/3 animate-pulse rounded-lg bg-slate-200"></div>
-        <div class="h-5 w-1/2 animate-pulse rounded bg-slate-200"></div>
+        <div class="h-64 w-full animate-pulse rounded-2xl bg-slate-200 dark:bg-slate-700"></div>
+        <div class="h-10 w-2/3 animate-pulse rounded-lg bg-slate-200 dark:bg-slate-700"></div>
+        <div class="h-5 w-1/2 animate-pulse rounded bg-slate-200 dark:bg-slate-700"></div>
       </div>
 
       <!-- 错误态 -->
       <div
         v-else-if="errorMsg"
-        class="rounded-2xl border border-dashed border-rose-200 bg-rose-50/40 px-6 py-16 text-center"
+        class="rounded-2xl border border-dashed border-rose-200 dark:border-rose-500/30 bg-rose-50/40 dark:bg-rose-500/10 px-6 py-16 text-center"
       >
         <p class="font-bold text-rose-500">{{ errorMsg }}</p>
         <button
           class="mt-6 rounded-full bg-blue-600 px-6 py-2 text-sm font-bold text-white
-                 shadow-sm shadow-blue-600/25 hover:bg-blue-700 transition-colors"
+                 shadow-sm shadow-blue-600/25 hover:bg-blue-700 dark:hover:bg-blue-600 transition-colors"
           @click="loadDetail(route.params.id)"
         >
           重新加载
@@ -103,45 +111,48 @@ watch(
       <!-- 正常内容 -->
       <template v-else>
         <!-- 1. 全宽竞赛大图占位 -->
-<div class="mt-8 w-full"><div class="w-full h-64 bg-slate-50 border-2 border-dashed border-slate-300 rounded-2xl flex items-center justify-center overflow-hidden relative"><img v-if="detail?.image" :src="detail.image" class="w-full h-full object-cover" /><svg v-else class="w-16 h-16 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg></div></div>
+<div class="mt-8 w-full"><div class="w-full h-64 bg-slate-50 dark:bg-slate-900 border-2 border-dashed border-slate-300 dark:border-slate-600 rounded-2xl flex items-center justify-center overflow-hidden relative"><img v-if="detail?.image" :src="detail.image" class="w-full h-full object-cover" /><svg v-else class="w-16 h-16 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg></div></div>
 
         <!-- 2. 信息区：超大加粗标题 + 时间 -->
         <section class="mt-10 pb-2">
-          <h1 class="text-3xl font-black leading-tight tracking-tight text-slate-900 sm:text-4xl">
+          <h1 class="text-3xl font-black leading-tight tracking-tight text-slate-900 dark:text-slate-100 sm:text-4xl">
             {{ detail?.title }}
           </h1>
 
           <div class="mt-6 flex flex-wrap items-center gap-x-10 gap-y-3 text-base">
             <p class="flex items-center gap-2">
               <span class="font-medium text-slate-400">报名时间</span>
-              <span class="font-bold text-slate-800">{{ detail?.signUpTime }}</span>
+              <span class="font-bold text-slate-800 dark:text-slate-100">{{ detail?.signUpTime }}</span>
             </p>
             <p class="flex items-center gap-2">
               <span class="font-medium text-slate-400">比赛时间</span>
-              <span class="font-bold text-slate-800">{{ detail?.contestTime }}</span>
+              <span class="font-bold text-slate-800 dark:text-slate-100">{{ detail?.contestTime }}</span>
             </p>
           </div>
         </section>
 
         <!-- 3. 详情区：分割线 + 五个区块 -->
-        <section class="mt-10 border-t border-slate-200 pt-8">
-          <h2 class="text-xl font-bold text-slate-900">竞赛详情：</h2>
+        <section class="mt-10 border-t border-slate-200 dark:border-slate-700 pt-8">
+          <h2 class="text-xl font-bold text-slate-900 dark:text-slate-100">竞赛详情：</h2>
 
           <div class="mt-6 space-y-6">
             <div
               v-for="sec in sections"
               :key="sec.index"
-              class="rounded-2xl bg-white p-6 ring-1 ring-slate-200/70 shadow-sm"
+              class="rounded-2xl bg-white dark:bg-slate-800 p-6 ring-1 ring-slate-200/70 dark:ring-slate-700 shadow-sm"
             >
-              <h3 class="text-lg font-bold text-slate-900">
+              <h3 class="text-lg font-bold text-slate-900 dark:text-slate-100">
                 {{ sec.index }}、{{ sec.title }}
               </h3>
-              <p class="mt-3 text-sm leading-7 text-slate-600">
+              <p class="mt-3 text-sm leading-7 text-slate-600 dark:text-slate-300">
                 {{ sec.content }}
               </p>
             </div>
           </div>
         </section>
+
+        <!-- 4. 参赛全流程攻略 -->
+        <div v-if="detail.full_process_guide" class="mt-8 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 rounded-2xl p-6"><h3 class="text-xl font-bold text-slate-800 dark:text-slate-100 mb-4 flex items-center gap-2">🗺️ 参赛全流程攻略</h3><div class="prose prose-slate dark:prose-invert max-w-none text-slate-600 dark:text-slate-300" v-html="renderedGuide"></div></div><div v-else class="mt-8 text-center py-6 bg-slate-50 dark:bg-slate-800/30 rounded-2xl border border-dashed border-slate-300 dark:border-slate-700"><p class="text-slate-500 dark:text-slate-400">该赛事攻略正在收集中，敬请期待...</p></div>
       </template>
     </main>
   </div>

@@ -1,0 +1,14 @@
+  animation: cardPopIn 0.55s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* ---------------- 减少动态效果偏好 ---------------- */
+/* 系统开启「减弱动态效果」时直接呈现终态，不做位移与缩放 */
+@media (prefers-reduced-motion: reduce) {
+  .hero-in,
+  .card-in {
+    animation: none;
+    opacity: 1;
+    transform: none;
+  }
+}
+</style>
