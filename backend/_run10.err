@@ -1,5 +1,0 @@
-00:11:01 [INFO] 待处理比赛 1 条
-00:11:01 [INFO] [1/1] 正在生成：中国大学生计算机设计大赛 (id=10)
-00:11:02 [INFO] HTTP Request: POST https://api.deepseek.com/chat/completions "HTTP/1.1 200 OK"
-00:11:31 [INFO]   [id=10] 已写入数据库（3983 字符）
-00:11:31 [INFO] 完成：成功 1 条，失败 0 条，共 1 条

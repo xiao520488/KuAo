@@ -70,7 +70,20 @@ def _normalize_username(username: str) -> str:
     return username.strip().lower()
 
 
-def _build_token_response(user: dict) -> TokenResponse:
+def _to_user_dict(user) -> dict:
+    """把 db 层返回的用户记录统一转成普通 dict。
+
+    db.get_user_by_id / get_user_by_username 返回的是 sqlite3.Row，
+    它没有 .get() 方法（调用即 AttributeError），也不支持下标赋值，
+    所以这里统一转成 dict，后续一律用 user["key"] 取值。
+    """
+    if isinstance(user, dict):
+        return dict(user)
+    return {key: user[key] for key in user.keys()}
+
+
+def _build_token_response(user) -> TokenResponse:
+    user = _to_user_dict(user)
     token = create_access_token(user["id"], user["username"])
     return TokenResponse(
         access_token=token,
@@ -79,7 +92,7 @@ def _build_token_response(user: dict) -> TokenResponse:
         user=UserInfo(
             id=user["id"],
             username=user["username"],
-            created_at=user.get("created_at", ""),
+            created_at=user["created_at"]
         ),
     )
 
@@ -117,7 +130,9 @@ def register(req: RegisterRequest) -> TokenResponse:
     if user is None:  # 理论上不会发生
         raise HTTPException(status_code=500, detail="注册失败，请稍后重试")
 
+    # sqlite3.Row 不支持下标赋值，先转成 dict 才能改写 id；
     # 兼容个别情况下 lastrowid 与查询结果不一致
+    user = _to_user_dict(user)
     user["id"] = user_id
     return _build_token_response(user)
 
@@ -156,8 +171,9 @@ def login(req: LoginRequest) -> TokenResponse:
 )
 def read_current_user(user: dict = Depends(get_current_user)) -> UserInfo:
     """返回当前 Token 对应的用户信息。"""
+    user = _to_user_dict(user)
     return UserInfo(
         id=user["id"],
         username=user["username"],
-        created_at=user.get("created_at", ""),
+        created_at=user["created_at"],
     )

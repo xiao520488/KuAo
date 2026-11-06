@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """
 比赛信息管理系统 - 数据访问层 (db.py)
 
@@ -170,6 +170,31 @@ _MIGRATION_COLUMNS = {
     "full_process_guide": "TEXT",
 }
 
+# awards 表补列：列名 -> DDL 片段（ALTER TABLE ADD COLUMN 用）
+#
+# 线上老库与 schema_v2.sql 的 awards 定义存在双向差异，这里按「并集」补齐：
+#   * 下面第一组：schema_v2.sql 有、线上老库没有（补上才算对齐 schema）
+#   * 下面第二组：线上老库有、schema_v2.sql 没有（全新部署时补上，
+#     否则 competitions.py 读取的 track / session / award_grade / level
+#     会全部取不到值，前端 Tab2 的赛道/赛段/奖项等级会空）
+#
+# 全部为可空 TEXT，满足 SQLite 的 ALTER TABLE ADD COLUMN 限制
+# （不能带 UNIQUE / PRIMARY KEY，NOT NULL 必须带默认值）。
+_AWARD_MIGRATION_COLUMNS = {
+    # —— schema_v2.sql 定义、线上老库缺失 ——
+    "advisor": "TEXT",
+    "award_level": "TEXT",
+    "detail_md": "TEXT",
+    # —— 线上老库存在、schema_v2.sql 未声明的历史列 ——
+    "competition_raw": "TEXT",
+    "level": "TEXT",
+    "session": "TEXT",
+    "award_grade": "TEXT",
+    "track": "TEXT",
+    "difficulty": "TEXT",
+    "metrics": "TEXT",
+}
+
 
 def _migrate_columns(conn: sqlite3.Connection) -> None:
     """
@@ -182,6 +207,44 @@ def _migrate_columns(conn: sqlite3.Connection) -> None:
         except sqlite3.OperationalError as e:
             if "duplicate column name" not in str(e).lower():
                 raise
+
+
+def _migrate_award_columns(conn: sqlite3.Connection) -> list:
+    """幂等补齐 awards 表缺失列；返回本次实际新增的列名列表。
+
+    只做 ALTER TABLE ADD COLUMN：不 DROP、不 DELETE、不 UPDATE 任何业务行，
+    重复执行安全（已有列直接跳过）。
+    """
+    existing = _award_columns(conn)
+    added = []
+    for col, ddl in _AWARD_MIGRATION_COLUMNS.items():
+        if col in existing:
+            continue
+        try:
+            conn.execute(f"ALTER TABLE awards ADD COLUMN {col} {ddl}")
+        except sqlite3.OperationalError as e:
+            # 并发下可能被别的进程抢先加列，按幂等处理
+            if "duplicate column name" not in str(e).lower():
+                raise
+            continue
+        added.append(col)
+    return added
+
+
+def migrate_award_columns() -> list:
+    """对外入口：单独执行 awards 补列迁移（供迁移脚本调用）。
+
+    返回本次新增的列名列表；已对齐的库返回空列表。
+    """
+    with get_conn() as conn:
+        return _migrate_award_columns(conn)
+
+
+def missing_award_columns() -> list:
+    """返回当前库 awards 表缺失（待迁移）的列名，用于迁移前体检。"""
+    with get_conn() as conn:
+        existing = _award_columns(conn)
+    return [col for col in _AWARD_MIGRATION_COLUMNS if col not in existing]
 
 
 def _backfill_detail_fields(conn: sqlite3.Connection) -> None:
@@ -211,13 +274,15 @@ def _backfill_detail_fields(conn: sqlite3.Connection) -> None:
 def init_db() -> None:
     """
     初始化数据库：执行 schema_v2.sql 建表（IF NOT EXISTS，可重复调用），
-    再做补列迁移、回填与索引创建。不会插入任何业务数据。
+    再做补列迁移（competitions + awards）、回填与索引创建。
+    不会插入任何业务数据。
     """
     with open(SCHEMA_PATH, encoding="utf-8") as f:
         schema_sql = f.read()
     with get_conn() as conn:
         conn.executescript(schema_sql)
         _migrate_columns(conn)
+        _migrate_award_columns(conn)
         conn.executescript(INDEXES_SQL)
         _backfill_detail_fields(conn)
 
@@ -473,8 +538,12 @@ def _award_row_to_dict(row: sqlite3.Row, url_map: Optional[dict] = None) -> dict
 
 
 def list_awards_by_competition(competition_id: int, limit: Optional[int] = None) -> list:
-    """按竞赛 id 查询获奖作品列表（按年份倒序、id 升序）。"""
+    """按竞赛 id 查询获奖作品列表（按年份倒序、id 升序）。
+
+    过滤 review_status='rejected' 的人工拒绝脏数据（与路由文档约定一致）。
+    """
     sql = ("SELECT * FROM awards WHERE competition_id = ? "
+           "AND COALESCE(review_status, 'pending') <> 'rejected' "
            "ORDER BY CASE WHEN year IS NULL THEN 1 ELSE 0 END ASC, "
            "year DESC, id ASC")
     params = [competition_id]
@@ -583,3 +652,396 @@ def create_user(username: str, password_hash: str) -> int:
             (username, password_hash),
         )
         return cur.lastrowid
+
+
+# ============================================================
+# 六、ai_usage：AI 每日配额（原子扣减）
+# ============================================================
+# 说明：本段曾因 db.py 被整文件覆盖而丢失，导致 security.require_ai_quota /
+# current_ai_quota 内的 `from db import consume_ai_quota` 直接 ImportError，
+# 所有 AI 接口 500。此处按原实现恢复。
+#
+# 表结构见 schema_v2.sql 第 9 节：ai_usage(user_id, usage_date, used, updated_at)，
+# 主键 (user_id, usage_date)，即「每人每天一行」。
+
+def _today_str() -> str:
+    """本地日期字符串 'YYYY-MM-DD'；配额在本地零点自然翻滚。"""
+    return datetime.now().strftime("%Y-%m-%d")
+
+
+def consume_ai_quota(user_id: int, limit: int) -> dict:
+    """原子扣减一次今日 AI 调用额度。
+
+    并发语义
+    --------
+    整个扣减是**单条带条件的 UPDATE**：
+
+        UPDATE ai_usage SET used = used + 1
+        WHERE user_id = ? AND usage_date = ? AND used < ?
+
+    SQLite 的写操作串行化，两个并发请求不可能同时通过 `used < limit` 判断，
+    因此不会把 used 顶穿上限。用 `cur.rowcount` 判定是否抢到配额
+    （1 = 抢到，0 = 已用尽），避免「先读后写」的竞态。
+
+    当天首次调用走带守卫的 INSERT，直接以 used=1 建行。
+
+    返回
+    ----
+    dict：allowed (bool), used (int), limit (int), remaining (int)
+    limit <= 0 表示不限次数（仅开发环境），此时 remaining = -1。
+    被拒绝时 used 等于已用尽的值（== limit），remaining = 0。
+    """
+    limit = int(limit)
+    uid = int(user_id)
+    today = _today_str()
+
+    # limit <= 0 表示不限次数（开发环境逃生口）
+    if limit <= 0:
+        return {"allowed": True, "used": 0, "limit": 0, "remaining": -1}
+
+    with get_conn() as conn:
+        # 1) 快路径：当天已有行 -> 带守卫自增
+        cur = conn.execute(
+            "UPDATE ai_usage SET used = used + 1, "
+            "updated_at = datetime('now', 'localtime') "
+            "WHERE user_id = ? AND usage_date = ? AND used < ?",
+            (uid, today, limit),
+        )
+        if cur.rowcount == 1:
+            row = conn.execute(
+                "SELECT used FROM ai_usage WHERE user_id = ? AND usage_date = ?",
+                (uid, today),
+            ).fetchone()
+            used = int(row["used"])
+            return {
+                "allowed": True,
+                "used": used,
+                "limit": limit,
+                "remaining": max(limit - used, 0),
+            }
+
+        # 2) 没有行 or 配额已用尽 -> 查一次区分
+        row = conn.execute(
+            "SELECT used FROM ai_usage WHERE user_id = ? AND usage_date = ?",
+            (uid, today),
+        ).fetchone()
+
+        if row is not None:
+            # 行存在但守卫失败 => 已用尽
+            used = int(row["used"])
+            return {"allowed": False, "used": used, "limit": limit, "remaining": 0}
+
+        # 3) 当天第一次调用：建行且 used=1。
+        #    INSERT OR IGNORE：若并发请求先建了行，rowcount == 0，
+        #    回落到带守卫的 UPDATE。
+        cur = conn.execute(
+            "INSERT OR IGNORE INTO ai_usage (user_id, usage_date, used) "
+            "VALUES (?, ?, 1)",
+            (uid, today),
+        )
+        if cur.rowcount == 1:
+            return {"allowed": True, "used": 1, "limit": limit,
+                    "remaining": max(limit - 1, 0)}
+
+        # 抢插入失败 -> 重试一次带守卫的自增
+        cur = conn.execute(
+            "UPDATE ai_usage SET used = used + 1, "
+            "updated_at = datetime('now', 'localtime') "
+            "WHERE user_id = ? AND usage_date = ? AND used < ?",
+            (uid, today, limit),
+        )
+        row = conn.execute(
+            "SELECT used FROM ai_usage WHERE user_id = ? AND usage_date = ?",
+            (uid, today),
+        ).fetchone()
+        used = int(row["used"]) if row else limit
+        allowed = cur.rowcount == 1
+        return {
+            "allowed": allowed,
+            "used": used,
+            "limit": limit,
+            "remaining": max(limit - used, 0) if allowed else 0,
+        }
+
+
+def get_ai_quota(user_id: int, limit: int) -> dict:
+    """只读查询今日用量，不扣减（供 /api/ai/quota 展示用）。
+
+    返回 dict：used (int), limit (int), remaining (int)
+    remaining = -1 表示不限次数（limit <= 0），由上层翻译成 None。
+    """
+    limit = int(limit)
+    with get_conn() as conn:
+        try:
+            row = conn.execute(
+                "SELECT used FROM ai_usage WHERE user_id = ? AND usage_date = ?",
+                (int(user_id), _today_str()),
+            ).fetchone()
+        except sqlite3.OperationalError:
+            # 老库尚未建 ai_usage 表，降级为「未使用」
+            return {"used": 0, "limit": limit, "remaining": max(limit, 0)}
+    used = int(row["used"]) if row else 0
+    if limit <= 0:
+        return {"used": used, "limit": 0, "remaining": -1}
+    return {"used": used, "limit": limit, "remaining": max(limit - used, 0)}
+
+
+# ============================================================
+# 七、user_preparations：用户备赛清单（需登录）
+# ============================================================
+# 表见 schema_v2.sql 第 8 节，唯一索引 ux_user_prep(user_id, competition_id)
+# 保证同一竞赛重复加入是幂等的。
+
+def add_preparation(user_id: int, competition_id: int) -> dict:
+    """把某竞赛加入用户的备赛清单（幂等）。
+
+    返回 {"id": 清单行 id, "created": 是否本次新建}
+    竞赛不存在时抛 ValueError（由路由转 404）。
+    """
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT id FROM competitions WHERE id = ?", (int(competition_id),)
+        ).fetchone()
+        if row is None:
+            raise ValueError("competition not found")
+
+        cur = conn.execute(
+            "INSERT OR IGNORE INTO user_preparations (user_id, competition_id) "
+            "VALUES (?, ?)",
+            (int(user_id), int(competition_id)),
+        )
+        created = cur.rowcount > 0
+        got = conn.execute(
+            "SELECT id FROM user_preparations WHERE user_id = ? AND competition_id = ?",
+            (int(user_id), int(competition_id)),
+        ).fetchone()
+    return {"id": got["id"] if got else None, "created": created}
+
+
+def remove_preparation(user_id: int, competition_id: int) -> bool:
+    """从备赛清单移除某竞赛；有行被删除返回 True。"""
+    with get_conn() as conn:
+        cur = conn.execute(
+            "DELETE FROM user_preparations WHERE user_id = ? AND competition_id = ?",
+            (int(user_id), int(competition_id)),
+        )
+        return cur.rowcount > 0
+
+
+def list_preparations(user_id: int) -> list:
+    """列出用户备赛清单（JOIN 竞赛信息），最新加入的在前。
+
+    返回 list[dict]，键：prep_id / competition_id / added_at /
+    name / category / level / level_label / reg_start_month / reg_end_month /
+    reg_cross_year / official_url / summary。
+    """
+    with get_conn() as conn:
+        try:
+            rows = conn.execute(
+                """
+                SELECT p.id              AS prep_id,
+                       p.competition_id  AS competition_id,
+                       p.created_at      AS added_at,
+                       c.name            AS name,
+                       c.category        AS category,
+                       c.level           AS level,
+                       c.level_label     AS level_label,
+                       c.reg_start_month AS reg_start_month,
+                       c.reg_end_month   AS reg_end_month,
+                       c.reg_cross_year  AS reg_cross_year,
+                       c.official_url    AS official_url,
+                       c.summary         AS summary
+                FROM user_preparations p
+                JOIN competitions c ON c.id = p.competition_id
+                WHERE p.user_id = ?
+                ORDER BY p.created_at DESC, p.id DESC
+                """,
+                (int(user_id),),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            # 老库尚未建 user_preparations 表 -> 视为空清单
+            return []
+    return [dict(r) for r in rows]
+
+
+def is_prepared(user_id: int, competition_id: int) -> bool:
+    """该竞赛是否已在用户备赛清单中。"""
+    with get_conn() as conn:
+        try:
+            row = conn.execute(
+                "SELECT 1 FROM user_preparations WHERE user_id = ? AND competition_id = ?",
+                (int(user_id), int(competition_id)),
+            ).fetchone()
+        except sqlite3.OperationalError:
+            return False
+    return row is not None
+
+
+# ============================================================
+# 八、users：账号补充 CRUD
+# ============================================================
+# 已有的读/建：create_user / get_user_by_id / get_user_by_username。
+# 这里补齐改、删、列表，避免上层只能手写 SQL。
+
+def exists_user(username: str) -> bool:
+    """用户名是否已存在。"""
+    return get_user_by_username(username) is not None
+
+
+def update_user_password(user_id: int, password_hash: str) -> bool:
+    """更新密码哈希（调用方负责传入已 bcrypt 的哈希）。返回是否有行被更新。"""
+    with get_conn() as conn:
+        cur = conn.execute(
+            "UPDATE users SET password_hash = ? WHERE id = ?",
+            (password_hash, int(user_id)),
+        )
+        return cur.rowcount > 0
+
+
+def delete_user(user_id: int) -> bool:
+    """删除用户；user_preparations / ai_usage 由外键 ON DELETE CASCADE 级联清理。"""
+    with get_conn() as conn:
+        cur = conn.execute("DELETE FROM users WHERE id = ?", (int(user_id),))
+        return cur.rowcount > 0
+
+
+def list_users(limit: int = 100, offset: int = 0) -> list:
+    """列出用户（不含 password_hash，避免误回显）。"""
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT id, username, created_at FROM users "
+            "ORDER BY id ASC LIMIT ? OFFSET ?",
+            (int(limit), int(offset)),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+# ============================================================
+# 九、awards：获奖作品补充 CRUD
+# ============================================================
+# 读：list_awards_by_competition / get_award_by_id / count_awards_by_competition
+# 这里补齐增、改、删。写入后置 embedding_state='stale'，作为
+# 「SQLite 已更新、待同步 Chroma」的脏标记（与 schema 设计一致）。
+
+_AWARD_WRITABLE_FIELDS = (
+    "competition_id", "year", "category", "title", "team", "advisor",
+    "award_level", "summary", "tech_stack", "highlights", "detail_md",
+    "source_url", "source_type", "raw_html_path", "confidence",
+    "review_status", "embedding_state", "content_hash",
+)
+
+# 这些字段变化会影响向量语义，需要把 embedding_state 标脏
+_AWARD_EMBEDDING_FIELDS = (
+    "title", "summary", "highlights", "detail_md", "tech_stack",
+    "category", "award_level", "year", "team", "advisor",
+)
+
+
+def _encode_tech_stack(value) -> str:
+    """tech_stack 入库编码：list -> JSON 字符串；空值 -> '[]'。"""
+    if value is None:
+        return "[]"
+    if isinstance(value, str):
+        return value.strip() or "[]"
+    try:
+        import json
+        return json.dumps(list(value), ensure_ascii=False)
+    except (TypeError, ValueError):
+        return "[]"
+
+
+def _award_columns(conn) -> set:
+    """当前 awards 表的真实列名集合。
+
+    线上库是「老库」（含 session / award_grade / track / difficulty / metrics
+    等历史列），而 schema_v2.sql 是新建库脚本（含 advisor / award_level /
+    detail_md）。两边列并不完全一致，写入前按真实列裁剪，避免
+    "table awards has no column named ..." 的 OperationalError。
+    """
+    try:
+        return {r["name"] for r in conn.execute("PRAGMA table_info(awards)").fetchall()}
+    except sqlite3.OperationalError:
+        return set()
+
+
+def create_award(data: dict) -> int:
+    """新增一条获奖作品，返回新记录 id。
+
+    data 键取自 _AWARD_WRITABLE_FIELDS（不属于当前表结构的键会被自动忽略）；
+    tech_stack 允许传 list。title 必填（表约束 NOT NULL）。
+    content_hash 若与已有记录冲突，会抛 sqlite3.IntegrityError（唯一索引兜底）。
+    """
+    if not isinstance(data, dict):
+        raise TypeError("data must be a dict")
+
+    planned = []
+    for key in _AWARD_WRITABLE_FIELDS:
+        if key not in data:
+            continue
+        val = _encode_tech_stack(data[key]) if key == "tech_stack" else data[key]
+        planned.append((key, val))
+
+    with get_conn() as conn:
+        existing = _award_columns(conn)
+        columns, values = [], []
+        for key, val in planned:
+            if key in existing:
+                columns.append(key)
+                values.append(val)
+
+        if "title" not in columns:
+            raise ValueError("title is required")
+
+        placeholders = ", ".join("?" * len(columns))
+        cur = conn.execute(
+            f"INSERT INTO awards ({', '.join(columns)}) VALUES ({placeholders})",
+            values,
+        )
+        return cur.lastrowid
+
+
+def update_award(award_id: int, data: dict) -> bool:
+    """按 id 部分更新获奖作品。仅更新 data 中出现的字段。
+
+    语义字段变化时自动把 embedding_state 置为 'stale'，
+    并刷新 updated_at；返回是否有行被更新。
+    """
+    if not isinstance(data, dict):
+        raise TypeError("data must be a dict")
+
+    fields, values = [], []
+    touched_content = False
+    with get_conn() as conn:
+        existing = _award_columns(conn)
+        for key in _AWARD_WRITABLE_FIELDS:
+            if key not in data or key not in existing:
+                continue
+            val = data[key]
+            if key == "tech_stack":
+                val = _encode_tech_stack(val)
+            if key in _AWARD_EMBEDDING_FIELDS:
+                touched_content = True
+            fields.append(f"{key} = ?")
+            values.append(val)
+
+        if not fields:
+            return False
+
+        if "updated_at" in existing:
+            fields.append("updated_at = datetime('now', 'localtime')")
+        if (touched_content and "embedding_state" not in data
+                and "embedding_state" in existing):
+            fields.append("embedding_state = 'stale'")
+
+        values.append(int(award_id))
+        cur = conn.execute(
+            f"UPDATE awards SET {', '.join(fields)} WHERE id = ?", values
+        )
+        return cur.rowcount > 0
+
+
+def delete_award(award_id: int) -> bool:
+    """按 id 删除获奖作品；有行被删除返回 True。"""
+    with get_conn() as conn:
+        cur = conn.execute("DELETE FROM awards WHERE id = ?", (int(award_id),))
+        return cur.rowcount > 0

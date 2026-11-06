@@ -151,7 +151,6 @@ def _row_to_award(row: Dict[str, Any]) -> Award:
 
     db 层（list_awards_by_competition）已完成：
       * 过滤 review_status='rejected'
-      * 按标题归一化去重（保留“改进版”等信息，不合并近似标题）
       * tech_stack 的 JSON 字符串解析
     这里只做字段映射与类型兜底。
     """
@@ -177,7 +176,7 @@ def _row_to_award(row: Dict[str, Any]) -> Award:
     summary="获取某竞赛的获奖作品列表",
     description=(
         "按竞赛 ID 返回数据库中的真实获奖作品（Tab 2 往年获奖作品数据源）。"
-        "已排除被拒绝的脏数据，并按标题去重（近似标题如“…（改进版）”予以保留）。"
+        "已排除被拒绝的脏数据。"
     ),
     responses={404: {"description": "竞赛不存在"}},
 )

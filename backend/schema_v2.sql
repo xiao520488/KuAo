@@ -1,5 +1,5 @@
 -- =============================================================================
--- schema_v2.sql  ——  schema v2 统一建表脚本（6 张表）
+-- schema_v2.sql  ——  schema v2 统一建表脚本（9 张表）
 -- -----------------------------------------------------------------------------
 -- 说明：
 --   * SQLite 方言；所有语句幂等（IF NOT EXISTS），可重复执行。
@@ -9,15 +9,23 @@
 --   * 时间字段统一 TEXT + datetime('now','localtime')，与旧库保持兼容。
 --   * 去重统一策略：content_hash / input_hash / url + 部分唯一索引。
 --   * 本脚本只负责「建表 + 索引」，不插入任何业务数据；
---     老库补列（ALTER TABLE ADD COLUMN）由 db.py 的 _MIGRATION_COLUMNS 负责。
+--     老库补列（ALTER TABLE ADD COLUMN）由 db.py 的 _MIGRATION_COLUMNS
+--     （competitions）与 _AWARD_MIGRATION_COLUMNS（awards）负责。
+--   * awards 表列定义已与线上老库对齐（28 列）：线上老库比早期 schema 多出
+--     competition_raw / level / session / award_grade / track / difficulty /
+--     metrics 这些历史列，这里全部纳入建表语句，保证「全新部署」与
+--     「存量老库迁移后」得到完全相同的表结构。
 --
--- 6 张表：
---   1. competitions  竞赛信息主表
---   2. awards        获奖作品（核心表，向量化的主料）
---   3. search_leads  搜索线索（自动更新入口）
---   4. crawl_jobs    任务日志（可观测）
---   5. insights      生成的分析结论（带缓存，防重复烧钱）
---   6. ideas         灵感清单
+-- 9 张表：
+--   1. competitions      竞赛信息主表
+--   2. awards            获奖作品（核心表，向量化的主料）
+--   3. search_leads      搜索线索（自动更新入口）
+--   4. crawl_jobs        任务日志（可观测）
+--   5. insights          生成的分析结论（带缓存，防重复烧钱）
+--   6. ideas             灵感清单
+--   7. users             用户账号（鉴权地基）
+--   8. user_preparations 用户备赛清单
+--   9. ai_usage          AI 每日配额计数
 -- =============================================================================
 
 
@@ -54,20 +62,33 @@ CREATE INDEX IF NOT EXISTS idx_competitions_level
 -- -----------------------------------------------------------------------------
 -- 2. awards —— 获奖作品（核心表）
 -- embedding_state = 'stale' 是「SQLite 写完 -> 待同步 Chroma」的脏标记。
+--
+-- 共 28 列，列名与「顺序」均与线上存量老库对齐，两边可逐列 diff。
+-- 其中 competition_raw / level / session / award_grade / track / difficulty /
+-- metrics 是线上老库的历史列（早期 schema 未声明），competitions.py 的 Tab2
+-- 正是读取 track / session / award_grade / level，缺列会导致字段全空。
+-- 老库若缺 advisor / award_level / detail_md，由 db.py 的
+-- _AWARD_MIGRATION_COLUMNS 用 ALTER TABLE ADD COLUMN 幂等补齐。
 -- -----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS awards (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     competition_id  INTEGER REFERENCES competitions (id) ON DELETE SET NULL,
-    year            INTEGER,
+    -- competition_raw: 原始赛事名（抓取落库时未归并到 competitions 的文本）
+    competition_raw TEXT,
     category        TEXT,
+    level           TEXT,
+    year            INTEGER,
+    -- session: 赛段（国赛 / 省赛 …）
+    session         TEXT,
     title           TEXT    NOT NULL,
     team            TEXT,
-    advisor         TEXT,
-    award_level     TEXT,
+    -- award_grade: 获奖等级（一等奖 / 二等奖 …）
+    award_grade     TEXT,
+    -- track: 赛道 / 组别
+    track           TEXT,
     summary         TEXT,
     tech_stack      TEXT    NOT NULL DEFAULT '[]',
     highlights      TEXT,
-    detail_md       TEXT,
     source_url      TEXT,
     source_type     TEXT    NOT NULL DEFAULT 'manual',
     raw_html_path   TEXT,
@@ -78,7 +99,14 @@ CREATE TABLE IF NOT EXISTS awards (
                             CHECK (embedding_state IN ('none', 'ok', 'stale')),
     content_hash    TEXT,
     created_at      TEXT    NOT NULL DEFAULT (datetime('now', 'localtime')),
-    updated_at      TEXT    NOT NULL DEFAULT (datetime('now', 'localtime'))
+    updated_at      TEXT    NOT NULL DEFAULT (datetime('now', 'localtime')),
+    -- difficulty / metrics: 老库历史列（作品难度、量化指标，可为空）
+    difficulty      TEXT,
+    metrics         TEXT,
+    -- advisor / award_level / detail_md: 老库可能缺失，由迁移脚本幂等补列
+    advisor         TEXT,
+    award_level     TEXT,
+    detail_md       TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_awards_year_cat
