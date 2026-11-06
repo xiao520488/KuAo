@@ -26,10 +26,13 @@
 
 from typing import Optional
 from contextlib import contextmanager
+import logging
 import os
 import re
 import sqlite3
 from datetime import datetime
+
+logger = logging.getLogger(__name__)
 
 # 数据库文件路径（与 db.py 同目录）
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "competitions.db")
@@ -154,6 +157,10 @@ CREATE INDEX IF NOT EXISTS idx_competitions_reg_month
     ON competitions (reg_start_month, reg_end_month);
 CREATE INDEX IF NOT EXISTS idx_competitions_level
     ON competitions (level);
+CREATE INDEX IF NOT EXISTS idx_insights_comp
+    ON insights (competition_id);
+CREATE INDEX IF NOT EXISTS idx_ideas_comp
+    ON ideas (competition_id);
 """
 
 SUMMARY_MAX_LEN = 60
@@ -247,6 +254,39 @@ def missing_award_columns() -> list:
     return [col for col in _AWARD_MIGRATION_COLUMNS if col not in existing]
 
 
+# insights 表补列：老库的 insights 没有 competition_id，导致无法按赛事隔离。
+_INSIGHT_MIGRATION_COLUMNS = {
+    "competition_id": "INTEGER",
+}
+
+
+def _migrate_insight_columns(conn: sqlite3.Connection) -> list:
+    """幂等补齐 insights.competition_id，返回本次新增列。
+
+    历史 insights 是按类别聚合的全局数据，补列后为 NULL；
+    读取接口必须按 competition_id 过滤，因此这些旧数据不会混入具体赛事。
+    """
+    try:
+        existing = {
+            r["name"] for r in conn.execute("PRAGMA table_info(insights)").fetchall()
+        }
+    except sqlite3.OperationalError:
+        return []
+    if not existing:
+        return []
+    added = []
+    for col, ddl in _INSIGHT_MIGRATION_COLUMNS.items():
+        if col in existing:
+            continue
+        try:
+            conn.execute(f"ALTER TABLE insights ADD COLUMN {col} {ddl}")
+            added.append(col)
+        except sqlite3.OperationalError as exc:
+            if "duplicate column name" not in str(exc).lower():
+                raise
+    return added
+
+
 def _backfill_detail_fields(conn: sqlite3.Connection) -> None:
     """
     一次性安全回填：
@@ -283,6 +323,8 @@ def init_db() -> None:
         conn.executescript(schema_sql)
         _migrate_columns(conn)
         _migrate_award_columns(conn)
+        _migrate_insight_columns(conn)
+        _ensure_ai_analysis_cache(conn)
         conn.executescript(INDEXES_SQL)
         _backfill_detail_fields(conn)
 
@@ -1045,3 +1087,328 @@ def delete_award(award_id: int) -> bool:
     with get_conn() as conn:
         cur = conn.execute("DELETE FROM awards WHERE id = ?", (int(award_id),))
         return cur.rowcount > 0
+
+
+# ============================================================
+# 十、ai_analysis_cache：AI 分析结果全局缓存
+# ============================================================
+# 目的：单作品深度解析 / 赛事共性分析的结果按「作品 / 赛事」全局落库，
+# 同一个目标再次请求时直接复用，不再调用大模型（省时省钱，响应恒定）。
+#
+# 表见 schema_v2.sql 第 10 节。缓存有效性由 input_hash 把关：
+#   * 读出时比对当前 prompt 的 SHA-256 与库中值；
+#   * 不一致说明作品/赛事数据已更新，视为未命中，重新生成并覆盖旧行。
+# 因此「数据更新后仍返回旧分析」不会发生。
+#
+# 老库（competitions.db）不会自动重跑 schema_v2.sql，故这里对
+# "no such table" 做一次建表重试，保证首次调用即可自愈。
+
+AI_ANALYSIS_TARGET_TYPES = ("work", "competition")
+
+_AI_ANALYSIS_CACHE_DDL = """
+CREATE TABLE IF NOT EXISTS ai_analysis_cache (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    target_type TEXT    NOT NULL CHECK (target_type IN ('work', 'competition')),
+    target_id   INTEGER NOT NULL,
+    input_hash  TEXT    NOT NULL,
+    content_md  TEXT    NOT NULL,
+    model       TEXT,
+    created_at  TEXT    NOT NULL DEFAULT (datetime('now', 'localtime')),
+    updated_at  TEXT    NOT NULL DEFAULT (datetime('now', 'localtime'))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_ai_analysis_cache_target
+    ON ai_analysis_cache (target_type, target_id);
+"""
+
+
+def _ensure_ai_analysis_cache(conn: sqlite3.Connection) -> None:
+    """幂等建表：创建 ai_analysis_cache 及其唯一索引。"""
+    conn.executescript(_AI_ANALYSIS_CACHE_DDL)
+
+
+def ensure_ai_analysis_cache() -> None:
+    """对外入口：确保缓存表存在（供启动脚本/运维手动调用）。
+
+    AI 路由本身会在读写时自动建表，无需手动执行；这里提供显式入口，
+    便于部署后体检或预热。失败只记日志，不阻断主流程。
+    """
+    try:
+        with get_conn() as conn:
+            _ensure_ai_analysis_cache(conn)
+    except sqlite3.Error as exc:
+        logger.warning("创建 ai_analysis_cache 表失败: %r", exc)
+
+
+def _check_target_type(target_type: str) -> str:
+    """校验缓存目标类型，非法值直接抛 ValueError（属于调用方 bug）。"""
+    t = str(target_type).strip().lower()
+    if t not in AI_ANALYSIS_TARGET_TYPES:
+        raise ValueError(
+            f"target_type must be one of {AI_ANALYSIS_TARGET_TYPES}, got {target_type!r}"
+        )
+    return t
+
+
+def get_ai_analysis(target_type: str, target_id: int,
+                    input_hash: Optional[str] = None) -> Optional[dict]:
+    """读取某作品/某赛事的已缓存分析结果。
+
+    参数:
+        target_type: 'work' 或 'competition'
+        target_id:   对应 awards.id 或 competitions.id
+        input_hash:  当前 prompt 的指纹。传入时只有指纹一致才返回缓存，
+                     不一致（内容已更新）返回 None，由调用方重新生成。
+
+    返回:
+        dict（id / target_type / target_id / input_hash / content_md /
+        model / created_at / updated_at），未命中或读库异常返回 None。
+        缓存只是加速手段，任何异常都降级为「无缓存」，不影响接口可用性。
+    """
+    t = _check_target_type(target_type)
+    sql = (
+        "SELECT id, target_type, target_id, input_hash, content_md, model, "
+        "created_at, updated_at FROM ai_analysis_cache "
+        "WHERE target_type = ? AND target_id = ?"
+    )
+    params = (t, int(target_id))
+
+    try:
+        with get_conn() as conn:
+            try:
+                row = conn.execute(sql, params).fetchone()
+            except sqlite3.OperationalError as exc:
+                if "no such table" not in str(exc).lower():
+                    raise
+                _ensure_ai_analysis_cache(conn)
+                row = conn.execute(sql, params).fetchone()
+    except sqlite3.Error as exc:
+        logger.warning("读取 AI 分析缓存失败（降级为无缓存）: %r", exc)
+        return None
+
+    if row is None:
+        return None
+    cached = dict(row)
+    if input_hash is not None and cached.get("input_hash") != input_hash:
+        return None
+    return cached
+
+
+def save_ai_analysis(target_type: str, target_id: int, input_hash: str,
+                     content_md: str, model: Optional[str] = None) -> bool:
+    """写入/覆盖某作品或某赛事的分析结果（按 target 唯一）。
+
+    UPSERT 语义：同一 target 已存在时更新 input_hash / content_md / model
+    与 updated_at，不新增多行。空内容不写（返回 False），避免污染缓存。
+
+    返回:
+        True=已落库；False=内容为空或写库异常（已记日志）。
+        写缓存失败绝不影响接口正常返回分析结果。
+    """
+    t = _check_target_type(target_type)
+    text = (content_md or "").strip()
+    if not text:
+        return False
+
+    sql = (
+        "INSERT INTO ai_analysis_cache "
+        "(target_type, target_id, input_hash, content_md, model) "
+        "VALUES (?, ?, ?, ?, ?) "
+        "ON CONFLICT(target_type, target_id) DO UPDATE SET "
+        "input_hash = excluded.input_hash, "
+        "content_md = excluded.content_md, "
+        "model = excluded.model, "
+        "updated_at = datetime('now', 'localtime')"
+    )
+    params = (t, int(target_id), input_hash, text, model)
+
+    try:
+        with get_conn() as conn:
+            try:
+                conn.execute(sql, params)
+            except sqlite3.OperationalError as exc:
+                if "no such table" not in str(exc).lower():
+                    raise
+                _ensure_ai_analysis_cache(conn)
+                conn.execute(sql, params)
+    except sqlite3.Error as exc:
+        logger.warning("写入 AI 分析缓存失败（忽略）: %r", exc)
+        return False
+    return True
+
+
+def delete_ai_analysis(target_type: str, target_id: int) -> bool:
+    """删除某作品/某赛事的缓存分析结果；有行被删除返回 True。
+
+    供数据修正或需要强制重新生成时使用；接口自身不主动调用。
+    """
+    t = _check_target_type(target_type)
+    try:
+        with get_conn() as conn:
+            cur = conn.execute(
+                "DELETE FROM ai_analysis_cache WHERE target_type = ? AND target_id = ?",
+                (t, int(target_id)),
+            )
+            return cur.rowcount > 0
+    except sqlite3.Error as exc:
+        logger.warning("删除 AI 分析缓存失败: %r", exc)
+        return False
+
+
+# ============================================================
+# 十一、insights / ideas：灵感工作台（按赛事强隔离）
+# ============================================================
+# 读取接口必须带 competition_id，禁止返回跨赛事混合数据；
+# 写入由离线脚本 analyzer.py 完成，接口本身只读。
+
+INSIGHT_KINDS = ("experience", "trend", "gap")
+
+
+def _check_competition_id(competition_id) -> int:
+    """灵感相关接口的统一入口校验：competition_id 必须为正整数。"""
+    if competition_id is None:
+        raise ValueError("competition_id 必填，禁止跨赛事混合读取灵感数据")
+    try:
+        cid = int(competition_id)
+    except (TypeError, ValueError):
+        raise ValueError(f"competition_id 必须是整数，收到: {competition_id!r}")
+    if cid <= 0:
+        raise ValueError(f"competition_id 必须大于 0，收到: {cid}")
+    return cid
+
+
+def _json_list(value) -> list:
+    """把 evidence / ref_awards 统一解析为 list；脏数据返回空列表。"""
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple)):
+        return list(value)
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return []
+        try:
+            import json
+            parsed = json.loads(text)
+        except (TypeError, ValueError):
+            return []
+        return parsed if isinstance(parsed, list) else []
+    return []
+
+
+def list_insights_by_competition(competition_id: int,
+                                 kind: Optional[str] = None) -> list:
+    """按赛事读取 insights（严格过滤，competition_id 必填）。"""
+    cid = _check_competition_id(competition_id)
+    sql = "SELECT * FROM insights WHERE competition_id = ?"
+    params: list = [cid]
+    if kind:
+        if kind not in INSIGHT_KINDS:
+            raise ValueError(f"kind 必须是 {INSIGHT_KINDS} 之一，收到: {kind!r}")
+        sql += " AND kind = ?"
+        params.append(kind)
+    sql += " ORDER BY CASE kind WHEN 'experience' THEN 0 WHEN 'trend' THEN 1 " \
+           "WHEN 'gap' THEN 2 ELSE 3 END, id DESC"
+    with get_conn() as conn:
+        rows = conn.execute(sql, params).fetchall()
+    return [dict(r) for r in rows]
+
+
+def save_insight(kind: str, scope: str, content_md: str, *,
+                 competition_id: int, evidence: Optional[list] = None,
+                 model: Optional[str] = None,
+                 input_hash: Optional[str] = None) -> int:
+    """写入一条赛事洞察。
+
+    同一赛事同一 kind 只保留最新一条（先删后插），避免页面重复渲染旧结论。
+    """
+    if kind not in INSIGHT_KINDS:
+        raise ValueError(f"kind 必须是 {INSIGHT_KINDS} 之一，收到: {kind!r}")
+    cid = _check_competition_id(competition_id)
+    text = (content_md or "").strip()
+    if not text:
+        raise ValueError("content_md 不能为空")
+    evidence_json = None
+    if evidence is not None:
+        import json
+        evidence_json = json.dumps(list(evidence), ensure_ascii=False)
+    with get_conn() as conn:
+        conn.execute(
+            "DELETE FROM insights WHERE competition_id = ? AND kind = ?",
+            (cid, kind),
+        )
+        cur = conn.execute(
+            "INSERT INTO insights "
+            "(kind, scope, competition_id, input_hash, content_md, evidence, model) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (kind, scope or "", cid, input_hash, text, evidence_json, model),
+        )
+        return int(cur.lastrowid)
+
+
+def delete_insights_by_competition(competition_id: int) -> int:
+    """删除某赛事的全部 insights，返回删除行数（--force 重生成用）。"""
+    cid = _check_competition_id(competition_id)
+    with get_conn() as conn:
+        cur = conn.execute(
+            "DELETE FROM insights WHERE competition_id = ?", (cid,)
+        )
+        return int(cur.rowcount)
+
+
+def list_ideas_by_competition(competition_id: int) -> list:
+    """按赛事读取 ideas（严格过滤，competition_id 必填）。"""
+    cid = _check_competition_id(competition_id)
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM ideas WHERE competition_id = ? ORDER BY id ASC",
+            (cid,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def save_idea(title: str, *, competition_id: int,
+              pitch: Optional[str] = None, detail_md: Optional[str] = None,
+              novelty: Optional[str] = None, risk: Optional[str] = None,
+              ref_awards: Optional[list] = None, status: str = "draft",
+              difficulty: Optional[str] = None, metrics: Optional[str] = None,
+              content_hash: Optional[str] = None) -> tuple:
+    """写入一条赛事 idea，返回 (id, action)。
+
+    content_hash 默认用「赛事 ID + 标题」生成，保证不同赛事同名 idea 不会被误去重。
+    """
+    cid = _check_competition_id(competition_id)
+    text = (title or "").strip()
+    if not text:
+        raise ValueError("idea.title 不能为空")
+    if status not in ("draft", "starred", "archived"):
+        status = "draft"
+    if not content_hash:
+        import hashlib
+        content_hash = hashlib.sha1(f"{cid}|{text}".encode("utf-8")).hexdigest()
+    ref_json = None
+    if ref_awards is not None:
+        import json
+        ref_json = json.dumps(list(ref_awards), ensure_ascii=False)
+    with get_conn() as conn:
+        cur = conn.execute(
+            "INSERT OR IGNORE INTO ideas "
+            "(competition_id, title, pitch, detail_md, novelty, risk, ref_awards, "
+            " status, difficulty, metrics, content_hash) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (cid, text, pitch, detail_md, novelty, risk, ref_json,
+             status, difficulty, metrics, content_hash),
+        )
+        if cur.rowcount > 0:
+            return int(cur.lastrowid), "inserted"
+        row = conn.execute(
+            "SELECT id FROM ideas WHERE content_hash = ?", (content_hash,)
+        ).fetchone()
+    return (int(row["id"]) if row else None), "skipped"
+
+
+def delete_ideas_by_competition(competition_id: int) -> int:
+    """删除某赛事的全部 ideas，返回删除行数（--force 重生成用）。"""
+    cid = _check_competition_id(competition_id)
+    with get_conn() as conn:
+        cur = conn.execute("DELETE FROM ideas WHERE competition_id = ?", (cid,))
+        return int(cur.rowcount)

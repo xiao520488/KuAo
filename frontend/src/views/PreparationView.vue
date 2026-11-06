@@ -125,7 +125,7 @@ function goWorkspace(id) {
       <div v-if="loading" class="flex items-center justify-center py-24 text-slate-400">
         <svg class="mr-3 h-5 w-5 animate-spin" viewBox="0 0 24 24" fill="none">
           <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" class="opacity-20" />
-          <path d="M22 12a10 10 0 1-10" stroke="currentColor" stroke-width="3" stroke-linecap="round" />
+          <path d="M22 12a10 10 0 0 1-10 10" stroke="currentColor" stroke-width="3" stroke-linecap="round" />
         </svg>
         <span class="text-sm font-medium">正在加载备赛列表…</span>
       </div>

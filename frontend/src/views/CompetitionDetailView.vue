@@ -12,7 +12,7 @@ const detail = ref(null)
 const loading = ref(true)
 const errorMsg = ref('')
 
-// 五个详情区块（先放静态占位文案，后续接真实数据替换 content 即可）
+// 四个基础详情区块（先放静态占位文案，后续接真实数据替换 content 即可）
 const sections = [
   {
     index: '一',
@@ -33,13 +33,50 @@ const sections = [
     index: '四',
     title: '考试安排',
     content: '包含初赛（线上/线下）、复赛与决赛环节，考试形式、时长与考场安排将在报名结束后通知。'
-  },
-  {
-    index: '五',
-    title: '奖励',
-    content: '设置一等奖、二等奖、三等奖及优秀奖若干，获奖者可获得证书、奖品及综合素质加分。'
   }
 ]
+
+// 三个卡片区块（先放硬编码占位文案，后续接真实数据时替换 items 即可）
+// tone 决定卡片的底色与描边，标题与序号统一用蓝色高亮
+const featureCards = [
+  {
+    key: 'form',
+    title: '参赛形式',
+    tone: 'blue',
+    items: [
+      '个人赛 / 团队赛均可报名，团队赛每队 2–5 人，需指定 1 名队长。',
+      '支持跨年级、跨专业组队，同一赛项每人仅可加入 1 支队伍。',
+      '线上报名、线上提交，无需现场报到；决赛环节视赛项另行通知。'
+    ]
+  },
+  {
+    key: 'content',
+    title: '竞赛内容',
+    tone: 'teal',
+    items: [
+      '基础知识：考察赛项相关学科的核心概念、基本原理与常用方法。',
+      '综合应用：围绕真实场景设计任务，考察方案设计与问题拆解能力。',
+      '创新实践：提交原创作品或解决方案，按创新性与完成度综合评分。'
+    ]
+  },
+  {
+    key: 'submission',
+    title: '作品提交要求',
+    tone: 'amber',
+    items: [
+      '提交时间：以竞赛日程公布的截止时间为准，逾期系统自动关闭提交入口。',
+      '文件格式：作品说明书为 PDF，源文件打包为 ZIP，单个附件不超过 200MB。',
+      '命名规范：「赛项名称-队伍名称-作品名称」，压缩包内需附作品清单。'
+    ]
+  }
+]
+
+// 卡片配色：不同区块用不同底色/描边区分（暗色模式同步适配）
+const cardTones = {
+  blue: 'border-blue-200/80 bg-blue-50/70 dark:border-blue-400/25 dark:bg-blue-500/[0.08]',
+  teal: 'border-teal-200/80 bg-teal-50/70 dark:border-teal-400/25 dark:bg-teal-500/[0.08]',
+  amber: 'border-amber-200/80 bg-amber-50/70 dark:border-amber-400/25 dark:bg-amber-500/[0.08]'
+}
 
 // 从后端详情接口获取数据
 async function loadDetail(id) {
@@ -128,10 +165,24 @@ const renderedGuide = computed(() => {
               <span class="font-medium text-slate-400">比赛时间</span>
               <span class="font-bold text-slate-800 dark:text-slate-100">{{ detail?.contestTime }}</span>
             </p>
+            <a
+              v-if="detail.official_url"
+              :href="detail.official_url"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="ml-auto inline-flex items-center gap-1 rounded-full bg-blue-50 px-3.5 py-1.5 text-xs font-bold
+                     text-blue-700 ring-1 ring-blue-200 transition-colors
+                     hover:bg-blue-100 hover:text-blue-800 hover:ring-blue-300
+                     dark:bg-blue-500/15 dark:text-blue-300 dark:ring-blue-500/30
+                     dark:hover:bg-blue-500/25 dark:hover:text-blue-200"
+            >
+              查看官网
+              <span aria-hidden="true">↗</span>
+            </a>
           </div>
         </section>
 
-        <!-- 3. 详情区：分割线 + 五个区块 -->
+        <!-- 3. 详情区：分割线 + 四个基础区块 + 三个卡片区块 -->
         <section class="mt-10 border-t border-slate-200 dark:border-slate-700 pt-8">
           <h2 class="text-xl font-bold text-slate-900 dark:text-slate-100">竞赛详情：</h2>
 
@@ -148,6 +199,45 @@ const renderedGuide = computed(() => {
                 {{ sec.content }}
               </p>
             </div>
+          </div>
+
+          <!-- 3.1 卡片区块：参赛形式 / 竞赛内容 / 作品提交要求（占位文案） -->
+          <div class="mt-6 space-y-5">
+            <article
+              v-for="card in featureCards"
+              :key="card.key"
+              class="rounded-2xl border p-5 shadow-sm sm:p-6"
+              :class="cardTones[card.tone]"
+            >
+              <div class="flex flex-col gap-4 sm:flex-row sm:gap-8">
+                <!-- 左：蓝色高亮小标题 -->
+                <div class="shrink-0 sm:w-28 lg:w-32">
+                  <h3
+                    class="flex items-center gap-2 text-sm font-bold tracking-wide
+                           text-blue-600 dark:text-blue-400"
+                  >
+                    <span class="h-4 w-[3px] rounded-full bg-blue-500" aria-hidden="true"></span>
+                    {{ card.title }}
+                  </h3>
+                </div>
+
+                <!-- 右：带序号的详细说明 -->
+                <ol class="min-w-0 flex-1 space-y-3">
+                  <li v-for="(item, i) in card.items" :key="i" class="flex gap-3">
+                    <span
+                      class="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-md
+                             bg-blue-600/10 text-[11px] font-bold text-blue-600
+                             dark:bg-blue-400/15 dark:text-blue-300"
+                    >
+                      {{ i + 1 }}
+                    </span>
+                    <p class="text-sm leading-6 text-slate-600 dark:text-slate-300">
+                      {{ item }}
+                    </p>
+                  </li>
+                </ol>
+              </div>
+            </article>
           </div>
         </section>
 

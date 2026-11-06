@@ -1,5 +1,5 @@
 -- =============================================================================
--- schema_v2.sql  ——  schema v2 统一建表脚本（9 张表）
+-- schema_v2.sql  ——  schema v2 统一建表脚本（10 张表）
 -- -----------------------------------------------------------------------------
 -- 说明：
 --   * SQLite 方言；所有语句幂等（IF NOT EXISTS），可重复执行。
@@ -16,7 +16,7 @@
 --     metrics 这些历史列，这里全部纳入建表语句，保证「全新部署」与
 --     「存量老库迁移后」得到完全相同的表结构。
 --
--- 9 张表：
+-- 10 张表：
 --   1. competitions      竞赛信息主表
 --   2. awards            获奖作品（核心表，向量化的主料）
 --   3. search_leads      搜索线索（自动更新入口）
@@ -26,6 +26,7 @@
 --   7. users             用户账号（鉴权地基）
 --   8. user_preparations 用户备赛清单
 --   9. ai_usage          AI 每日配额计数
+--  10. ai_analysis_cache AI 分析结果全局缓存（单作品解析 / 赛事共性分析）
 -- =============================================================================
 
 
@@ -257,3 +258,26 @@ CREATE TABLE IF NOT EXISTS ai_usage (
 
 CREATE INDEX IF NOT EXISTS idx_ai_usage_date
     ON ai_usage (usage_date);
+
+-- -----------------------------------------------------------------------------
+-- 10. ai_analysis_cache -- global cache for AI analysis results
+--    Keyed by (target_type, target_id):
+--      target_type = 'work'        -> target_id = awards.id
+--      target_type = 'competition' -> target_id = competitions.id
+--    input_hash 是「实际送入大模型的 prompt」的 SHA-256：命中缓存后仍需比对它，
+--    作品/赛事内容一旦变化，指纹随之变化，旧结果自动失效并重新生成。
+--    唯一索引保证「一个作品/赛事只保留一条最新结果」。
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS ai_analysis_cache (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    target_type TEXT    NOT NULL CHECK (target_type IN ('work', 'competition')),
+    target_id   INTEGER NOT NULL,
+    input_hash  TEXT    NOT NULL,
+    content_md  TEXT    NOT NULL,
+    model       TEXT,
+    created_at  TEXT    NOT NULL DEFAULT (datetime('now', 'localtime')),
+    updated_at  TEXT    NOT NULL DEFAULT (datetime('now', 'localtime'))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS ux_ai_analysis_cache_target
+    ON ai_analysis_cache (target_type, target_id);

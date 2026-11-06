@@ -9,17 +9,29 @@
   - 依赖 llm.py 的薄封装，不在此处直接触碰 OpenAI SDK
   - 竞赛上下文一律从 db 取真实数据，避免模型凭空编造赛制/时间
   - LLM 异常统一转换为 502，保证前端拿到结构化错误而非裸 500
+  - 单作品解析 / 赛事共性分析的结果按目标全局缓存（ai_analysis_cache），
+    命中即直接返回，不再调用大模型；prompt 指纹变化时自动重新生成
 """
 
+import hashlib
+import json
 import logging
 import re
 from typing import Any, Callable, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 import llm
-from db import get_award_by_id, get_competition, list_awards_by_competition
+from db import (
+    get_ai_analysis,
+    get_award_by_id,
+    get_competition,
+    list_awards_by_competition,
+    list_ideas_by_competition,
+    list_insights_by_competition,
+    save_ai_analysis,
+)
 from security import current_ai_quota, require_ai_quota
 from models.schemas import Competition
 
@@ -141,6 +153,59 @@ def _competition_context(competition_id: Optional[int]) -> str:
     if intro:
         lines.append(f"- 赛事简介：{intro}")
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# AI 分析结果缓存（全局，按「作品 / 赛事」复用）
+# ---------------------------------------------------------------------------
+# 设计要点：
+#   * 键 = (target_type, target_id)：同一个作品/赛事全局只保留一条最新结果；
+#   * 有效性 = prompt 的 SHA-256：作品/赛事数据一旦变化，指纹不同即视为未命中，
+#     重新生成并覆盖旧结果，避免返回过期分析；
+#   * 读/写缓存均做异常兜底——缓存只是加速手段，故障时自动降级为直接调模型，
+#     绝不让接口 500。
+ANALYSIS_TARGET_WORK = "work"
+ANALYSIS_TARGET_COMPETITION = "competition"
+
+
+def _analysis_input_hash(prompt: str) -> str:
+    """对实际送入大模型的 prompt 取 SHA-256，作为缓存有效性指纹。"""
+    return hashlib.sha256((prompt or "").encode("utf-8")).hexdigest()
+
+
+def _load_cached_analysis(target_type: str, target_id: int,
+                          prompt: str) -> Optional[str]:
+    """读取已缓存的分析正文；未命中/指纹不一致/异常均返回 None。"""
+    try:
+        row = get_ai_analysis(
+            target_type, target_id, input_hash=_analysis_input_hash(prompt)
+        )
+    except Exception as exc:  # 缓存故障不应中断业务
+        logger.warning("读取 AI 分析缓存异常，降级调用模型: %r", exc)
+        return None
+
+    if not row:
+        return None
+    content = (row.get("content_md") or "").strip()
+    return content or None
+
+
+def _store_analysis(target_type: str, target_id: int, prompt: str,
+                    content: str) -> None:
+    """把模型生成结果写入缓存；失败只记日志，不影响本次返回。"""
+    text = (content or "").strip()
+    if not text:
+        return
+    try:
+        save_ai_analysis(
+            target_type,
+            target_id,
+            _analysis_input_hash(prompt),
+            text,
+            model=getattr(llm, "MODEL", None),
+        )
+    except Exception as exc:  # 写缓存失败不影响接口成功返回
+        logger.warning("写入 AI 分析缓存异常（忽略）: %r", exc)
 
 
 # ---------------------------------------------------------------------------
@@ -470,11 +535,27 @@ def analyze_work(
             detail=f"竞赛 ID={req.competition_id} 暂无获奖作品数据，无法做聚合分析",
         )
 
-    # 3. 拼 prompt 并调用模型
+    # 3. 拼 prompt；先查全局缓存，命中直接返回，不再调用大模型
     ctx = _competition_context(req.competition_id)
     comp_name = comp.get("name")
     prompt = _build_analyze_prompt(comp_name, ctx, works)
 
+    cached = _load_cached_analysis(
+        ANALYSIS_TARGET_COMPETITION, req.competition_id, prompt
+    )
+    if cached:
+        logger.info(
+            "赛事共性分析命中缓存 competition_id=%s，跳过大模型",
+            req.competition_id,
+        )
+        return AnalyzeResponse(
+            analysis=cached,
+            competition_id=req.competition_id,
+            competition_name=comp_name,
+            work_count=len(works),
+        )
+
+    # 4. 未命中 -> 调用模型
     try:
         text = llm.chat(
             prompt,
@@ -492,8 +573,14 @@ def analyze_work(
     if not text or not text.strip():
         raise HTTPException(status_code=502, detail="大模型返回内容为空")
 
+    analysis = text.strip()
+    # 5. 生成成功 -> 落库，供后续请求全局复用
+    _store_analysis(
+        ANALYSIS_TARGET_COMPETITION, req.competition_id, prompt, analysis
+    )
+
     return AnalyzeResponse(
-        analysis=text.strip(),
+        analysis=analysis,
         competition_id=req.competition_id,
         competition_name=comp_name,
         work_count=len(works),
@@ -602,8 +689,15 @@ def analyze_single_work(
     if work is None:
         raise HTTPException(status_code=404, detail=f"作品 ID={req.work_id} 不存在")
 
-    # 2. 组装 prompt 并调用模型
+    # 2. 组装 prompt；先查全局缓存，命中直接返回，不再调用大模型
     prompt = _build_work_prompt(work)
+
+    cached = _load_cached_analysis(ANALYSIS_TARGET_WORK, req.work_id, prompt)
+    if cached:
+        logger.info("单作品解析命中缓存 work_id=%s，跳过大模型", req.work_id)
+        return WorkAnalyzeResponse(analysis=cached)
+
+    # 3. 未命中 -> 调用模型
     try:
         raw = llm.chat(prompt)
     except Exception as exc:
@@ -614,7 +708,11 @@ def analyze_single_work(
         logger.error("单作品解析返回空内容, work_id=%s", req.work_id)
         raise HTTPException(status_code=502, detail="大模型返回空内容")
 
-    return WorkAnalyzeResponse(analysis=str(raw).strip())
+    analysis = str(raw).strip()
+    # 4. 生成成功 -> 落库，供后续请求全局复用
+    _store_analysis(ANALYSIS_TARGET_WORK, req.work_id, prompt, analysis)
+
+    return WorkAnalyzeResponse(analysis=analysis)
 
 
 # ---------------------------------------------------------------------------
@@ -854,3 +952,158 @@ def get_quota(quota: Dict[str, Any] = Depends(current_ai_quota)) -> Dict[str, An
     本接口不消耗配额，可在页面加载时安全调用。
     """
     return quota
+
+
+# ---------------------------------------------------------------------------
+# GET /api/ai/inspirations  灵感工作台数据（按赛事强隔离）
+# ---------------------------------------------------------------------------
+class InspirationInsight(BaseModel):
+    """一条赛事洞察。"""
+
+    id: int
+    kind: str = Field(..., description="experience / trend / gap")
+    content_md: str = Field("", description="Markdown 正文")
+    evidence: List[int] = Field(default_factory=list, description="引用作品 ID")
+    model: Optional[str] = None
+    created_at: Optional[str] = None
+
+
+class InspirationIdea(BaseModel):
+    """一条赛事选题灵感。"""
+
+    id: int
+    title: str = ""
+    pitch: Optional[str] = None
+    detail_md: Optional[str] = None
+    novelty: Optional[str] = None
+    risk: Optional[str] = None
+    ref_awards: List[int] = Field(default_factory=list, description="借鉴作品 ID")
+    status: Optional[str] = None
+    difficulty: Optional[str] = None
+    metrics: Optional[str] = None
+    created_at: Optional[str] = None
+
+
+class InspirationResponse(BaseModel):
+    """灵感工作台响应：只包含指定赛事的 insights / ideas。"""
+
+    competition_id: int = Field(..., description="竞赛 ID")
+    competition_name: Optional[str] = Field(None, description="竞赛名称")
+    work_count: int = Field(0, description="该赛事获奖作品数（用于提示数据基础）")
+    insights: List[InspirationInsight] = Field(default_factory=list)
+    ideas: List[InspirationIdea] = Field(default_factory=list)
+
+
+def _to_int_list(raw: Any) -> List[int]:
+    """evidence / ref_awards（JSON 字符串或 list）-> list[int]，脏数据忽略。"""
+    if raw is None:
+        return []
+    data = raw
+    if isinstance(raw, str):
+        text = raw.strip()
+        if not text:
+            return []
+        try:
+            data = json.loads(text)
+        except (TypeError, ValueError):
+            data = [p for p in re.split(r"[,\s]+", text) if p]
+    if isinstance(data, (int, float)):
+        data = [data]
+    if not isinstance(data, (list, tuple)):
+        return []
+    out: List[int] = []
+    for v in data:
+        try:
+            iv = int(v)
+        except (TypeError, ValueError):
+            continue
+        if iv not in out:
+            out.append(iv)
+    return out
+
+
+@router.get(
+    "/inspirations",
+    response_model=InspirationResponse,
+    summary="获取指定赛事的灵感数据",
+    description=(
+        "必须传 competition_id；只返回 insights / ideas 中 competition_id 与该赛事"
+        "完全一致的数据。evidence / ref_awards 还会再做一次归属校验，"
+        "任何其它赛事的作品 ID 都会被剔除，绝不做全库混合返回。"
+    ),
+    responses={
+        404: {"description": "竞赛不存在"},
+        422: {"description": "缺少或非法的 competition_id"},
+    },
+)
+def get_inspirations(
+    competition_id: int = Query(
+        ..., gt=0, description="竞赛 ID（必填，严禁不传或传 0）"
+    ),
+) -> InspirationResponse:
+    """按赛事读取灵感工作台数据（严格过滤，接口自身不调用大模型）。"""
+    try:
+        comp = get_competition(competition_id)
+    except Exception as exc:
+        logger.error("查询竞赛失败: %r", exc)
+        raise HTTPException(status_code=500, detail="数据库查询失败") from exc
+    if comp is None:
+        raise HTTPException(
+            status_code=404, detail=f"竞赛 ID={competition_id} 不存在"
+        )
+
+    try:
+        works = list_awards_by_competition(competition_id)
+        insight_rows = list_insights_by_competition(competition_id)
+        idea_rows = list_ideas_by_competition(competition_id)
+    except ValueError as exc:  # competition_id 校验失败
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.error("查询灵感数据失败: %r", exc)
+        raise HTTPException(status_code=500, detail="数据库查询失败") from exc
+
+    valid_ids = set()
+    for w in works:
+        try:
+            valid_ids.add(int(w["id"]))
+        except (KeyError, TypeError, ValueError):
+            continue
+
+    insights = [
+        InspirationInsight(
+            id=int(r["id"]),
+            kind=str(r.get("kind") or ""),
+            content_md=str(r.get("content_md") or ""),
+            evidence=[i for i in _to_int_list(r.get("evidence")) if i in valid_ids],
+            model=r.get("model"),
+            created_at=r.get("created_at"),
+        )
+        for r in insight_rows
+    ]
+
+    ideas = [
+        InspirationIdea(
+            id=int(r["id"]),
+            title=str(r.get("title") or ""),
+            pitch=r.get("pitch"),
+            detail_md=r.get("detail_md"),
+            novelty=r.get("novelty"),
+            risk=r.get("risk"),
+            ref_awards=[
+                i for i in _to_int_list(r.get("ref_awards")) if i in valid_ids
+            ],
+            status=r.get("status"),
+            difficulty=r.get("difficulty"),
+            metrics=r.get("metrics"),
+            created_at=r.get("created_at"),
+        )
+        for r in idea_rows
+    ]
+
+    return InspirationResponse(
+        competition_id=competition_id,
+        competition_name=comp.get("name"),
+        work_count=len(works),
+        insights=insights,
+        ideas=ideas,
+    )

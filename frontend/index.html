@@ -6,20 +6,20 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Agent Lab</title>
     <script>
-      // 首屏防闪白：在主 CSS / Vue 挂载之前就把 .dark 打到 <html> 上
-      // 逻辑与 src/composables/useTheme.js 保持一致：已存偏好优先，否则跟随系统
+      // 首屏防闪白：在主 CSS / Vue 挂载之前就把主题 class 打到 <html> 上
+      // 逻辑与 src/composables/useTheme.js 保持一致：
+      // 只认新版主题 id，旧版的 dark / light 不再映射，统一落到默认「官方风」
       (function () {
         try {
-          var saved = localStorage.getItem('theme');
-          var dark =
-            saved === 'dark' ||
-            (!saved && window.matchMedia('(prefers-color-scheme: dark)').matches);
-          if (dark) {
-            document.documentElement.classList.add('dark');
-            document.documentElement.style.colorScheme = 'dark';
-          } else {
-            document.documentElement.style.colorScheme = 'light';
+          var saved = localStorage.getItem('theme-v2');
+          if (saved !== 'official' && saved !== 'minimal' && saved !== 'tech') {
+            saved = 'official';
           }
+          var root = document.documentElement;
+          root.classList.add('theme-' + saved);
+          if (saved === 'tech') root.classList.add('dark');
+          root.dataset.theme = saved;
+          root.style.colorScheme = saved === 'tech' ? 'dark' : 'light';
         } catch (e) {}
       })();
     </script>

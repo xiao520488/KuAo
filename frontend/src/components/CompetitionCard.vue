@@ -1,9 +1,10 @@
 <script setup>
-import { ref, watch } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { authState } from '../services/auth'
 import { addPreparation, removePreparation } from '../services/api'
 import { openAuthModal } from '../composables/useAuthModal'
+import { categoryTag } from '@/utils/competitionCategory'
 
 // 通用竞赛卡片：整卡/详情 -> 详情页，备赛 -> 备赛列表页
 const props = defineProps({
@@ -30,6 +31,9 @@ const props = defineProps({
 const emit = defineEmits(['preparation-change'])
 
 const router = useRouter()
+
+// 卡片标签统一展示“大类 · 细分”，原始长分类作为 title 提示
+const categoryLabel = computed(() => categoryTag(props.category))
 
 // 整卡点击 -> 竞赛详情
 function goDetail() {
@@ -132,7 +136,7 @@ async function removeOnly() {
           <svg class="h-8 w-8 text-slate-300" fill="none" viewBox="0 0 24 24"
                stroke="currentColor" stroke-width="1.5" aria-hidden="true">
             <path stroke-linecap="round" stroke-linejoin="round"
-                  d="M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 0l2.909 2.909M18 6.75h.008v.008H18V6.75z" />
+                  d="M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 2.25 0 013.182 0l2.909 2.909M18 6.75h.008v.008H18V6.75z" />
           </svg>
         </div>
       </div>
@@ -158,9 +162,10 @@ async function removeOnly() {
         </span>
         <span
           v-if="category"
+          :title="category"
           class="mt-1 shrink-0 rounded-full bg-slate-100 dark:bg-slate-700/60 px-3 py-0.5 text-xs font-medium text-slate-500 dark:text-slate-400"
         >
-          {{ category }}
+          {{ categoryLabel }}
         </span>
       </div>
 
@@ -179,7 +184,7 @@ async function removeOnly() {
           <svg class="h-[18px] w-[18px] shrink-0 text-slate-400" fill="none" viewBox="0 0 24 24"
                stroke="currentColor" stroke-width="1.8" aria-hidden="true">
             <path stroke-linecap="round" stroke-linejoin="round"
-                  d="M8 7V3m8 4V3M3.75 9h16.5M4.5 21h15a1.5 1.5 0 001.5-1.5V6a1.5 00-1.5-1.5h-15A1.5 003 6v13.5A1.5 004.5 21z" />
+                  d="M8 7V3m8 4V3M3.75 9h16.5M4.5 21h15a1.5 1.5 0 001.5-1.5V6a1.5 1.5 0 00-1.5-1.5h-15A1.5 1.5 0 003 6v13.5A1.5 1.5 0 004.5 21z" />
           </svg>
           <span class="font-medium text-slate-400">比赛时间</span>
           <span class="font-semibold text-slate-700 dark:text-slate-200">{{ contestTime }}</span>
@@ -231,7 +236,7 @@ async function removeOnly() {
           <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24"
                stroke="currentColor" stroke-width="1.8" aria-hidden="true">
             <path stroke-linecap="round" stroke-linejoin="round"
-                  d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 00-7.5" />
+                  d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
           </svg>
           <span v-if="pending">移出中…</span>
           <span v-else>移出备赛</span>

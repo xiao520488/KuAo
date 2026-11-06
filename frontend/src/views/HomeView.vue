@@ -6,6 +6,7 @@ import BackToTop from '@/components/BackToTop.vue'
 import { useRoute, useRouter } from 'vue-router'
 import { getCompetitions, searchCompetitions, checkPrepared } from '@/services/api'
 import { authState } from '@/services/auth'
+import { theme } from '@/composables/useTheme'
 
 // 当前路由：监听 ?q= 变化，承接顶部/大搜索框的跳转
 const route = useRoute()
@@ -385,13 +386,32 @@ watch(
 </script>
 
 <template>
-  <div class="relative bg-slate-50 dark:bg-slate-900">
+  <!-- 「官方风」下方列表区为纯白，波浪渐变底部正好接上它；其余主题维持原底色 -->
+  <div
+    class="relative"
+    :class="theme === 'official' ? 'bg-white' : 'bg-slate-50 dark:bg-slate-900'"
+  >
     <Header />
 
     <!-- ========== 全屏 Hero 首屏 ========== -->
-    <section class="relative flex min-h-screen flex-col overflow-hidden">
-      <!-- 背景装饰光晕 -->
-      <div class="pointer-events-none absolute inset-0 -z-10">
+    <!-- 官方风把整块背景（含波浪）抬高 6rem，让下方多出一段白色留白 -->
+    <section
+      class="relative flex flex-col overflow-hidden"
+      :class="theme === 'official' ? 'min-h-[calc(100vh_-_6rem)]' : 'min-h-screen'"
+    >
+      <!-- 「官方风」Hero 背景：校园主题背景图，上方只盖一层很轻的白色薄纱 + 轻微模糊，
+           既保留底图原本的样子，又保证标题、副标题与搜索框清晰可读 -->
+      <div
+        v-if="theme === 'official'"
+        class="pointer-events-none absolute inset-0 z-0"
+        aria-hidden="true"
+      >
+        <div class="hero-official-bg absolute inset-0"></div>
+        <div class="absolute inset-0 bg-white/25 backdrop-blur-sm"></div>
+      </div>
+
+      <!-- 背景装饰光晕（极简风 / 科技蓝） -->
+      <div v-else class="pointer-events-none absolute inset-0 -z-10">
         <div class="absolute -top-32 left-1/2 -translate-x-1/2 h-[420px] w-[820px]
                     rounded-full bg-blue-300/30 blur-3xl"></div>
         <div class="absolute top-40 -left-24 h-[320px] w-[320px]
@@ -400,8 +420,77 @@ watch(
                     rounded-full bg-indigo-200/40 blur-3xl"></div>
       </div>
 
+      <!-- 「官方风」专属：Hero 底部的多层渐变波浪过渡
+           仅在图片背景主题下渲染；极简风 / 科技蓝直接让上下颜色自然相接。
+           三层填充波浪，每层一条独立的垂直渐变、各代表一种颜色：
+             1) 浅蓝层（最靠后）
+             2) 薄荷绿层（中间）
+             3) 白绿层（最前，底部纯白，接下方热门竞赛白底）
+           三层速度/方向不同，波峰会不断相互交叉、此起彼伏；
+           每条路径都画满两个周期，位移恰好一个周期，循环无缝。
+           pointer-events-none 保证不拦截首屏交互。 -->
+      <svg
+        v-if="theme === 'official'"
+        class="pointer-events-none absolute inset-x-0 bottom-0 z-[1] h-[72px] w-full md:h-[104px]"
+        viewBox="0 0 1440 140"
+        preserveAspectRatio="none"
+        aria-hidden="true"
+        focusable="false"
+      >
+        <defs>
+          <!-- 第一层：浅蓝渐变 -->
+          <linearGradient id="official-wave-layer-blue" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#8fd0e6" stop-opacity="0.9" />
+            <stop offset="45%" stop-color="#b6e2ee" stop-opacity="0.55" />
+            <stop offset="100%" stop-color="#e6f6fb" stop-opacity="0" />
+          </linearGradient>
+          <!-- 第二层：薄荷绿渐变 -->
+          <linearGradient id="official-wave-layer-mint" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#8fd8b8" stop-opacity="0.85" />
+            <stop offset="45%" stop-color="#bfead4" stop-opacity="0.5" />
+            <stop offset="100%" stop-color="#f0fbf5" stop-opacity="0" />
+          </linearGradient>
+          <!-- 第三层（最前）：浅绿 → 纯白，底部与竞赛列表白底融为一体 -->
+          <linearGradient id="official-hero-wave" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#d3f2e4" />
+            <stop offset="50%" stop-color="#effbf6" />
+            <stop offset="100%" stop-color="#ffffff" />
+          </linearGradient>
+        </defs>
+
+        <!-- 第一层：浅蓝波浪（最靠后，波峰最高） -->
+        <g class="hero-wave-layer-blue">
+          <path
+            d="M0,44 C240,22 480,22 720,44 C960,66 1200,66 1440,44
+               C1680,22 1920,22 2160,44 C2400,66 2640,66 2880,44
+               L2880,140 L0,140 Z"
+            fill="url(#official-wave-layer-blue)"
+          />
+        </g>
+
+        <!-- 第二层：薄荷绿波浪（中间） -->
+        <g class="hero-wave-layer-mint">
+          <path
+            d="M0,54 C240,35 480,35 720,54 C960,73 1200,73 1440,54
+               C1680,35 1920,35 2160,54 C2400,73 2640,73 2880,54
+               L2880,140 L0,140 Z"
+            fill="url(#official-wave-layer-mint)"
+          />
+        </g>
+
+        <!-- 第三层：白绿波浪（最前，接白底） -->
+        <g class="hero-wave-flow">
+          <path
+            d="M0,64 C240,48 480,48 720,64 C960,80 1200,80 1440,64
+               C1680,48 1920,48 2160,64 C2400,80 2640,80 2880,64
+               L2880,140 L0,140 Z"
+            fill="url(#official-hero-wave)"
+          />
+        </g>
+      </svg>
+
       <!-- 内容区：水平居中，整体上移，使胶囊搜索框落在视口垂直正中 -->
-      <div class="flex flex-1 flex-col items-center justify-center px-6 pt-16 pb-52 text-center">
+      <div class="relative z-10 flex flex-1 flex-col items-center justify-center px-6 pt-16 pb-52 text-center">
         <!-- 大标题 -->
         <h1
           class="hero-in text-3xl sm:text-4xl md:text-5xl lg:text-6xl font-extrabold tracking-tight text-slate-900 dark:text-slate-100"
@@ -489,7 +578,7 @@ watch(
       <!-- 首屏底部居中：向下探索 -->
       <button
         type="button"
-        class="absolute bottom-10 left-1/2 -translate-x-1/2
+        class="absolute bottom-24 left-1/2 z-10 -translate-x-1/2
                flex flex-col items-center gap-2 text-slate-400
                transition-colors hover:text-blue-600 dark:hover:text-blue-400
                focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 rounded-lg"
@@ -634,6 +723,51 @@ watch(
 </template>
 
 <style scoped>
+/* 「官方风」Hero 背景图：由 Vite 处理 @ 别名并打包出带 hash 的静态资源 */
+.hero-official-bg {
+  background-image: url('@/assets/hero-bg.jpg');
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: cover;
+}
+
+/* 多层波浪持续交错流动：整组左移一个完整周期（1440 用户单位）后无缝回到起点。
+   三层速度/方向不同，波峰相互交叉、此起彼伏，形成叠动的渐变层次。 */
+.hero-wave-flow {
+  animation: heroWaveFlow 18s linear infinite;
+  will-change: transform;
+}
+
+.hero-wave-layer-mint {
+  animation: heroWaveFlow 26s linear infinite reverse;
+  animation-delay: -7s;
+  will-change: transform;
+}
+
+.hero-wave-layer-blue {
+  animation: heroWaveFlow 34s linear infinite;
+  animation-delay: -14s;
+  will-change: transform;
+}
+
+@keyframes heroWaveFlow {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-1440px);
+  }
+}
+
+/* 系统开启「减弱动态效果」时停止流动，保持静态波浪 */
+@media (prefers-reduced-motion: reduce) {
+  .hero-wave-flow,
+  .hero-wave-layer-mint,
+  .hero-wave-layer-blue {
+    animation: none;
+  }
+}
+
 /* ---------------- 首屏入场：由下往上 + 由浅入深 ---------------- */
 /* forwards 保持终态，避免动画结束后跳回初始的透明/位移态 */
 @keyframes fadeSlideUp {

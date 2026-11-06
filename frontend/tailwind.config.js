@@ -2,8 +2,9 @@ import typography from '@tailwindcss/typography'
 
 /** @type {import('tailwindcss').Config} */
 export default {
-  // 暗黑模式走 class 策略：由 <html class="dark"> 控制，
-  // 便于手动切换 + localStorage 持久化，而不是跟随系统 prefers-color-scheme
+  // 深色走 class 策略：由 <html class="dark"> 控制。
+  // 三套主题 = 官方风（默认）/ 极简风 / 科技蓝，其中只有「科技蓝」会挂 .dark，
+  // 由 src/composables/useTheme.js 统一切换并持久化到 localStorage。
   darkMode: 'class',
   content: [
     './index.html',

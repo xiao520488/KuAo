@@ -7,6 +7,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+import db
 from routers import ai, auth, competitions, preparations
 
 app = FastAPI(
@@ -34,6 +35,15 @@ app.include_router(competitions.router)
 app.include_router(ai.router)
 app.include_router(auth.router)
 app.include_router(preparations.router)
+
+
+# ---------------------------------------------------------------------------
+# 启动初始化
+# ---------------------------------------------------------------------------
+@app.on_event("startup")
+def startup_init_db() -> None:
+    """启动时执行幂等建表/补列，确保老库自动拥有 insights.competition_id。"""
+    db.init_db()
 
 
 # ---------------------------------------------------------------------------

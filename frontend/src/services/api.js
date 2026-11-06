@@ -255,6 +255,29 @@ export function analyzeWorks(competitionId) {
 }
 
 /**
+ * 获取指定赛事的灵感数据（洞察 + 选题）
+ * GET /api/ai/inspirations?competition_id=...
+ *
+ * 后端强制要求 competition_id，并按该赛事过滤全部 insights / ideas；
+ * 不传或传非法 ID 会直接报错，绝不会返回全库混合数据。
+ *
+ * @param {string|number} competitionId 竞赛 ID
+ * @returns {Promise<{ competition_id:number, competition_name:string, work_count:number, insights:Array, ideas:Array }>}
+ */
+export function getInspirations(competitionId) {
+  const cid = normalizeCompetitionId(competitionId)
+  if (cid === null) return Promise.reject(new Error('竞赛 ID 无效'))
+
+  return api.get('/api/ai/inspirations', { params: { competition_id: cid } }).then((data) => ({
+    competition_id: Number(data?.competition_id) || cid,
+    competition_name: typeof data?.competition_name === 'string' ? data.competition_name : '',
+    work_count: Number(data?.work_count) || 0,
+    insights: Array.isArray(data?.insights) ? data.insights : [],
+    ideas: Array.isArray(data?.ideas) ? data.ideas : []
+  }))
+}
+
+/**
  * 获取某竞赛的往年获奖作品
  * GET /api/competitions/:id/awards?limit=20
  *

@@ -3,7 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { authState, logout } from '@/services/auth'
 import { authModalState, openAuthModal } from '@/composables/useAuthModal'
-import { isDark, toggleTheme } from '@/composables/useTheme'
+import { THEMES, theme, setTheme } from '@/composables/useTheme'
 
 // 当前路由，用于动态判断导航高亮
 const route = useRoute()
@@ -131,11 +131,38 @@ function toggleMenu() {
   menuOpen.value = !menuOpen.value
 }
 
+/* ---------------- 主题切换菜单（官方风 / 极简风 / 科技蓝） ---------------- */
+const themeMenuOpen = ref(false)
+const themeMenuRef = ref(null)
+
+const currentTheme = computed(
+  () => THEMES.find((t) => t.id === theme.value) || THEMES[0]
+)
+
+function toggleThemeMenu() {
+  themeMenuOpen.value = !themeMenuOpen.value
+  // 两个下拉互斥，避免同时展开叠在一起
+  menuOpen.value = false
+}
+
+function chooseTheme(id) {
+  setTheme(id)
+  themeMenuOpen.value = false
+}
+
 function onDocClick(e) {
-  if (!menuOpen.value) return
-  if (userMenuRef.value && !userMenuRef.value.contains(e.target)) {
+  if (menuOpen.value && userMenuRef.value && !userMenuRef.value.contains(e.target)) {
     menuOpen.value = false
   }
+  if (themeMenuOpen.value && themeMenuRef.value && !themeMenuRef.value.contains(e.target)) {
+    themeMenuOpen.value = false
+  }
+}
+
+function onKeydown(e) {
+  if (e.key !== 'Escape') return
+  themeMenuOpen.value = false
+  menuOpen.value = false
 }
 
 async function onLogout() {
@@ -185,9 +212,13 @@ watch(() => route.fullPath, () => {
   if (mobileOpen.value) mobileOpen.value = false
 })
 
-onMounted(() => document.addEventListener('click', onDocClick))
+onMounted(() => {
+  document.addEventListener('click', onDocClick)
+  document.addEventListener('keydown', onKeydown)
+})
 onBeforeUnmount(() => {
   document.removeEventListener('click', onDocClick)
+  document.removeEventListener('keydown', onKeydown)
   clearTimeout(toastTimer)
   if (typeof document !== 'undefined') document.body.style.overflow = ''
 })
@@ -272,30 +303,98 @@ onBeforeUnmount(() => {
 
       <!-- 右：登录/注册 或 用户菜单 -->
       <div class="flex items-center gap-2 sm:gap-3">
-        <!-- AM-THEME-TOGGLE-START -->
-        <button
-          type="button"
-          class="hidden sm:inline-flex h-9 w-9 items-center justify-center rounded-full
-                 text-slate-600 hover:bg-slate-100 hover:text-slate-900
-                 dark:text-slate-300 dark:hover:bg-slate-700/60 dark:hover:text-white
-                 transition-colors cursor-pointer bg-transparent border-0 p-0
-                 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
-          :aria-label="isDark ? '切换到浅色模式' : '切换到深色模式'"
-          :title="isDark ? '切换到浅色模式' : '切换到深色模式'"
-          @click="toggleTheme"
-        >
-          <svg v-if="isDark" class="h-5 w-5" fill="none" viewBox="0 0 24 24"
-               stroke="currentColor" stroke-width="2" stroke-linecap="round"
-               stroke-linejoin="round">
-            <circle cx="12" cy="12" r="4" />
-            <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41" />
-          </svg>
-          <svg v-else class="h-5 w-5" fill="none" viewBox="0 0 24 24"
-               stroke="currentColor" stroke-width="2" stroke-linecap="round"
-               stroke-linejoin="round">
-            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
-          </svg>
-        </button>
+        <!-- AM-THEME-TOGGLE-START：三选项主题切换菜单 -->
+        <div ref="themeMenuRef" class="relative">
+          <button
+            type="button"
+            class="inline-flex h-9 w-auto items-center justify-center gap-1.5 rounded-full
+                   px-2.5 sm:px-3 lg:w-9 lg:px-0
+                   text-slate-600 hover:bg-slate-100 hover:text-slate-900
+                   dark:text-slate-300 dark:hover:bg-slate-700/60 dark:hover:text-white
+                   transition-colors cursor-pointer bg-transparent border-0
+                   focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+            aria-haspopup="menu"
+            :aria-expanded="themeMenuOpen ? 'true' : 'false'"
+            :aria-label="`切换主题（当前：${currentTheme.label}）`"
+            :title="`主题：${currentTheme.label}`"
+            @click.stop="toggleThemeMenu"
+          >
+            <svg class="h-5 w-5 shrink-0" fill="none" viewBox="0 0 24 24"
+                 stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                 stroke-linejoin="round" aria-hidden="true">
+              <path d="M12 21a9 9 0 1 1 9-9c0 1.66-1.34 3-3 3h-2.5a2 2 0 0 0-1.4 3.4c.3.3.4.7.4 1.1a1.5 1.5 0 0 1-1.5 1.5z" />
+              <circle cx="7.5" cy="10.5" r="1" fill="currentColor" />
+              <circle cx="12" cy="7.5" r="1" fill="currentColor" />
+              <circle cx="16.5" cy="10.5" r="1" fill="currentColor" />
+            </svg>
+            <!-- 桌面端（lg 起）只留图标，避免加宽右侧把中间的搜索胶囊挤偏，
+                 导致导航三个按钮无法完整落在胶囊内；当前主题名见下拉与 title -->
+            <span class="hidden sm:inline lg:hidden text-sm font-bold">{{ currentTheme.label }}</span>
+            <svg class="hidden sm:block lg:hidden h-4 w-4 text-slate-400 transition-transform"
+                 :class="themeMenuOpen ? 'rotate-180' : ''"
+                 fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"
+                 aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M6 9l6 6 6-6" />
+            </svg>
+          </button>
+
+          <Transition
+            enter-active-class="transition duration-150 ease-out"
+            enter-from-class="opacity-0 -translate-y-1"
+            enter-to-class="opacity-100 translate-y-0"
+            leave-active-class="transition duration-100 ease-in"
+            leave-from-class="opacity-100 translate-y-0"
+            leave-to-class="opacity-0 -translate-y-1"
+          >
+            <div
+              v-if="themeMenuOpen"
+              role="menu"
+              class="absolute right-0 top-full z-50 mt-2 w-64 overflow-hidden rounded-xl
+                     bg-white dark:bg-slate-800 p-1.5 shadow-xl shadow-slate-900/10
+                     ring-1 ring-slate-900/5 dark:ring-white/10"
+            >
+              <p class="px-3 pt-1.5 pb-1 text-[11px] font-bold tracking-widest text-slate-400">
+                界面主题
+              </p>
+              <button
+                v-for="t in THEMES"
+                :key="t.id"
+                type="button"
+                role="menuitemradio"
+                :aria-checked="theme === t.id ? 'true' : 'false'"
+                class="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left
+                       transition-colors cursor-pointer bg-transparent border-0"
+                :class="theme === t.id
+                  ? 'bg-blue-50 dark:bg-blue-500/15'
+                  : 'hover:bg-slate-50 dark:hover:bg-slate-700/60'"
+                @click="chooseTheme(t.id)"
+              >
+                <span class="min-w-0 flex-1">
+                  <span
+                    class="block text-sm font-bold"
+                    :class="theme === t.id
+                      ? 'text-blue-600 dark:text-blue-400'
+                      : 'text-slate-700 dark:text-slate-200'"
+                  >
+                    {{ t.label }}{{ t.id === 'official' ? '（默认）' : '' }}
+                  </span>
+                  <span class="mt-0.5 block truncate text-xs text-slate-400">
+                    {{ t.hint }}
+                  </span>
+                </span>
+                <svg
+                  v-if="theme === t.id"
+                  class="h-4 w-4 shrink-0 text-blue-600 dark:text-blue-400"
+                  fill="none" viewBox="0 0 24 24"
+                  stroke="currentColor" stroke-width="2.5" stroke-linecap="round"
+                  stroke-linejoin="round" aria-hidden="true"
+                >
+                  <path d="M20 6L9 17l-5-5" />
+                </svg>
+              </button>
+            </div>
+          </Transition>
+        </div>
         <!-- AM-THEME-TOGGLE-END -->
 
         <!-- 未登录 -->
@@ -493,27 +592,24 @@ onBeforeUnmount(() => {
         </nav>
 
         <div class="mt-3 border-t border-slate-200 dark:border-slate-700 pt-3">
-          <!-- AM-MOBILE-THEME-START -->
-          <button
-            type="button"
-            class="w-full rounded-xl px-4 py-3 flex items-center justify-between
-                   text-left text-base font-bold text-slate-700 dark:text-slate-200
-                   hover:bg-slate-100 dark:hover:bg-slate-700/60 transition-colors"
-            @click="toggleTheme"
-          >
-            <span>{{ isDark ? '浅色模式' : '深色模式' }}</span>
-            <svg v-if="isDark" class="h-5 w-5" fill="none" viewBox="0 0 24 24"
-                 stroke="currentColor" stroke-width="2" stroke-linecap="round"
-                 stroke-linejoin="round">
-              <circle cx="12" cy="12" r="4" />
-              <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41" />
-            </svg>
-            <svg v-else class="h-5 w-5" fill="none" viewBox="0 0 24 24"
-                 stroke="currentColor" stroke-width="2" stroke-linecap="round"
-                 stroke-linejoin="round">
-              <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
-            </svg>
-          </button>
+          <!-- AM-MOBILE-THEME-START：三选项主题切换 -->
+          <p class="px-1 pb-2 text-xs font-bold tracking-widest text-slate-400">界面主题</p>
+          <div class="grid grid-cols-3 gap-2">
+            <button
+              v-for="t in THEMES"
+              :key="t.id"
+              type="button"
+              class="rounded-xl px-2 py-2.5 text-center text-sm font-bold transition-colors
+                     border"
+              :class="theme === t.id
+                ? 'bg-blue-50 dark:bg-blue-500/15 text-blue-600 dark:text-blue-400 border-blue-200 dark:border-blue-500/40'
+                : 'text-slate-700 dark:text-slate-200 border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-700/60'"
+              :aria-pressed="theme === t.id ? 'true' : 'false'"
+              @click="chooseTheme(t.id)"
+            >
+              {{ t.label }}
+            </button>
+          </div>
           <!-- AM-MOBILE-THEME-END -->
 
           <template v-if="!isLoggedIn">
