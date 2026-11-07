@@ -12,6 +12,14 @@ export default defineConfig({
   },
   server: {
     port: 5173,
-    open: false
+    open: false,
+    // 开发期同源代理：前端统一请求 /api/*，由 Vite 转发到本地后端，
+    // 与生产 Nginx 的行为保持一致（保留 /api 前缀）。
+    proxy: {
+      '/api': {
+        target: 'http://127.0.0.1:8000',
+        changeOrigin: true
+      }
+    }
   }
 })

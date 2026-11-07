@@ -7,6 +7,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+import config
 import db
 from routers import ai, auth, competitions, preparations
 
@@ -17,14 +18,22 @@ app = FastAPI(
 )
 
 # ---------------------------------------------------------------------------
-# CORS 跨域配置
+# CORS 跨域配置（白名单模式）
 # ---------------------------------------------------------------------------
+# 允许的前端来源统一由 CORS_ALLOW_ORIGINS 配置（逗号分隔），不再使用通配符。
+# 默认值仅覆盖本地开发端口；生产环境必须在 .env / 部署环境中改为真实前端域名。
+if "*" in config.CORS_ALLOW_ORIGINS:
+    raise RuntimeError(
+        "CORS_ALLOW_ORIGINS 不允许使用通配符 *，请配置明确的前端来源白名单"
+    )
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],          # 开发阶段放开，上线前请替换为具体前端域名
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=config.CORS_ALLOW_ORIGINS,
+    allow_credentials=False,       # 鉴权使用 Authorization: Bearer，不依赖 Cookie
+    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
+    max_age=600,
 )
 
 

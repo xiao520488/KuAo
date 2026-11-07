@@ -122,7 +122,7 @@ function goWorkspace(id) {
       </header>
 
       <!-- 加载态 -->
-      <div v-if="loading" class="flex items-center justify-center py-24 text-slate-400">
+      <div v-if="loading" class="flex items-center justify-center py-24 text-slate-500 dark:text-slate-400">
         <svg class="mr-3 h-5 w-5 animate-spin" viewBox="0 0 24 24" fill="none">
           <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" class="opacity-20" />
           <path d="M22 12a10 10 0 0 1-10 10" stroke="currentColor" stroke-width="3" stroke-linecap="round" />
@@ -153,12 +153,12 @@ function goWorkspace(id) {
         <div
           class="mx-auto mb-5 flex h-14 w-14 items-center justify-center rounded-full bg-slate-100 dark:bg-slate-700/60"
         >
-          <svg class="h-7 w-7 text-slate-400" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
+          <svg class="h-7 w-7 text-slate-500 dark:text-slate-400" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" d="M12 6v12m6-6H6" />
           </svg>
         </div>
         <p class="font-bold text-slate-700 dark:text-slate-200">还没有加入任何备赛</p>
-        <p class="mt-1 text-sm text-slate-400">去竞赛列表挑一项感兴趣的，点击「加入备赛」即可开始</p>
+        <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">去竞赛列表挑一项感兴趣的，点击「加入备赛」即可开始</p>
         <button
           type="button"
           class="mt-6 rounded-full bg-blue-600 px-6 py-2 text-sm font-bold text-white

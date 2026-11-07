@@ -184,7 +184,7 @@ function onLogout() {
             <span v-if="loading" class="inline-block h-8 w-12 animate-pulse rounded bg-slate-100 dark:bg-slate-700/60"></span>
             <template v-else>{{ prepTotal }}</template>
           </p>
-          <p class="mt-1 text-xs text-slate-400">项竞赛已加入备赛列表</p>
+          <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">项竞赛已加入备赛列表</p>
         </div>
 
         <!-- AI 剩余次数 -->
@@ -200,11 +200,11 @@ function onLogout() {
               :style="{ width: quotaUsedPercent + '%' }"
             ></div>
           </div>
-          <p class="mt-1 text-xs text-slate-400">
+          <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
             {{ quotaUnlimited ? '当前账号不限次数' : `已用 ${quota.used} / ${quota.limit}` }}
           </p>
           <p class="mt-3 flex items-start gap-1.5 rounded-lg bg-slate-50 dark:bg-slate-900 px-3 py-2 text-[11px] font-semibold leading-relaxed text-slate-500 dark:text-slate-400 ring-1 ring-inset ring-slate-200 dark:ring-slate-700">
-            <svg class="mt-0.5 h-3.5 w-3.5 flex-shrink-0 text-slate-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <svg class="mt-0.5 h-3.5 w-3.5 flex-shrink-0 text-slate-500 dark:text-slate-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
               <circle cx="12" cy="12" r="9" />
               <path stroke-linecap="round" d="M12 8v.01M12 11v5" />
             </svg>
@@ -219,7 +219,7 @@ function onLogout() {
             <span class="inline-block h-2.5 w-2.5 rounded-full bg-emerald-500"></span>
             正常
           </p>
-          <p class="mt-1 text-xs text-slate-400">已登录，可正常使用全部功能</p>
+          <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">已登录，可正常使用全部功能</p>
         </div>
       </section>
 

@@ -23,6 +23,13 @@ from typing import Any, Optional
 
 from openai import OpenAI, APIError, APITimeoutError, RateLimitError
 
+# 当前锁定的 openai 版本内部使用 httpx2；Timeout 类型必须与 SDK 使用同一套，
+# 否则 httpx.Timeout 会被 httpx2 当成普通对象，运行时才报错。
+try:  # pragma: no cover - 取决于安装的 openai 版本
+    from openai._client import httpx2 as httpx
+except ImportError:  # pragma: no cover - 兼容使用标准 httpx 的 openai 版本
+    import httpx  # type: ignore[no-redef]
+
 import config as cfg
 from json_repair import repair_json
 
@@ -82,7 +89,6 @@ MODEL = cfg.LLM_MODEL
 
 MAX_RETRIES = cfg.LLM_MAX_RETRIES
 RETRY_BASE_DELAY = cfg.LLM_RETRY_BASE_DELAY
-DEFAULT_TIMEOUT = cfg.LLM_TIMEOUT
 # 空正文自动扩容上限
 MAX_TOKENS_CEILING = cfg.LLM_MAX_TOKENS_CEILING
 # 是否启用 response_format={"type": "json_object"}
@@ -113,7 +119,14 @@ def _get_client() -> OpenAI:
     if _client is None:
         if not API_KEY:
             raise LLMError("缺少 DEEPSEEK_API_KEY，请检查 .env")
-        _client = OpenAI(api_key=API_KEY, base_url=BASE_URL, timeout=DEFAULT_TIMEOUT)
+        # max_retries=0：关闭 SDK 自带重试，避免与 _call 的指数退避叠加。
+        # 连接 5s、读取 45s；httpx 要求未给默认值时四项都显式设置，故补 write/pool。
+        _client = OpenAI(
+            api_key=API_KEY,
+            base_url=BASE_URL,
+            timeout=httpx.Timeout(connect=5.0, read=45.0, write=10.0, pool=5.0),
+            max_retries=0,
+        )
     return _client
 
 

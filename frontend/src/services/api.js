@@ -1,11 +1,14 @@
 import axios from 'axios'
+import { clearUserLocalData } from './localUserData'
 
 /**
  * 全局 axios 实例
- * 后端 FastAPI 服务地址：http://127.0.0.1:8000
+ * - 生产：默认走同源 /api，由 Nginx 反向代理到后端，避免 CORS 与 Mixed Content
+ * - 开发：vite.config.js 已把 /api 代理到 http://127.0.0.1:8000，
+ *   也可用 VITE_API_BASE_URL 指向完整地址（需包含 /api 前缀，如 http://127.0.0.1:8000/api）
  */
 const api = axios.create({
-  baseURL: 'http://127.0.0.1:8000',
+  baseURL: import.meta.env.VITE_API_BASE_URL || '/api',
   timeout: 60000,
   headers: {
     'Content-Type': 'application/json'
@@ -79,11 +82,24 @@ api.interceptors.response.use(
       // 服务端有响应但状态码非 2xx
       const { status, data } = error.response
 
-      // Token 失效 / 未登录：清掉本地凭证，并通知上层（Header 监听后回到未登录态）
+      // Token 失效 / 未登录：清掉本地凭证与本地用户数据，并通知上层
       if (status === 401) {
+        const requestUrl = String(error.config?.url || '')
+        // 登录 / 注册接口的 401 表示“账号密码错误”，不是会话失效。
+        // 此时不能清本地计划与收藏（用户可能只是重新登录时输错密码），
+        // 也不能派发 auth:unauthorized，否则会被上层当成“被踢下线”。
+        const isCredentialRequest =
+          requestUrl.includes('/auth/login') || requestUrl.includes('/auth/register')
+
         clearAuthStorage()
-        if (typeof window !== 'undefined') {
-          window.dispatchEvent(new CustomEvent('auth:unauthorized'))
+
+        if (!isCredentialRequest) {
+          // 计划 / 对话 / 收藏都只属于当前登录用户，凭证失效时必须一并清空，
+          // 否则换账号或共享设备会读到上一个人的数据。
+          clearUserLocalData()
+          if (typeof window !== 'undefined') {
+            window.dispatchEvent(new CustomEvent('auth:unauthorized'))
+          }
         }
       }
 
@@ -103,7 +119,7 @@ api.interceptors.response.use(
     } else if (error.code === 'ECONNABORTED') {
       message = '请求超时，请检查后端服务是否已启动'
     } else if (error.request) {
-      message = '无法连接服务器，请确认后端已在 127.0.0.1:8000 启动'
+      message = '无法连接服务器，请检查网络或稍后重试'
     }
 
     return Promise.reject(new Error(message))
@@ -120,7 +136,7 @@ api.interceptors.response.use(
  * @returns {Promise<{ used: number, limit: number, remaining: number|null }>}
  */
 export function getAiQuota() {
-  return api.get('/api/ai/quota').then((data) => ({
+  return api.get('/ai/quota').then((data) => ({
     used: Number(data?.used) || 0,
     limit: Number(data?.limit) || 0,
     remaining:
@@ -149,7 +165,7 @@ export function normalizeCompetitionId(id) {
  * @returns {Promise<Array>} 竞赛数组
  */
 export function getCompetitions(params = {}) {
-  return api.get('/api/competitions', { params }).then((data) => {
+  return api.get('/competitions', { params }).then((data) => {
     // 兼容后端返回 { data: [...] } / { items: [...] } 或直接数组
     if (Array.isArray(data)) return data
     if (Array.isArray(data?.data)) return data.data
@@ -173,7 +189,7 @@ export function searchCompetitions(query) {
   // 后端对空白 query 返回 422，本地先拦一道，省一次无效往返
   if (!q) return Promise.reject(new Error('请输入要搜索的赛事描述'))
 
-  return api.post('/api/ai/search', { query: q }).then((data) => {
+  return api.post('/ai/search', { query: q }).then((data) => {
     const items = Array.isArray(data?.items)
       ? data.items
       : Array.isArray(data?.data)
@@ -203,7 +219,7 @@ export function searchCompetitions(query) {
 export function getCompetitionDetail(id) {
   const cid = normalizeCompetitionId(id)
   if (cid === null) return Promise.reject(new Error('竞赛 ID 无效'))
-  return api.get(`/api/competitions/${cid}`).then((data) => {
+  return api.get(`/competitions/${cid}`).then((data) => {
     if (data && typeof data === 'object') {
       if (data.data && typeof data.data === 'object') return data.data
       return data
@@ -233,7 +249,7 @@ export function analyzeWork(workId, options = {}) {
   const body = { work_id: wid }
   if (cid !== null) body.competition_id = cid
 
-  return api.post('/api/ai/analyze-work', body).then((data) => ({
+  return api.post('/ai/analyze-work', body).then((data) => ({
     analysis: typeof data?.analysis === 'string' ? data.analysis : ''
   }))
 }
@@ -249,7 +265,7 @@ export function analyzeWorks(competitionId) {
   const cid = normalizeCompetitionId(competitionId)
   if (cid === null) return Promise.reject(new Error('竞赛 ID 无效'))
 
-  return api.post('/api/ai/analyze', { competition_id: cid }).then((data) => ({
+  return api.post('/ai/analyze', { competition_id: cid }).then((data) => ({
     analysis: typeof data?.analysis === 'string' ? data.analysis : ''
   }))
 }
@@ -268,7 +284,7 @@ export function getInspirations(competitionId) {
   const cid = normalizeCompetitionId(competitionId)
   if (cid === null) return Promise.reject(new Error('竞赛 ID 无效'))
 
-  return api.get('/api/ai/inspirations', { params: { competition_id: cid } }).then((data) => ({
+  return api.get('/ai/inspirations', { params: { competition_id: cid } }).then((data) => ({
     competition_id: Number(data?.competition_id) || cid,
     competition_name: typeof data?.competition_name === 'string' ? data.competition_name : '',
     work_count: Number(data?.work_count) || 0,
@@ -294,7 +310,7 @@ export function getCompetitionAwards(competitionId, options = {}) {
   const limit = Number(options.limit)
   if (Number.isInteger(limit) && limit > 0) params.limit = limit
 
-  return api.get(`/api/competitions/${cid}/awards`, { params }).then((data) => {
+  return api.get(`/competitions/${cid}/awards`, { params }).then((data) => {
     const items = Array.isArray(data?.items)
       ? data.items
       : Array.isArray(data?.data)
@@ -329,7 +345,7 @@ export function generatePlan(payload = {}) {
         : null
   }
 
-  return api.post('/api/ai/plan', body).then((data) => {
+  return api.post('/ai/plan', body).then((data) => {
     const status = typeof data?.status === 'string' ? data.status : 'plan'
     return {
       status,
@@ -345,7 +361,7 @@ export function generatePlan(payload = {}) {
  * Requires auth; the interceptor already unwraps to the response body.
  */
 export function getMyPreparations() {
-  return api.get('/api/preparations').then((data) => ({
+  return api.get('/preparations').then((data) => ({
     total: Number.isFinite(data?.total)
       ? data.total
       : Array.isArray(data?.items)
@@ -360,7 +376,7 @@ export function checkPrepared(competitionId) {
   const cid = normalizeCompetitionId(competitionId)
   if (cid === null) return Promise.resolve(false)
   return api
-    .get(`/api/preparations/check/${cid}`)
+    .get(`/preparations/check/${cid}`)
     .then((data) => data?.prepared === true)
     .catch(() => false)
 }
@@ -369,14 +385,14 @@ export function checkPrepared(competitionId) {
 export function addPreparation(competitionId) {
   const cid = normalizeCompetitionId(competitionId)
   if (cid === null) return Promise.reject(new Error('竞赛 ID 无效'))
-  return api.post(`/api/preparations/${cid}`)
+  return api.post(`/preparations/${cid}`)
 }
 
 /** Remove a competition from my prep list. */
 export function removePreparation(competitionId) {
   const cid = normalizeCompetitionId(competitionId)
   if (cid === null) return Promise.reject(new Error('竞赛 ID 无效'))
-  return api.delete(`/api/preparations/${cid}`)
+  return api.delete(`/preparations/${cid}`)
 }
 
 export default api

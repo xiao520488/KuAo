@@ -133,8 +133,12 @@ def get_conn(path: Optional[str] = None):
     db_path = path or DB_PATH
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
+    # 先设等待时间，再切 WAL：避免切换日志模式时因短暂锁竞争直接失败。
+    # WAL：读写不互相阻塞，显著降低并发写入时的 database is locked 概率。
+    # busy_timeout：写锁竞争时最多等待 10s，而不是立刻报错。
+    conn.execute("PRAGMA busy_timeout = 10000")
+    conn.execute("PRAGMA journal_mode = WAL")
     conn.execute("PRAGMA foreign_keys = ON")
-    conn.execute("PRAGMA busy_timeout = 5000")
     try:
         yield conn
         conn.commit()

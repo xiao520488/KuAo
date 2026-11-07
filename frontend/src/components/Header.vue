@@ -281,7 +281,7 @@ onBeforeUnmount(() => {
                  px-4 py-2 ring-1 ring-slate-200/70 dark:ring-slate-700 transition-all
                  focus-within:bg-white dark:focus-within:bg-slate-800 focus-within:ring-blue-500/40"
         >
-          <svg class="h-4 w-4 shrink-0 text-slate-400" fill="none" viewBox="0 0 24 24"
+          <svg class="h-4 w-4 shrink-0 text-slate-500 dark:text-slate-400" fill="none" viewBox="0 0 24 24"
                stroke="currentColor" stroke-width="2" stroke-linecap="round"
                stroke-linejoin="round">
             <path
@@ -294,7 +294,7 @@ onBeforeUnmount(() => {
             type="text"
             placeholder="搜索..."
             class="w-full min-w-0 bg-transparent text-sm font-medium text-slate-800 dark:text-slate-100
-                   placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:outline-none"
+                   placeholder:text-slate-500 dark:placeholder:text-slate-500 focus:outline-none"
             :disabled="searching"
             @keyup.enter="onSearch"
           />
@@ -330,7 +330,7 @@ onBeforeUnmount(() => {
             <!-- 桌面端（lg 起）只留图标，避免加宽右侧把中间的搜索胶囊挤偏，
                  导致导航三个按钮无法完整落在胶囊内；当前主题名见下拉与 title -->
             <span class="hidden sm:inline lg:hidden text-sm font-bold">{{ currentTheme.label }}</span>
-            <svg class="hidden sm:block lg:hidden h-4 w-4 text-slate-400 transition-transform"
+            <svg class="hidden sm:block lg:hidden h-4 w-4 text-slate-500 dark:text-slate-400 transition-transform"
                  :class="themeMenuOpen ? 'rotate-180' : ''"
                  fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"
                  aria-hidden="true">
@@ -353,7 +353,7 @@ onBeforeUnmount(() => {
                      bg-white dark:bg-slate-800 p-1.5 shadow-xl shadow-slate-900/10
                      ring-1 ring-slate-900/5 dark:ring-white/10"
             >
-              <p class="px-3 pt-1.5 pb-1 text-[11px] font-bold tracking-widest text-slate-400">
+              <p class="px-3 pt-1.5 pb-1 text-[11px] font-bold tracking-widest text-slate-500 dark:text-slate-400">
                 界面主题
               </p>
               <button
@@ -378,7 +378,7 @@ onBeforeUnmount(() => {
                   >
                     {{ t.label }}{{ t.id === 'official' ? '（默认）' : '' }}
                   </span>
-                  <span class="mt-0.5 block truncate text-xs text-slate-400">
+                  <span class="mt-0.5 block truncate text-xs text-slate-500 dark:text-slate-400">
                     {{ t.hint }}
                   </span>
                 </span>
@@ -432,7 +432,7 @@ onBeforeUnmount(() => {
               {{ user?.username }}
             </span>
             <svg
-              class="h-4 w-4 text-slate-400 transition-transform"
+              class="h-4 w-4 text-slate-500 dark:text-slate-400 transition-transform"
               :class="menuOpen ? 'rotate-180' : ''"
               fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"
             >
@@ -456,7 +456,7 @@ onBeforeUnmount(() => {
             >
               <div class="px-3 py-2">
                 <p class="truncate text-sm font-bold text-slate-800 dark:text-slate-100">{{ user?.username }}</p>
-                <p class="truncate text-xs text-slate-400">{{ user?.email || '已登录' }}</p>
+                <p class="truncate text-xs text-slate-500 dark:text-slate-400">{{ user?.email || '已登录' }}</p>
               </div>
               <div class="my-1 h-px bg-slate-100 dark:bg-slate-700/60" />
               <router-link
@@ -559,7 +559,7 @@ onBeforeUnmount(() => {
                  px-4 py-2 ring-1 ring-slate-200/70 dark:ring-slate-700
                  focus-within:bg-white dark:focus-within:bg-slate-800 focus-within:ring-blue-500/40"
         >
-          <svg class="h-4 w-4 shrink-0 text-slate-400" fill="none" viewBox="0 0 24 24"
+          <svg class="h-4 w-4 shrink-0 text-slate-500 dark:text-slate-400" fill="none" viewBox="0 0 24 24"
                stroke="currentColor" stroke-width="2" stroke-linecap="round"
                stroke-linejoin="round">
             <path
@@ -571,7 +571,7 @@ onBeforeUnmount(() => {
             type="text"
             placeholder="搜索竞赛..."
             class="w-full min-w-0 bg-transparent text-sm text-slate-700 dark:text-slate-200
-                   placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:outline-none"
+                   placeholder:text-slate-500 dark:placeholder:text-slate-500 focus:outline-none"
             @keyup.enter="onMobileSearch"
           />
         </div>
@@ -593,7 +593,7 @@ onBeforeUnmount(() => {
 
         <div class="mt-3 border-t border-slate-200 dark:border-slate-700 pt-3">
           <!-- AM-MOBILE-THEME-START：三选项主题切换 -->
-          <p class="px-1 pb-2 text-xs font-bold tracking-widest text-slate-400">界面主题</p>
+          <p class="px-1 pb-2 text-xs font-bold tracking-widest text-slate-500 dark:text-slate-400">界面主题</p>
           <div class="grid grid-cols-3 gap-2">
             <button
               v-for="t in THEMES"

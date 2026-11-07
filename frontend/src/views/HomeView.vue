@@ -519,7 +519,7 @@ watch(
         >
           <!-- 放大镜 Icon -->
           <svg
-            class="h-6 w-6 shrink-0 text-slate-400"
+            class="h-6 w-6 shrink-0 text-slate-500 dark:text-slate-400"
             fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"
             aria-hidden="true"
           >
@@ -531,7 +531,7 @@ watch(
             v-model="keyword"
             type="text"
             placeholder="输入比赛名称，或像聊天一样描述需求（如：我想找寒假能准备的算法赛）..."
-            class="w-full bg-transparent text-base text-slate-800 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500
+            class="w-full bg-transparent text-base text-slate-800 dark:text-slate-100 placeholder:text-slate-500 dark:placeholder:text-slate-500
                    font-medium focus:outline-none disabled:opacity-60"
             :disabled="searching"
             @keyup.enter="submitSearch"
@@ -542,7 +542,7 @@ watch(
             v-if="keyword"
             type="button"
             aria-label="清空搜索"
-            class="mr-1 shrink-0 rounded-full p-1.5 text-slate-400
+            class="mr-1 shrink-0 rounded-full p-1.5 text-slate-500 dark:text-slate-400
                    hover:bg-slate-100 dark:hover:bg-slate-700/60 hover:text-slate-600 dark:hover:text-slate-300 transition-colors
                    disabled:cursor-not-allowed disabled:opacity-50"
             :disabled="searching"
@@ -579,7 +579,7 @@ watch(
       <button
         type="button"
         class="absolute bottom-24 left-1/2 z-10 -translate-x-1/2
-               flex flex-col items-center gap-2 text-slate-400
+               flex flex-col items-center gap-2 text-slate-500 dark:text-slate-400
                transition-colors hover:text-blue-600 dark:hover:text-blue-400
                focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 rounded-lg"
         @click="scrollToList"
@@ -604,7 +604,7 @@ watch(
         <h2 class="text-2xl font-extrabold tracking-tight text-slate-900 dark:text-slate-100">
           {{ searched ? '检索结果' : '热门竞赛' }}
         </h2>
-        <p class="mt-2 text-sm font-medium text-slate-400">
+        <p class="mt-2 text-sm font-medium text-slate-500 dark:text-slate-400">
           {{ searched ? 'AI 根据你的描述匹配的赛事' : '为你精选的高含金量赛事' }}
         </p>
       </div>
@@ -667,7 +667,7 @@ watch(
         <p class="font-bold text-slate-500 dark:text-slate-400">
           {{ searched ? '未找到相关赛事，换个描述试试' : '暂无竞赛数据' }}
         </p>
-        <p class="mt-1 text-sm text-slate-400">
+        <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">
           {{ searched ? '可以试试更宽泛的方向，或更换关键词' : '稍后再来看看吧' }}
         </p>
       </div>
@@ -723,12 +723,22 @@ watch(
 </template>
 
 <style scoped>
-/* 「官方风」Hero 背景图：由 Vite 处理 @ 别名并打包出带 hash 的静态资源 */
+/* 「官方风」Hero 背景：
+ * - 移动端（< 768px）完全不加载大图，用同色系渐变兜底，避免首屏被图片拖慢；
+ * - 桌面端才请求压缩后的 2560px 背景图（已从 4K/965 KB 压到约 90 KB）。
+ * 图片只写在媒体查询内，手机端不会发起该资源请求。 */
 .hero-official-bg {
-  background-image: url('@/assets/hero-bg.jpg');
+  background-color: #eaf6f2;
+  background-image: linear-gradient(160deg, #eef8f5 0%, #e2f2ec 52%, #f7fbf9 100%);
   background-position: center;
   background-repeat: no-repeat;
   background-size: cover;
+}
+
+@media (min-width: 768px) {
+  .hero-official-bg {
+    background-image: url('@/assets/hero-bg.jpg');
+  }
 }
 
 /* 多层波浪持续交错流动：整组左移一个完整周期（1440 用户单位）后无缝回到起点。

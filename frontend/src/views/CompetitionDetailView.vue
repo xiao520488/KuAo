@@ -116,6 +116,27 @@ const renderedGuide = computed(() => {
   if (!detail.value?.full_process_guide) return ''
   return DOMPurify.sanitize(marked.parse(detail.value.full_process_guide))
 })
+
+/**
+ * 外链安全校验：只允许 http / https 的绝对地址。
+ *
+ * 后端字段（爬虫入库 / 运营录入）不可信，`javascript:alert(...)` 这类值
+ * 直接绑到 :href 会在点击时执行。解析失败或协议不符一律返回空串，
+ * 模板据此隐藏“查看官网”入口。
+ */
+function safeExternalUrl(raw) {
+  if (typeof raw !== 'string') return ''
+  const value = raw.trim()
+  if (!/^https?:\/\//i.test(value)) return ''
+  try {
+    const parsed = new URL(value)
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:' ? parsed.href : ''
+  } catch (e) {
+    return ''
+  }
+}
+
+const officialUrl = computed(() => safeExternalUrl(detail.value?.official_url))
 </script>
 
 <template>
@@ -148,7 +169,7 @@ const renderedGuide = computed(() => {
       <!-- 正常内容 -->
       <template v-else>
         <!-- 1. 全宽竞赛大图占位 -->
-<div class="mt-8 w-full"><div class="w-full h-64 bg-slate-50 dark:bg-slate-900 border-2 border-dashed border-slate-300 dark:border-slate-600 rounded-2xl flex items-center justify-center overflow-hidden relative"><img v-if="detail?.image" :src="detail.image" class="w-full h-full object-cover" /><svg v-else class="w-16 h-16 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg></div></div>
+<div class="mt-8 w-full"><div class="w-full h-64 bg-slate-50 dark:bg-slate-900 border-2 border-dashed border-slate-300 dark:border-slate-600 rounded-2xl flex items-center justify-center overflow-hidden relative"><img v-if="detail?.image" :src="detail.image" class="w-full h-full object-cover" /><svg v-else class="w-16 h-16 text-slate-500 dark:text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg></div></div>
 
         <!-- 2. 信息区：超大加粗标题 + 时间 -->
         <section class="mt-10 pb-2">
@@ -158,16 +179,16 @@ const renderedGuide = computed(() => {
 
           <div class="mt-6 flex flex-wrap items-center gap-x-10 gap-y-3 text-base">
             <p class="flex items-center gap-2">
-              <span class="font-medium text-slate-400">报名时间</span>
+              <span class="font-medium text-slate-500 dark:text-slate-400">报名时间</span>
               <span class="font-bold text-slate-800 dark:text-slate-100">{{ detail?.signUpTime }}</span>
             </p>
             <p class="flex items-center gap-2">
-              <span class="font-medium text-slate-400">比赛时间</span>
+              <span class="font-medium text-slate-500 dark:text-slate-400">比赛时间</span>
               <span class="font-bold text-slate-800 dark:text-slate-100">{{ detail?.contestTime }}</span>
             </p>
             <a
-              v-if="detail.official_url"
-              :href="detail.official_url"
+              v-if="officialUrl"
+              :href="officialUrl"
               target="_blank"
               rel="noopener noreferrer"
               class="ml-auto inline-flex items-center gap-1 rounded-full bg-blue-50 px-3.5 py-1.5 text-xs font-bold

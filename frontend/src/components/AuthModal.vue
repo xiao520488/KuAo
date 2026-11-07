@@ -150,7 +150,7 @@ onBeforeUnmount(() => {
           <!-- 关闭 -->
           <button
             type="button"
-            class="absolute right-4 top-4 rounded-full p-1.5 text-slate-400
+            class="absolute right-4 top-4 rounded-full p-1.5 text-slate-500 dark:text-slate-400
                    hover:bg-slate-100 dark:hover:bg-slate-700/60 hover:text-slate-600 dark:hover:text-slate-300 transition-colors"
             aria-label="关闭"
             @click="close"
@@ -199,7 +199,7 @@ onBeforeUnmount(() => {
                 autocomplete="username"
                 placeholder="请输入用户名"
                 class="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50/60 dark:bg-slate-800/60 px-4 py-2.5
-                       text-sm font-medium text-slate-800 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500
+                       text-sm font-medium text-slate-800 dark:text-slate-100 placeholder:text-slate-500 dark:placeholder:text-slate-500
                        outline-none transition-all
                        focus:border-blue-400 dark:focus:border-blue-500 focus:bg-white dark:focus:bg-slate-800 focus:ring-2 focus:ring-blue-500/20 dark:focus:ring-blue-400/30"
                 :disabled="submitting"
@@ -214,7 +214,7 @@ onBeforeUnmount(() => {
                 :autocomplete="isRegister ? 'new-password' : 'current-password'"
                 placeholder="请输入密码"
                 class="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50/60 dark:bg-slate-800/60 px-4 py-2.5
-                       text-sm font-medium text-slate-800 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500
+                       text-sm font-medium text-slate-800 dark:text-slate-100 placeholder:text-slate-500 dark:placeholder:text-slate-500
                        outline-none transition-all
                        focus:border-blue-400 dark:focus:border-blue-500 focus:bg-white dark:focus:bg-slate-800 focus:ring-2 focus:ring-blue-500/20 dark:focus:ring-blue-400/30"
                 :disabled="submitting"
@@ -229,7 +229,7 @@ onBeforeUnmount(() => {
                 autocomplete="new-password"
                 placeholder="请再次输入密码"
                 class="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50/60 dark:bg-slate-800/60 px-4 py-2.5
-                       text-sm font-medium text-slate-800 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500
+                       text-sm font-medium text-slate-800 dark:text-slate-100 placeholder:text-slate-500 dark:placeholder:text-slate-500
                        outline-none transition-all
                        focus:border-blue-400 dark:focus:border-blue-500 focus:bg-white dark:focus:bg-slate-800 focus:ring-2 focus:ring-blue-500/20 dark:focus:ring-blue-400/30"
                 :disabled="submitting"

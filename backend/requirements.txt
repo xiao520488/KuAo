@@ -1,3 +1,25 @@
-fastapi>=0.110.0
-uvicorn[standard]>=0.27.0
-pydantic>=2.6.0
+# ============================================================
+# 后端运行时依赖（版本与本项目 venv 验证环境一致）
+# 安装：python -m pip install -r requirements.txt
+# 注意：升级大版本前请先跑 test_api_boundaries.py 与 test_embedder.py
+# ============================================================
+
+# --- Web 框架 / 配置 ---
+fastapi==0.162.0
+uvicorn[standard]==0.54.0
+pydantic==2.14.2
+python-dotenv==1.2.4
+
+# --- 鉴权 ---
+bcrypt==5.0.0
+PyJWT==2.15.1
+
+# --- 大模型 / JSON 修复 ---
+openai==3.42.1
+json_repair==0.64.4
+
+# --- 向量检索 ---
+chromadb==1.5.9
+
+# --- HTTP 客户端（TestClient / 外部接口）---
+httpx==0.28.1

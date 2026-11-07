@@ -268,7 +268,7 @@ onBeforeUnmount(() => {
             class="relative flex min-w-0 flex-1 flex-wrap items-center gap-2"
             @mouseleave="onMenuAreaLeave"
           >
-            <span class="shrink-0 text-sm font-medium text-slate-400">科目</span>
+            <span class="shrink-0 text-sm font-medium text-slate-500 dark:text-slate-400">科目</span>
 
             <button
               type="button"
@@ -310,7 +310,7 @@ onBeforeUnmount(() => {
 
             <!-- 多选结果：v-for 渲染每个选中项，X 只移除对应的一项 -->
             <div v-if="selectedMajors.length" class="flex w-full flex-wrap items-center gap-2">
-              <span class="text-xs font-medium text-slate-400">已选</span>
+              <span class="text-xs font-medium text-slate-500 dark:text-slate-400">已选</span>
               <span
                 v-for="selection in selectedMajors"
                 :key="selection"
@@ -342,12 +342,12 @@ onBeforeUnmount(() => {
                        dark:border-slate-700 dark:bg-slate-800"
               >
                 <div class="mb-3 flex items-center justify-between gap-3">
-                  <p class="text-xs font-black uppercase tracking-[0.14em] text-slate-400">
+                  <p class="text-xs font-black uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400">
                     {{ activeMajor }} · 细分方向
                   </p>
                   <button
                     type="button"
-                    class="rounded-full px-2.5 py-1 text-xs font-bold text-slate-400 transition-colors
+                    class="rounded-full px-2.5 py-1 text-xs font-bold text-slate-500 dark:text-slate-400 transition-colors
                            hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-slate-700 dark:hover:text-slate-200"
                     @click="closeMenu"
                   >
@@ -385,7 +385,7 @@ onBeforeUnmount(() => {
 
           <!-- 级别 -->
           <label class="flex items-center gap-2 sm:flex-none">
-            <span class="shrink-0 text-sm font-medium text-slate-400">级别</span>
+            <span class="shrink-0 text-sm font-medium text-slate-500 dark:text-slate-400">级别</span>
             <select
               v-model="level"
               class="w-full min-w-0 flex-1 rounded-xl border-0 bg-slate-100 dark:bg-slate-700/60 px-4 py-2 text-sm font-semibold
@@ -397,7 +397,7 @@ onBeforeUnmount(() => {
           </label>
 
           <!-- 结果计数 -->
-          <span class="text-sm text-slate-400 sm:ml-auto">
+          <span class="text-sm text-slate-500 dark:text-slate-400 sm:ml-auto">
             {{ filtered.length }} 个结果
           </span>
         </div>
@@ -443,7 +443,7 @@ onBeforeUnmount(() => {
         class="rounded-2xl border border-dashed border-slate-200 dark:border-slate-700 px-6 py-16 text-center"
       >
         <p class="font-bold text-slate-500 dark:text-slate-400">没有符合条件的竞赛</p>
-        <p class="mt-1 text-sm text-slate-400">试试更换其他科目或级别</p>
+        <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">试试更换其他科目或级别</p>
       </div>
 
       <!-- 正常列表 -->

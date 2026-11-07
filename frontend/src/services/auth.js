@@ -1,5 +1,6 @@
 import { reactive } from 'vue'
 import api from './api'
+import { clearUserLocalData } from './localUserData'
 
 /**
  * 鉴权服务
@@ -89,7 +90,7 @@ export async function login(payload = {}) {
   if (!username) throw new Error('请输入用户名')
   if (!password) throw new Error('请输入密码')
 
-  const data = await api.post('/api/auth/login', { username, password })
+  const data = await api.post('/auth/login', { username, password })
   return applyAuthResult(data)
 }
 
@@ -104,7 +105,7 @@ export async function register(payload = {}) {
   if (!username) throw new Error('请输入用户名')
   if (!password) throw new Error('请输入密码')
 
-  const data = await api.post('/api/auth/register', { username, password })
+  const data = await api.post('/auth/register', { username, password })
   return applyAuthResult(data)
 }
 
@@ -112,7 +113,7 @@ export async function register(payload = {}) {
  * 拉取当前用户信息（依赖拦截器注入的 token）
  */
 export async function fetchMe() {
-  const data = await api.get('/api/auth/me')
+  const data = await api.get('/auth/me')
   authState.user = data && typeof data === 'object' ? data : null
   authState.initialized = true
   return authState.user
@@ -146,10 +147,14 @@ export async function restoreSession() {
 }
 
 /**
- * 退出登录：清 token + 清状态
+ * 退出登录：清 token + 清内存状态 + 清本地用户数据
+ *
+ * 本地缓存（备赛计划 / 对话 / 灵感收藏）都只属于当前账号，
+ * 退出时必须一并删除，避免下一位使用者或下一账号读到。
  */
 export function logout() {
   clearToken()
   authState.user = null
   authState.initialized = true
+  clearUserLocalData()
 }

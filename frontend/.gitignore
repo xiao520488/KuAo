@@ -2,6 +2,10 @@ node_modules
 dist
 dist-ssr
 *.local
+# 环境变量文件可能含密钥，一律不入库；仅允许提交示例文件
+.env
+.env.*
+!.env.example
 .DS_Store
 .idea
 .vscode/*

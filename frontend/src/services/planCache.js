@@ -121,6 +121,29 @@ export function setPlanCache(competitionId, data = {}) {
   }
 }
 
+/**
+ * 清空本机全部备赛缓存（退出登录 / 401 时使用）
+ *
+ * 先收集 key 再统一删除，避免边遍历边删除导致索引错位漏删。
+ * 存储不可用或读取异常时静默返回 false，不阻断登出主流程。
+ * @returns {boolean} 是否执行成功
+ */
+export function clearAllPlanCaches() {
+  const ls = store()
+  if (!ls) return false
+  try {
+    const keys = []
+    for (let i = 0; i < ls.length; i++) {
+      const key = ls.key(i)
+      if (typeof key === 'string' && key.startsWith(PLAN_PREFIX)) keys.push(key)
+    }
+    keys.forEach((key) => ls.removeItem(key))
+    return true
+  } catch (e) {
+    return false
+  }
+}
+
 /** 清空某场竞赛的备赛记录（重新生成计划时使用） */
 export function clearPlanCache(competitionId) {
   if (competitionId === null || competitionId === undefined || competitionId === '') return false

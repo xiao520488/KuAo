@@ -60,6 +60,7 @@ class PlanRequest(BaseModel):
     )
     user_input: str = Field(
         "",
+        max_length=8000,
         description=(
             "用户最新一轮输入。多轮对话时，前端应把『历史问答 + 本轮回答』"
             "拼接后放入本字段，以保证模型能看到完整背景。"
@@ -67,6 +68,7 @@ class PlanRequest(BaseModel):
     )
     current_plan: Optional[str] = Field(
         None,
+        max_length=32000,
         description="已有计划（Markdown）。为空则走「反问 / 生成」流程，非空则增量修改",
     )
 
@@ -721,7 +723,9 @@ def analyze_single_work(
 class SearchRequest(BaseModel):
     """自然语言检索请求。"""
 
-    query: str = Field(..., min_length=1, description="用户的自然语言描述")
+    query: str = Field(
+        ..., min_length=1, max_length=200, description="用户的自然语言描述"
+    )
     top_k: int = Field(8, ge=1, le=20, description="返回竞赛条数上限（1-20）")
 
 

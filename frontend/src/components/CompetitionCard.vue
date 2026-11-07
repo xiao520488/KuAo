@@ -172,21 +172,21 @@ async function removeOnly() {
       <!-- 中间：时间信息 -->
       <div class="mt-4 space-y-2 text-base text-slate-500 dark:text-slate-400">
         <p class="flex items-center gap-2">
-          <svg class="h-[18px] w-[18px] shrink-0 text-slate-400" fill="none" viewBox="0 0 24 24"
+          <svg class="h-[18px] w-[18px] shrink-0 text-slate-500 dark:text-slate-400" fill="none" viewBox="0 0 24 24"
                stroke="currentColor" stroke-width="1.8" aria-hidden="true">
             <path stroke-linecap="round" stroke-linejoin="round"
                   d="M12 6v6l4 2m6-2a10 10 0 1 1-20 0 10 10 0 0 1 20 0z" />
           </svg>
-          <span class="font-medium text-slate-400">报名时间</span>
+          <span class="font-medium text-slate-500 dark:text-slate-400">报名时间</span>
           <span class="font-semibold text-slate-700 dark:text-slate-200">{{ signUpTime }}</span>
         </p>
         <p class="flex items-center gap-2">
-          <svg class="h-[18px] w-[18px] shrink-0 text-slate-400" fill="none" viewBox="0 0 24 24"
+          <svg class="h-[18px] w-[18px] shrink-0 text-slate-500 dark:text-slate-400" fill="none" viewBox="0 0 24 24"
                stroke="currentColor" stroke-width="1.8" aria-hidden="true">
             <path stroke-linecap="round" stroke-linejoin="round"
                   d="M8 7V3m8 4V3M3.75 9h16.5M4.5 21h15a1.5 1.5 0 001.5-1.5V6a1.5 1.5 0 00-1.5-1.5h-15A1.5 1.5 0 003 6v13.5A1.5 1.5 0 004.5 21z" />
           </svg>
-          <span class="font-medium text-slate-400">比赛时间</span>
+          <span class="font-medium text-slate-500 dark:text-slate-400">比赛时间</span>
           <span class="font-semibold text-slate-700 dark:text-slate-200">{{ contestTime }}</span>
         </p>
       </div>
@@ -228,7 +228,7 @@ async function removeOnly() {
           title="移出备赛"
           aria-label="移出备赛"
           class="inline-flex items-center gap-1.5 rounded-full px-3 py-2 text-sm font-medium
-                 text-slate-400 ring-1 ring-slate-200 dark:ring-slate-700 transition-colors
+                 text-slate-500 dark:text-slate-400 ring-1 ring-slate-200 dark:ring-slate-700 transition-colors
                  hover:bg-rose-50 dark:hover:bg-rose-500/10 hover:text-rose-600 hover:ring-rose-200
                  disabled:opacity-50 disabled:cursor-not-allowed"
           @click.stop="removeOnly"

@@ -5,6 +5,7 @@ import Header from '@/components/Header.vue'
 import { analyzeWork, analyzeWorks, generatePlan, getCompetitionAwards, getCompetitionDetail, getInspirations } from '@/services/api'
 import { renderMarkdown } from '@/services/markdown'
 import { clearPlanCache, getPlanCache, setPlanCache } from '@/services/planCache'
+import { loadFavoriteIds, saveFavoriteIds } from '@/services/favorites'
 
 const route = useRoute()
 // 当前竞赛 ID（路由参数），供 AI 接口使用
@@ -43,12 +44,16 @@ async function loadCompetition() {
   compError.value = ''
   try {
     const d = await getCompetitionDetail(id)
+    // 请求返回时路由可能已切到别的竞赛：丢弃过期响应，避免旧标题/图片覆盖新赛事
+    if (routedId.value !== id) return
     applyDetail(d && d.data ? d.data : d)
     if (!competition.title) compError.value = '未获取到竞赛信息'
   } catch (e) {
+    if (routedId.value !== id) return
     compError.value = (e && e.message) || '竞赛信息加载失败'
   } finally {
-    compLoading.value = false
+    // 仅当仍是当前竞赛时才复位 loading，避免清掉新赛事的请求态
+    if (routedId.value === id) compLoading.value = false
   }
 }
 
@@ -471,12 +476,16 @@ async function loadWorks() {
   worksError.value = ''
   try {
     const res = await getCompetitionAwards(cid, { limit: 20 })
+    // 切走赛事后旧响应不得写回，否则会串成上一场竞赛的获奖列表
+    if (routedId.value !== cid) return
     works.value = res.items
   } catch (e) {
+    if (routedId.value !== cid) return
     works.value = []
     worksError.value = e?.message || '获奖作品加载失败，请稍后重试'
   } finally {
-    worksLoading.value = false
+    // 仅当前赛事才复位，避免误清新赛事的 loading
+    if (routedId.value === cid) worksLoading.value = false
   }
 }
 
@@ -684,7 +693,6 @@ async function parseWork() {
 /* =========================================================
    Tab3\uff1a\u7075\u611f\u5de5\u4f5c\u53f0 + \u6211\u7684\u6536\u85cf\uff08localStorage\uff09
    ========================================================= */
-const FAV_KEY = 'prep_favorites_v1'
 const INSIGHT_TAGS = {
   experience: '获奖经验',
   trend: '选题趋势',
@@ -702,16 +710,8 @@ function insightTagClass(kind) {
   return INSIGHT_TAG_STYLES[kind] || 'bg-slate-100 text-slate-600 ring-slate-200 dark:bg-slate-700/60 dark:text-slate-300 dark:ring-slate-600'
 }
 
-function loadFavorites() {
-  try {
-    const raw = localStorage.getItem(FAV_KEY)
-    return raw ? JSON.parse(raw) : []
-  } catch (e) {
-    return []
-  }
-}
-
-const favIds = ref(loadFavorites())
+// 收藏 key / 读写统一由 services/favorites.js 管理（含脏数据校验）
+const favIds = ref(loadFavoriteIds())
 const inspirations = ref([])
 const inspirationLoading = ref(false)
 const inspirationError = ref('')
@@ -800,9 +800,7 @@ async function loadInspirations() {
 }
 
 function persist() {
-  try {
-    localStorage.setItem(FAV_KEY, JSON.stringify(favIds.value))
-  } catch (e) { /* ignore */ }
+  saveFavoriteIds(favIds.value)
 }
 
 // 刷新灵感：重新请求后端（数据由离线 analyzer.py 生成并落库）
@@ -830,8 +828,25 @@ function onKeydown(e) {
   }
   if (selectedWork.value) closeWork()
 }
+
+/**
+ * 退出登录 / 401 时，services/localUserData.js 已清空本地缓存。
+ * 这里同步清掉内存中的计划、对话、收藏与弹窗，避免界面继续展示上一账号内容，
+ * 也避免下一次操作把旧数据重新写回 localStorage。
+ */
+function onLocalDataCleared() {
+  favIds.value = []
+  // 已渲染的卡片仍带 favorite 标记，这里同步复位，避免出现“空收藏但星标仍亮”
+  applyFavoriteFlags()
+  showFavorites.value = false
+  resetPlanState()
+  closeWork()
+  resetCommonAnalysis()
+}
+
 onMounted(() => {
   window.addEventListener('keydown', onKeydown)
+  window.addEventListener('auth:local-data-cleared', onLocalDataCleared)
   // 首屏并行拉取：顶部竞赛信息 + 获奖作品列表 + 该赛事专属灵感
   loadCompetition()
   loadWorks()
@@ -851,6 +866,7 @@ onMounted(() => {
 })
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKeydown)
+  window.removeEventListener('auth:local-data-cleared', onLocalDataCleared)
   // 离开页面时解除全屏阅读的滚动锁，避免影响其他路由
   document.body.style.overflow = ''
 })
@@ -870,7 +886,7 @@ onBeforeUnmount(() => {
         <div class="h-16 w-24 shrink-0 overflow-hidden rounded-xl bg-slate-100 dark:bg-slate-700/60 ring-1 ring-slate-200 dark:ring-slate-700">
           <img v-if="competition.image" :src="competition.image" alt="" class="h-full w-full object-cover" />
           <div v-else class="flex h-full w-full items-center justify-center">
-            <svg class="h-6 w-6 text-slate-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <svg class="h-6 w-6 text-slate-500 dark:text-slate-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
             </svg>
           </div>
@@ -883,10 +899,10 @@ onBeforeUnmount(() => {
           <div class="mt-1.5 flex flex-wrap items-center gap-2 text-xs">
             <span class="rounded-full bg-blue-50 dark:bg-blue-500/15 px-2.5 py-1 font-bold text-blue-700 dark:text-blue-300">{{ zhLevel(competition.level) }}</span>
             <span class="rounded-full bg-slate-100 dark:bg-slate-700/60 px-2.5 py-1 font-bold text-slate-600 dark:text-slate-300">{{ competition.category }}</span>
-            <span class="font-medium text-slate-400">比赛时间</span>
+            <span class="font-medium text-slate-500 dark:text-slate-400">比赛时间</span>
             <span class="font-semibold text-slate-700 dark:text-slate-200">{{ competition.contestTime }}</span>
             <span class="text-slate-300">·</span>
-            <span class="font-medium text-slate-400">ID</span>
+            <span class="font-medium text-slate-500 dark:text-slate-400">ID</span>
             <span class="font-semibold text-slate-700 dark:text-slate-200">{{ routedId || '—' }}</span>
           </div>
         </div>
@@ -928,7 +944,7 @@ onBeforeUnmount(() => {
             <h2 class="mt-1 text-xl font-black tracking-tight text-slate-900 dark:text-slate-100 sm:text-2xl">
               我的备赛计划
             </h2>
-            <p class="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-400">
+            <p class="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-500 dark:text-slate-400">
               <span class="inline-flex items-center gap-1">
                 <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
@@ -1103,7 +1119,7 @@ onBeforeUnmount(() => {
               {{ messages.length }} 条
             </span>
           </span>
-          <span class="flex items-center gap-1 text-xs font-bold text-slate-400">
+          <span class="flex items-center gap-1 text-xs font-bold text-slate-500 dark:text-slate-400">
             {{ chatOpen ? '收起' : '展开' }}
             <svg
               class="h-3.5 w-3.5 transition-transform"
@@ -1165,7 +1181,7 @@ onBeforeUnmount(() => {
                   ? '补充信息，AI 会直接修改当前计划，例如：我每天只有 2 小时'
                   : '说说你的目标、基础和每天能投入的时间…')"
               class="h-11 flex-1 rounded-full bg-slate-50 px-5 text-sm text-slate-700 dark:bg-slate-900 dark:text-slate-200
-                     outline-none ring-1 ring-slate-200 dark:ring-slate-700 placeholder:text-slate-400 dark:placeholder:text-slate-500
+                     outline-none ring-1 ring-slate-200 dark:ring-slate-700 placeholder:text-slate-500 dark:placeholder:text-slate-500
                      focus:ring-2 focus:ring-blue-500 disabled:opacity-60"
               @keydown.enter="onEnter"
             />
@@ -1187,7 +1203,7 @@ onBeforeUnmount(() => {
               </svg>
             </button>
           </div>
-          <p class="mt-1.5 px-2 text-[11px] leading-relaxed text-slate-400">
+          <p class="mt-1.5 px-2 text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">
             {{ hasPlan
               ? '提交时会带上当前计划，AI 只做增量修改，改完直接更新上方文档'
               : '信息足够后 AI 会立即生成完整计划，生成后可继续在下方补充' }}
@@ -1345,7 +1361,7 @@ onBeforeUnmount(() => {
           </div>
 
           <h3 class="text-base font-bold leading-snug text-slate-900 dark:text-slate-100">{{ work.title }}</h3>
-          <p class="mt-2 text-xs font-medium text-slate-400">{{ work.team }} · {{ work.year }}</p>
+          <p class="mt-2 text-xs font-medium text-slate-500 dark:text-slate-400">{{ work.team }} · {{ work.year }}</p>
 
           <div class="mt-3 flex items-center justify-between">
             <span class="rounded-full bg-amber-50 dark:bg-amber-500/15 px-2.5 py-1 text-xs font-bold text-amber-700 dark:text-amber-300">
@@ -1415,7 +1431,7 @@ onBeforeUnmount(() => {
               </div>
               <button
                 type="button"
-                class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-slate-400
+                class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-slate-500 dark:text-slate-400
                        transition-colors hover:bg-slate-100 dark:hover:bg-slate-700/60 hover:text-slate-600 dark:hover:text-slate-300"
                 @click="closeWork"
               >
@@ -1438,7 +1454,7 @@ onBeforeUnmount(() => {
                 v-if="selectedWork.summary"
                 class="whitespace-pre-line text-sm leading-7 text-slate-600 dark:text-slate-300"
               >{{ selectedWork.summary }}</p>
-              <p v-else class="rounded-xl bg-slate-50 dark:bg-slate-900 px-4 py-3 text-sm text-slate-400">
+              <p v-else class="rounded-xl bg-slate-50 dark:bg-slate-900 px-4 py-3 text-sm text-slate-500 dark:text-slate-400">
                 暂无简介，待数据接入后补充。
               </p>
             </section>
@@ -1459,7 +1475,7 @@ onBeforeUnmount(() => {
                   {{ t }}
                 </span>
               </div>
-              <p v-else class="rounded-xl bg-slate-50 dark:bg-slate-900 px-4 py-3 text-sm text-slate-400">
+              <p v-else class="rounded-xl bg-slate-50 dark:bg-slate-900 px-4 py-3 text-sm text-slate-500 dark:text-slate-400">
                 暂无技术栈信息。
               </p>
             </section>
@@ -1474,7 +1490,7 @@ onBeforeUnmount(() => {
                 v-if="selectedWork.highlights"
                 class="rounded-2xl border border-amber-200/70 dark:border-amber-500/30 bg-amber-50/50 dark:bg-amber-500/10 px-5 py-4 text-sm leading-7 text-slate-700 dark:text-slate-200 whitespace-pre-line"
               >{{ selectedWork.highlights }}</div>
-              <p v-else class="rounded-xl bg-slate-50 dark:bg-slate-900 px-4 py-3 text-sm text-slate-400">
+              <p v-else class="rounded-xl bg-slate-50 dark:bg-slate-900 px-4 py-3 text-sm text-slate-500 dark:text-slate-400">
                 暂无亮点描述。
               </p>
             </section>
@@ -1533,7 +1549,7 @@ onBeforeUnmount(() => {
                   </span>
                   <div class="text-left">
                     <p class="text-sm font-bold text-slate-800 dark:text-slate-100">查看完整原文 / 论文</p>
-                    <p class="mt-0.5 text-xs text-slate-400">
+                    <p class="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
                       {{ hasOriginal ? '在新窗口打开作品原文' : '后续接入爬虫后可用' }}
                     </p>
                   </div>
@@ -1743,7 +1759,7 @@ onBeforeUnmount(() => {
                 v-html="item.html"
               ></div>
 
-              <p v-if="item.refs && item.refs.length" class="mt-3 text-[11px] font-medium text-slate-400">
+              <p v-if="item.refs && item.refs.length" class="mt-3 text-[11px] font-medium text-slate-500 dark:text-slate-400">
                 引用作品 ID：{{ item.refs.join('、') }}
               </p>
 
@@ -1813,7 +1829,7 @@ onBeforeUnmount(() => {
               <p v-if="item.risk" class="mt-1 text-xs leading-relaxed text-slate-500 dark:text-slate-400">
                 <span class="font-bold text-slate-700 dark:text-slate-200">风险：</span>{{ item.risk }}
               </p>
-              <p v-if="item.refs && item.refs.length" class="mt-2 text-[11px] font-medium text-slate-400">
+              <p v-if="item.refs && item.refs.length" class="mt-2 text-[11px] font-medium text-slate-500 dark:text-slate-400">
                 引用作品 ID：{{ item.refs.join('、') }}
               </p>
 
@@ -1842,56 +1858,66 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-/* Markdown 计划正文排版 */
+/* Markdown 计划正文排版
+ *
+ * 注意：内容由 v-html 注入，这些节点不会带 scoped 的 data-v 属性。
+ * 因此所有“后代选择器”必须用 :deep() 包裹，否则编译成
+ * `.markdown-body h1[data-v-xxx]` 后永远匹配不到 v-html 里的 h1。
+ */
 .markdown-body { font-size: 14px; line-height: 1.75; color: #334155; }
-.markdown-body > *:first-child { margin-top: 0; }
-.markdown-body > *:last-child { margin-bottom: 0; }
-.markdown-body h1, .markdown-body h2, .markdown-body h3, .markdown-body h4 {
+:deep(.markdown-body > *:first-child) { margin-top: 0; }
+:deep(.markdown-body > *:last-child) { margin-bottom: 0; }
+.markdown-body :deep(h1),
+.markdown-body :deep(h2),
+.markdown-body :deep(h3),
+.markdown-body :deep(h4) {
   font-weight: 700; color: #0f172a; line-height: 1.35; margin: 1.25em 0 0.6em;
 }
-.markdown-body h1 { font-size: 1.35em; }
-.markdown-body h2 { font-size: 1.18em; }
-.markdown-body h3 { font-size: 1.05em; }
-.markdown-body h4 { font-size: 1em; }
-.markdown-body p { margin: 0.6em 0; }
-.markdown-body ul, .markdown-body ol { margin: 0.6em 0; padding-left: 1.4em; }
-.markdown-body ul { list-style: disc; }
-.markdown-body ol { list-style: decimal; }
-.markdown-body li { margin: 0.25em 0; }
-.markdown-body strong { font-weight: 700; color: #0f172a; }
-.markdown-body a { color: #2563eb; text-decoration: underline; }
-.markdown-body code {
+.markdown-body :deep(h1) { font-size: 1.35em; }
+.markdown-body :deep(h2) { font-size: 1.18em; }
+.markdown-body :deep(h3) { font-size: 1.05em; }
+.markdown-body :deep(h4) { font-size: 1em; }
+.markdown-body :deep(p) { margin: 0.6em 0; }
+.markdown-body :deep(ul),
+.markdown-body :deep(ol) { margin: 0.6em 0; padding-left: 1.4em; }
+.markdown-body :deep(ul) { list-style: disc; }
+.markdown-body :deep(ol) { list-style: decimal; }
+.markdown-body :deep(li) { margin: 0.25em 0; }
+.markdown-body :deep(strong) { font-weight: 700; color: #0f172a; }
+.markdown-body :deep(a) { color: #2563eb; text-decoration: underline; }
+.markdown-body :deep(code) {
   background: #e2e8f0; border-radius: 4px; padding: 0.1em 0.35em;
   font-size: 0.9em; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
-.markdown-body pre {
+.markdown-body :deep(pre) {
   background: #0f172a; color: #e2e8f0; border-radius: 10px;
   padding: 12px 14px; overflow-x: auto; margin: 0.8em 0;
 }
-.markdown-body pre code { background: transparent; padding: 0; color: inherit; }
-.markdown-body blockquote {
+.markdown-body :deep(pre code) { background: transparent; padding: 0; color: inherit; }
+.markdown-body :deep(blockquote) {
   border-left: 3px solid #93c5fd; color: #475569;
   margin: 0.8em 0; padding: 0.2em 0 0.2em 1em;
 }
-.markdown-body table { width: 100%; border-collapse: collapse; margin: 0.8em 0; font-size: 0.95em; }
-.markdown-body th, .markdown-body td { border: 1px solid #e2e8f0; padding: 6px 10px; text-align: left; }
-.markdown-body th { background: #f1f5f9; font-weight: 700; }
-.markdown-body hr { border: 0; border-top: 1px solid #e2e8f0; margin: 1.2em 0; }
+.markdown-body :deep(table) { width: 100%; border-collapse: collapse; margin: 0.8em 0; font-size: 0.95em; }
+.markdown-body :deep(th),
+.markdown-body :deep(td) { border: 1px solid #e2e8f0; padding: 6px 10px; text-align: left; }
+.markdown-body :deep(th) { background: #f1f5f9; font-weight: 700; }
+.markdown-body :deep(hr) { border: 0; border-top: 1px solid #e2e8f0; margin: 1.2em 0; }
 
 /* ===== 暗色模式覆盖：AI 解析区在深色下必须保持足够对比度 ===== */
 .dark .markdown-body { color: #cbd5e1; }
-.dark .markdown-body h1,
-.dark .markdown-body h2,
-.dark .markdown-body h3,
-.dark .markdown-body h4,
-.dark .markdown-body strong { color: #f1f5f9; }
-.dark .markdown-body a { color: #60a5fa; }
-.dark .markdown-body code { background: #334155; color: #e2e8f0; }
-.dark .markdown-body pre { background: #020617; color: #e2e8f0; border: 1px solid #334155; }
-.dark .markdown-body pre code { background: transparent; color: inherit; }
-.dark .markdown-body blockquote { border-left-color: #3b82f6; color: #94a3b8; }
-.dark .markdown-body th,
-.dark .markdown-body td { border-color: #334155; }
-.dark .markdown-body th { background: #1e293b; color: #f1f5f9; }
-.dark .markdown-body hr { border-top-color: #334155; }
+.dark .markdown-body :deep(h1),
+.dark .markdown-body :deep(h2),
+.dark .markdown-body :deep(h3),
+.dark .markdown-body :deep(h4),
+.dark .markdown-body :deep(strong) { color: #f1f5f9; }
+.dark .markdown-body :deep(a) { color: #60a5fa; }
+.dark .markdown-body :deep(code) { background: #334155; color: #e2e8f0; }
+.dark .markdown-body :deep(pre) { background: #020617; color: #e2e8f0; border: 1px solid #334155; }
+.dark .markdown-body :deep(pre code) { background: transparent; color: inherit; }
+.dark .markdown-body :deep(blockquote) { border-left-color: #3b82f6; color: #94a3b8; }
+.dark .markdown-body :deep(th),
+.dark .markdown-body :deep(td) { border-color: #334155; }
+.dark .markdown-body :deep(th) { background: #1e293b; color: #f1f5f9; }
+.dark .markdown-body :deep(hr) { border-top-color: #334155; }
 </style>
