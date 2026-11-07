@@ -45,7 +45,19 @@ const router = createRouter({
       path: '/:pathMatch(.*)*',
       redirect: '/'
     }
-  ]
+  ],
+
+  /**
+   * 滚动行为：控制路由切换后页面的滚动位置
+   *
+   * - 浏览器前进 / 后退：Vue Router 会提供 savedPosition，原样返回以恢复离开该页时的位置；
+   * - 普通跳转（如首页底部「查看全部竞赛」→ /competitions）：强制平滑回到页面顶部，
+   *   否则新页面会继承上一页的滚动高度，出现「一打开就停在半截」的问题。
+   */
+  scrollBehavior(to, from, savedPosition) {
+    if (savedPosition) return savedPosition
+    return { top: 0, left: 0, behavior: 'smooth' }
+  }
 })
 
 /**
