@@ -1,5 +1,5 @@
 -- =============================================================================
--- schema_v2.sql  ——  schema v2 统一建表脚本（10 张表）
+-- schema_v2.sql  ——  schema v2 统一建表脚本（11 张表）
 -- -----------------------------------------------------------------------------
 -- 说明：
 --   * SQLite 方言；所有语句幂等（IF NOT EXISTS），可重复执行。
@@ -16,7 +16,7 @@
 --     metrics 这些历史列，这里全部纳入建表语句，保证「全新部署」与
 --     「存量老库迁移后」得到完全相同的表结构。
 --
--- 10 张表：
+-- 11 张表：
 --   1. competitions      竞赛信息主表
 --   2. awards            获奖作品（核心表，向量化的主料）
 --   3. search_leads      搜索线索（自动更新入口）
@@ -27,6 +27,7 @@
 --   8. user_preparations 用户备赛清单
 --   9. ai_usage          AI 每日配额计数
 --  10. ai_analysis_cache AI 分析结果全局缓存（单作品解析 / 赛事共性分析）
+--  11. feedbacks         用户反馈（只写入，无查询接口）
 -- =============================================================================
 
 
@@ -281,3 +282,21 @@ CREATE TABLE IF NOT EXISTS ai_analysis_cache (
 
 CREATE UNIQUE INDEX IF NOT EXISTS ux_ai_analysis_cache_target
     ON ai_analysis_cache (target_type, target_id);
+
+-- -----------------------------------------------------------------------------
+-- 11. feedbacks -- user feedback (write-only; no query API by design)
+--    user_id 允许为空，并随账号删除置空（ON DELETE SET NULL），
+--    这样账号注销后反馈内容仍然保留，便于事后排查。
+--    接口层强制登录，user_id 由 Token 解析结果写入，客户端无法伪造。
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS feedbacks (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id    INTEGER REFERENCES users (id) ON DELETE SET NULL,
+    content    TEXT    NOT NULL,
+    created_at TEXT    NOT NULL DEFAULT (datetime('now', 'localtime'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_feedbacks_created
+    ON feedbacks (created_at);
+CREATE INDEX IF NOT EXISTS idx_feedbacks_user
+    ON feedbacks (user_id);

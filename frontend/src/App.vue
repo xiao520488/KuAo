@@ -1,8 +1,10 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted } from 'vue'
 import AuthModal from '@/components/AuthModal.vue'
+import AboutModal from '@/components/AboutModal.vue'
 import Toast from '@/components/Toast.vue'
 import { authModalState, openAuthModal, closeAuthModal } from '@/composables/useAuthModal'
+import { aboutModalState, closeAboutModal, openAboutModal } from '@/composables/useAboutModal'
 import { showToast } from '@/composables/useToast'
 
 /**
@@ -20,6 +22,12 @@ const showAuth = computed({
 })
 
 const authMode = computed(() => authModalState.mode)
+
+/** 「关于我们」弹窗：同样挂在根组件，保证任意路由下都能打开 */
+const showAbout = computed({
+  get: () => aboutModalState.visible,
+  set: (v) => (v ? openAboutModal() : closeAboutModal())
+})
 
 /**
  * AI 每日配额用尽（后端返回 429）时的全局提示
@@ -49,6 +57,9 @@ onBeforeUnmount(() => {
 
     <!-- 全局登录/注册弹窗：固定在根组件，不依赖具体页面 -->
     <AuthModal v-model="showAuth" :mode="authMode" />
+
+    <!-- 全局「关于我们」弹窗：Header 用户下拉菜单触发 -->
+    <AboutModal v-model="showAbout" />
 
     <!-- 全局轻提示：监听 ai:quota-exceeded 等事件后展示 -->
     <Toast />

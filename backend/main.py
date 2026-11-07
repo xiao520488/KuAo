@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 import config
 import db
-from routers import ai, auth, competitions, preparations
+from routers import ai, auth, competitions, feedback, preparations
 
 app = FastAPI(
     title="Agent Lab API",
@@ -44,6 +44,7 @@ app.include_router(competitions.router)
 app.include_router(ai.router)
 app.include_router(auth.router)
 app.include_router(preparations.router)
+app.include_router(feedback.router)
 
 
 # ---------------------------------------------------------------------------

@@ -1416,3 +1416,61 @@ def delete_ideas_by_competition(competition_id: int) -> int:
     with get_conn() as conn:
         cur = conn.execute("DELETE FROM ideas WHERE competition_id = ?", (cid,))
         return int(cur.rowcount)
+
+
+# ============================================================
+# 十二、feedbacks：用户反馈（只写入，按需求不提供查询接口）
+# ============================================================
+# 表见 schema_v2.sql 第 11 节。
+# 接口层强制登录，这里再做一次内容兜底校验；user_id 允许为空，
+# 但正常调用始终由 /api/feedback 从 Token 解析后传入。
+#
+# 老库在进程未重启时可能还没执行到 schema_v2.sql 的建表，
+# 故对 "no such table" 做一次建表重试，保证首次提交即可成功。
+
+_FEEDBACKS_DDL = """
+CREATE TABLE IF NOT EXISTS feedbacks (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id    INTEGER REFERENCES users (id) ON DELETE SET NULL,
+    content    TEXT    NOT NULL,
+    created_at TEXT    NOT NULL DEFAULT (datetime('now', 'localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_feedbacks_created
+    ON feedbacks (created_at);
+CREATE INDEX IF NOT EXISTS idx_feedbacks_user
+    ON feedbacks (user_id);
+"""
+
+
+def _ensure_feedbacks(conn: sqlite3.Connection) -> None:
+    """幂等建表：创建 feedbacks 表及其索引。"""
+    conn.executescript(_FEEDBACKS_DDL)
+
+
+def create_feedback(content: str, user_id: Optional[int] = None) -> int:
+    """写入一条用户反馈，返回新记录 id。
+
+    参数:
+        content: 反馈正文；首尾空白会被去掉，去空白后为空则抛 ValueError。
+        user_id: 提交人 id（可空）。由路由层从 Token 解析后传入，避免伪造。
+
+    异常:
+        ValueError: 内容为空（由路由转 422）。
+        sqlite3.Error: 写库失败（由路由转 500）。
+    """
+    text = (content or "").strip()
+    if not text:
+        raise ValueError("反馈内容不能为空")
+
+    sql = "INSERT INTO feedbacks (user_id, content) VALUES (?, ?)"
+    params = (user_id, text)
+
+    with get_conn() as conn:
+        try:
+            cur = conn.execute(sql, params)
+        except sqlite3.OperationalError as exc:
+            if "no such table" not in str(exc).lower():
+                raise
+            _ensure_feedbacks(conn)
+            cur = conn.execute(sql, params)
+        return int(cur.lastrowid)

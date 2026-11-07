@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { authState, logout } from '@/services/auth'
 import { authModalState, openAuthModal } from '@/composables/useAuthModal'
+import { openAboutModal } from '@/composables/useAboutModal'
 import { THEMES, theme, setTheme } from '@/composables/useTheme'
 
 // 当前路由，用于动态判断导航高亮
@@ -129,6 +130,12 @@ const userMenuRef = ref(null)
 
 function toggleMenu() {
   menuOpen.value = !menuOpen.value
+}
+
+/** 打开全局「关于我们」弹窗；先收起用户下拉，避免弹窗与菜单叠层 */
+function openAbout() {
+  menuOpen.value = false
+  openAboutModal()
 }
 
 /* ---------------- 主题切换菜单（官方风 / 极简风 / 科技蓝） ---------------- */
@@ -467,6 +474,15 @@ onBeforeUnmount(() => {
               >
                 个人中心
               </router-link>
+              <button
+                type="button"
+                class="block w-full rounded-lg px-3 py-2 text-left text-sm font-medium
+                       text-slate-600 dark:text-slate-300
+                       hover:bg-slate-50 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-white"
+                @click="openAbout"
+              >
+                关于我们
+              </button>
               <router-link
                 to="/preparation"
                 class="block rounded-lg px-3 py-2 text-sm font-medium text-slate-600 dark:text-slate-300
@@ -637,6 +653,14 @@ onBeforeUnmount(() => {
             >
               个人中心
             </router-link>
+            <button
+              type="button"
+              class="block w-full rounded-xl px-4 py-3 text-left text-base font-bold
+                     text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700/60 transition-colors"
+              @click="closeMobile(); openAbout()"
+            >
+              关于我们
+            </button>
             <router-link
               to="/preparation"
               class="block w-full rounded-xl px-4 py-3 text-left text-base font-bold

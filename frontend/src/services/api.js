@@ -354,6 +354,24 @@ export function generatePlan(payload = {}) {
   })
 }
 
+/**
+ * 提交用户反馈
+ * POST /api/feedback  body: { content }
+ *
+ * @param {string} content 反馈正文
+ * @returns {Promise<{ message: string, id?: number }>}
+ */
+export function submitFeedback(content) {
+  const text = typeof content === 'string' ? content.trim() : ''
+  if (!text) return Promise.reject(new Error('请输入反馈内容'))
+  if (text.length > 1000) return Promise.reject(new Error('反馈内容不能超过 1000 字'))
+
+  return api.post('/api/feedback', { content: text }).then((data) => ({
+    message: typeof data?.message === 'string' ? data.message : '感谢你的反馈',
+    id: Number.isInteger(data?.id) ? data.id : undefined
+  }))
+}
+
 // ---------------------------------------------------------------- preparations
 
 /**
