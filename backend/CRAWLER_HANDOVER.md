@@ -12,6 +12,8 @@
 
 > **【紧急 TODO｜2026-11-08】详情页数据无法正常展示**：电脑/手机访问 `/competition/10` 时，「时间安排、参赛对象」显示通用套话，官网链接、具体比赛月份、已抓取攻略均未展示。排查顺序：① 生产库 `id=10` 的真实字段（`official_url` / `reg_*` / `contest_*` / `full_process_guide`）；② `GET /api/competitions/10` 的 JSON 返回是否包含这些字段；③ 前端 `frontend/src/views/CompetitionDetailView.vue` 的兜底与渲染逻辑（`signUpTime` / `contestTime` 拼接、`resolveImage`）。
 
+> **【紧急全局 Bug｜2026-11-08】所有赛事详情页均未展示真实数据**：不只是 id=10，任意赛事详情页都显示相同的「套话」（时间安排、参赛对象等），真实基础信息与攻略全部缺失；电脑端、手机端表现一致。**疑似前端写死套话，或接口字段映射错误**（前端读取的字段名与 `/api/competitions/{id}` 实际返回不一致）。优先核查：① `/api/competitions/1`、`/api/competitions/10` 的真实 JSON；② `CompetitionDetailView.vue` 是否使用静态文案/错误字段名；③ `routers/competitions.py` 的 `_row_to_competition` 映射与 `models/schemas.py` 的 `CompetitionDetail` 字段。该问题优先级高于候选审核与 cron 观察。
+
 | 项目 | 现状 |
 |---|---|
 | 生产库 `competitions.db` | **33** 条赛事（含 id=36）/ **87** 条获奖；有封面 **6** 条（id=6/8/18/22/27/34）；有比赛月份 **8** 条；**候选 82 条（pending 80 / approved 1 / rejected 1）**；**有攻略 7 条（id=1–6、10）**；**ai_jobs 0 条**；孤儿 insights/ideas **已清零**；SHA-256 `3af3af9c2d8fb4f278bff012f96aa4bd9bd878697443d910359f015066f54d73` |
