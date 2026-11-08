@@ -30,10 +30,6 @@ watch(
   }
 )
 
-// 详情页只渲染后端真实字段：
-// 这里不再维护任何静态“套话”区块（时间安排 / 参赛对象 / 内容范围 …），
-// 字段为空时整块隐藏，避免用通用文案冒充真实赛事信息。
-
 // ---- 后端字段格式化 ----
 // 详情接口返回的是 *月份*（reg_*_month / contest_*_month，1-12 的数字），
 // 不是完整日期，因此“报名时间 / 比赛时间”必须在前端拼展示文案。
@@ -170,6 +166,9 @@ function syncGuideStateFromDetail(data) {
     : data?.full_process_guide
       ? 'ready'
       : 'idle'
+  if (guideState.value === 'failed' && !guideError.value) {
+    guideError.value = '上次生成未成功，请稍后重新尝试'
+  }
 }
 
 function resetGuideGeneration() {
@@ -273,10 +272,15 @@ async function onGenerateGuide() {
 
 onUnmounted(stopGuidePolling)
 
+// 攻略 Markdown 的第一行是攻略标题，详情页已有大标题，渲染时去掉避免重复 H1
+function stripGuideTitle(markdown) {
+  return String(markdown || '').replace(/^\uFEFF?\s*#\s+[^\n]*(?:\r?\n)+/, '')
+}
+
 // 参赛全流程攻略：Markdown 渲染 + XSS 净化
 const renderedGuide = computed(() => {
   if (!detail.value?.full_process_guide) return ''
-  return DOMPurify.sanitize(marked.parse(detail.value.full_process_guide))
+  return DOMPurify.sanitize(marked.parse(stripGuideTitle(detail.value.full_process_guide)))
 })
 
 /**
@@ -335,15 +339,35 @@ const techStack = computed(() => {
   return raw.map((item) => String(item ?? '').trim()).filter(Boolean)
 })
 
-// 赛事档案里只要有一个真实字段就展示，全空时整块隐藏
-const hasArchive = computed(
-  () =>
-    Boolean(officialUrl.value) ||
-    Boolean(levelText.value) ||
-    Boolean(String(detail.value?.category || '').trim()) ||
-    introParagraphs.value.length > 0 ||
-    techStack.value.length > 0
+// 未来后端若补充这三个字段，卡片会自动渲染真实内容；当前为空时保留空壳
+const participants = computed(() =>
+  String(detail.value?.participants || detail.value?.participant || '').trim()
 )
+const contentScope = computed(() =>
+  String(detail.value?.content_scope || detail.value?.scope || '').trim()
+)
+const examArrangement = computed(() =>
+  String(detail.value?.exam_arrangement || detail.value?.exam_schedule || '').trim()
+)
+
+// 月份字段是否存在，决定展示真实时间还是“暂未收录”空壳
+const hasRegTime = computed(() =>
+  Boolean(
+    toMonth(detail.value?.reg_start_month) ||
+    toMonth(detail.value?.reg_end_month) ||
+    detail.value?.sign_up_time
+  )
+)
+const hasContestTime = computed(() =>
+  Boolean(
+    toMonth(detail.value?.contest_start_month) ||
+    toMonth(detail.value?.contest_end_month) ||
+    detail.value?.contest_time
+  )
+)
+const hasAnyTime = computed(() => hasRegTime.value || hasContestTime.value)
+
+const guideReady = computed(() => Boolean(detail.value?.full_process_guide))
 </script>
 
 <template>
@@ -377,7 +401,7 @@ const hasArchive = computed(
       <template v-else>
         <!-- 1. 全宽竞赛大图（无图/加载失败时走渐变首字兜底） -->
         <div class="mt-8 w-full">
-          <div class="relative h-64 w-full overflow-hidden rounded-2xl bg-slate-50 dark:bg-slate-900">
+          <div class="relative h-64 w-full overflow-hidden rounded-3xl bg-slate-50 dark:bg-slate-900">
             <img
               v-if="detail?.image && !heroFailed"
               :src="detail.image"
@@ -396,115 +420,392 @@ const hasArchive = computed(
           </div>
         </div>
 
-        <!-- 2. 信息区：超大加粗标题 + 时间 -->
-        <section class="mt-10 pb-2">
-          <h1 class="text-3xl font-black leading-tight tracking-tight text-slate-900 dark:text-slate-100 sm:text-4xl">
+        <!-- 2. 标题与真实标签 -->
+        <section class="mt-9">
+          <div class="flex flex-wrap items-center gap-2">
+            <span
+              v-if="levelText"
+              class="rounded-full bg-slate-900 px-3 py-1 text-xs font-bold text-white
+                     dark:bg-white dark:text-slate-900"
+            >
+              {{ levelText }}
+            </span>
+            <span
+              v-if="detail.category"
+              class="rounded-full bg-white px-3 py-1 text-xs font-bold text-slate-600
+                     ring-1 ring-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:ring-slate-700"
+            >
+              {{ detail.category }}
+            </span>
+            <span
+              v-if="guideReady"
+              class="rounded-full bg-emerald-50 px-3 py-1 text-xs font-bold text-emerald-700
+                     ring-1 ring-emerald-200 dark:bg-emerald-500/10 dark:text-emerald-300 dark:ring-emerald-500/20"
+            >
+              AI 攻略已就绪
+            </span>
+          </div>
+
+          <h1
+            class="mt-4 text-3xl font-black leading-tight tracking-tight text-slate-900
+                   dark:text-slate-100 sm:text-4xl"
+          >
             {{ detail?.title }}
           </h1>
 
-          <div class="mt-6 flex flex-wrap items-center gap-x-10 gap-y-3 text-base">
-            <p class="flex items-center gap-2">
-              <span class="font-medium text-slate-500 dark:text-slate-400">报名时间</span>
-              <span class="font-bold text-slate-800 dark:text-slate-100">{{ detail?.signUpTime }}</span>
-            </p>
-            <p class="flex items-center gap-2">
-              <span class="font-medium text-slate-500 dark:text-slate-400">比赛时间</span>
-              <span class="font-bold text-slate-800 dark:text-slate-100">{{ detail?.contestTime }}</span>
-            </p>
+          <div class="mt-5 flex flex-wrap items-center gap-x-4 gap-y-2">
             <a
               v-if="officialUrl"
               :href="officialUrl"
               target="_blank"
               rel="noopener noreferrer"
-              class="ml-auto inline-flex items-center gap-1 rounded-full bg-blue-50 px-3.5 py-1.5 text-xs font-bold
-                     text-blue-700 ring-1 ring-blue-200 transition-colors
-                     hover:bg-blue-100 hover:text-blue-800 hover:ring-blue-300
-                     dark:bg-blue-500/15 dark:text-blue-300 dark:ring-blue-500/30
-                     dark:hover:bg-blue-500/25 dark:hover:text-blue-200"
+              class="inline-flex items-center gap-1.5 rounded-full bg-white px-4 py-2 text-xs font-bold
+                     text-slate-700 ring-1 ring-slate-200 transition-colors
+                     hover:bg-slate-50 hover:text-blue-700 hover:ring-blue-200
+                     dark:bg-slate-800 dark:text-slate-200 dark:ring-slate-700
+                     dark:hover:bg-slate-700 dark:hover:text-blue-300"
             >
-              查看官网
+              <span class="h-1.5 w-1.5 rounded-full bg-emerald-500" aria-hidden="true"></span>
+              官网 {{ officialHost }}
               <span aria-hidden="true">↗</span>
             </a>
+            <span
+              v-else
+              class="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-4 py-2 text-xs
+                     font-semibold text-slate-400 dark:bg-slate-800 dark:text-slate-500"
+            >
+              暂未收录官网
+            </span>
+            <span class="text-xs text-slate-400 dark:text-slate-500">
+              信息来自平台采集，最终以官网当年通知为准
+            </span>
           </div>
         </section>
 
-        <!-- 3. 赛事档案：全部字段来自 /api/competitions/{id}，没有数据就不渲染 -->
-        <section
-          v-if="hasArchive"
-          class="mt-10 border-t border-slate-200 dark:border-slate-700 pt-8"
-        >
-          <h2 class="text-xl font-bold text-slate-900 dark:text-slate-100">赛事档案</h2>
-
-          <dl class="mt-6 grid gap-4 sm:grid-cols-2">
-            <div
-              v-if="officialUrl"
-              class="rounded-2xl bg-white p-5 ring-1 ring-slate-200/70 shadow-sm dark:bg-slate-800 dark:ring-slate-700 sm:col-span-2"
-            >
-              <dt class="text-xs font-bold tracking-wide text-slate-400 dark:text-slate-500">赛事官网</dt>
-              <dd class="mt-2 flex flex-wrap items-center gap-2">
-                <a
-                  :href="officialUrl"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  class="break-all text-sm font-bold text-blue-600 hover:text-blue-700 hover:underline dark:text-blue-400"
-                >
-                  {{ officialHost || officialUrl }}
-                </a>
-                <span class="text-xs text-slate-400 dark:text-slate-500">（点击核对当年通知）</span>
-              </dd>
-            </div>
-
-            <div
-              v-if="levelText"
-              class="rounded-2xl bg-white p-5 ring-1 ring-slate-200/70 shadow-sm dark:bg-slate-800 dark:ring-slate-700"
-            >
-              <dt class="text-xs font-bold tracking-wide text-slate-400 dark:text-slate-500">赛事级别</dt>
-              <dd class="mt-2 text-sm font-bold text-slate-800 dark:text-slate-100">{{ levelText }}</dd>
-            </div>
-
-            <div
-              v-if="detail.category"
-              class="rounded-2xl bg-white p-5 ring-1 ring-slate-200/70 shadow-sm dark:bg-slate-800 dark:ring-slate-700"
-            >
-              <dt class="text-xs font-bold tracking-wide text-slate-400 dark:text-slate-500">赛事类别</dt>
-              <dd class="mt-2 text-sm font-bold text-slate-800 dark:text-slate-100">{{ detail.category }}</dd>
-            </div>
-
-            <div class="rounded-2xl bg-white p-5 ring-1 ring-slate-200/70 shadow-sm dark:bg-slate-800 dark:ring-slate-700">
-              <dt class="text-xs font-bold tracking-wide text-slate-400 dark:text-slate-500">报名时间</dt>
-              <dd class="mt-2 text-sm font-bold text-slate-800 dark:text-slate-100">{{ detail.signUpTime }}</dd>
-            </div>
-
-            <div class="rounded-2xl bg-white p-5 ring-1 ring-slate-200/70 shadow-sm dark:bg-slate-800 dark:ring-slate-700">
-              <dt class="text-xs font-bold tracking-wide text-slate-400 dark:text-slate-500">比赛时间</dt>
-              <dd class="mt-2 text-sm font-bold text-slate-800 dark:text-slate-100">{{ detail.contestTime }}</dd>
-            </div>
-          </dl>
-
+        <!-- 3. 关键信息速览（真实字段；缺失时明确写“暂未收录”） -->
+        <section class="mt-8 grid grid-cols-2 gap-4 lg:grid-cols-4">
           <div
-            v-if="introParagraphs.length"
-            class="mt-6 rounded-2xl bg-white p-6 ring-1 ring-slate-200/70 shadow-sm dark:bg-slate-800 dark:ring-slate-700"
+            class="rounded-2xl border border-slate-200/70 bg-white p-5 shadow-sm
+                   dark:border-slate-700 dark:bg-slate-800"
           >
-            <h3 class="text-lg font-bold text-slate-900 dark:text-slate-100">赛事简介</h3>
+            <span class="block h-1.5 w-8 rounded-full bg-blue-500"></span>
+            <p class="mt-3 text-xs font-bold tracking-wide text-slate-400 dark:text-slate-500">报名时间</p>
             <p
-              v-for="(text, i) in introParagraphs"
-              :key="i"
-              class="mt-3 text-sm leading-7 text-slate-600 dark:text-slate-300"
+              class="mt-1.5 text-lg font-black leading-tight"
+              :class="hasRegTime ? 'text-slate-800 dark:text-slate-100' : 'text-slate-400 dark:text-slate-500'"
             >
-              {{ text }}
+              {{ hasRegTime ? detail.signUpTime : '暂未收录' }}
             </p>
           </div>
 
           <div
-            v-if="techStack.length"
-            class="mt-6 rounded-2xl bg-white p-6 ring-1 ring-slate-200/70 shadow-sm dark:bg-slate-800 dark:ring-slate-700"
+            class="rounded-2xl border border-slate-200/70 bg-white p-5 shadow-sm
+                   dark:border-slate-700 dark:bg-slate-800"
           >
-            <h3 class="text-lg font-bold text-slate-900 dark:text-slate-100">涉及技术栈</h3>
-            <ul class="mt-3 flex flex-wrap gap-2">
+            <span class="block h-1.5 w-8 rounded-full bg-sky-500"></span>
+            <p class="mt-3 text-xs font-bold tracking-wide text-slate-400 dark:text-slate-500">比赛时间</p>
+            <p
+              class="mt-1.5 text-lg font-black leading-tight"
+              :class="hasContestTime ? 'text-slate-800 dark:text-slate-100' : 'text-slate-400 dark:text-slate-500'"
+            >
+              {{ hasContestTime ? detail.contestTime : '暂未收录' }}
+            </p>
+          </div>
+
+          <div
+            class="rounded-2xl border border-slate-200/70 bg-white p-5 shadow-sm
+                   dark:border-slate-700 dark:bg-slate-800"
+          >
+            <span class="block h-1.5 w-8 rounded-full bg-violet-500"></span>
+            <p class="mt-3 text-xs font-bold tracking-wide text-slate-400 dark:text-slate-500">赛事级别</p>
+            <p
+              class="mt-1.5 text-lg font-black leading-tight"
+              :class="levelText ? 'text-slate-800 dark:text-slate-100' : 'text-slate-400 dark:text-slate-500'"
+            >
+              {{ levelText || '暂未收录' }}
+            </p>
+          </div>
+
+          <div
+            class="rounded-2xl border border-slate-200/70 bg-white p-5 shadow-sm
+                   dark:border-slate-700 dark:bg-slate-800"
+          >
+            <span class="block h-1.5 w-8 rounded-full bg-amber-500"></span>
+            <p class="mt-3 text-xs font-bold tracking-wide text-slate-400 dark:text-slate-500">赛事类别</p>
+            <p
+              class="mt-1.5 text-lg font-black leading-tight"
+              :class="detail.category ? 'text-slate-800 dark:text-slate-100' : 'text-slate-400 dark:text-slate-500'"
+            >
+              {{ detail.category || '暂未收录' }}
+            </p>
+          </div>
+        </section>
+
+        <!-- 4. 分块卡片：时间安排 / 赛事简介 / 参赛对象 / 内容范围 / 考试安排 -->
+        <section class="mt-8">
+          <div class="mb-4 flex flex-wrap items-end justify-between gap-3">
+            <div>
+              <h2 class="text-xl font-bold text-slate-900 dark:text-slate-100">赛事详情</h2>
+              <p class="mt-1 text-xs text-slate-400 dark:text-slate-500">
+                分模块展示平台已收录的信息；标注「暂未收录」的模块尚未获得官方结构化数据。
+              </p>
+            </div>
+            <a
+              v-if="officialUrl"
+              :href="officialUrl"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="inline-flex items-center gap-1 text-xs font-bold text-blue-600 hover:text-blue-700
+                     hover:underline dark:text-blue-400 dark:hover:text-blue-300"
+            >
+              前往官网核对 <span aria-hidden="true">↗</span>
+            </a>
+          </div>
+
+          <div class="grid gap-5 lg:grid-cols-12">
+            <!-- 时间安排 -->
+            <article
+              class="relative overflow-hidden rounded-3xl border border-blue-200/80 bg-gradient-to-br
+                     from-blue-50/90 via-white to-sky-50/70 p-6 shadow-sm
+                     dark:border-blue-400/20 dark:from-blue-500/[0.10] dark:via-slate-800 dark:to-sky-500/[0.06]
+                     lg:col-span-7"
+            >
+              <div class="flex items-center gap-2">
+                <span class="h-4 w-[3px] rounded-full bg-blue-500" aria-hidden="true"></span>
+                <h3 class="text-sm font-bold tracking-wide text-blue-700 dark:text-blue-300">时间安排</h3>
+                <span class="ml-auto text-[10px] font-bold uppercase tracking-[0.18em] text-blue-400/70">
+                  Schedule
+                </span>
+              </div>
+
+              <div v-if="hasAnyTime" class="mt-5 space-y-4">
+                <div v-if="hasRegTime" class="border-l-2 border-blue-400/70 pl-4">
+                  <p class="text-xs font-bold tracking-wide text-blue-500 dark:text-blue-400">报名阶段</p>
+                  <p class="mt-1 text-xl font-black text-slate-800 dark:text-slate-100">
+                    {{ detail.signUpTime }}
+                  </p>
+                </div>
+                <div v-if="!hasRegTime" class="border-l-2 border-dashed border-slate-300 pl-4 dark:border-slate-600">
+                  <p class="text-xs font-bold tracking-wide text-slate-400 dark:text-slate-500">报名阶段</p>
+                  <p class="mt-1 text-sm font-bold text-slate-400 dark:text-slate-500">暂未收录</p>
+                </div>
+                <div v-if="hasContestTime" class="border-l-2 border-sky-400/70 pl-4">
+                  <p class="text-xs font-bold tracking-wide text-sky-500 dark:text-sky-400">比赛阶段</p>
+                  <p class="mt-1 text-xl font-black text-slate-800 dark:text-slate-100">
+                    {{ detail.contestTime }}
+                  </p>
+                </div>
+                <div v-if="!hasContestTime" class="border-l-2 border-dashed border-slate-300 pl-4 dark:border-slate-600">
+                  <p class="text-xs font-bold tracking-wide text-slate-400 dark:text-slate-500">比赛阶段</p>
+                  <p class="mt-1 text-sm font-bold text-slate-400 dark:text-slate-500">暂未收录</p>
+                </div>
+                <p class="text-xs leading-5 text-slate-500 dark:text-slate-400">
+                  月份窗口来自平台采集，具体起止日期与校内选拔安排请以官网当年通知为准。
+                </p>
+              </div>
+
+              <div
+                v-else
+                class="mt-5 rounded-2xl border border-dashed border-blue-200/80 bg-white/60 p-5
+                       dark:border-blue-400/20 dark:bg-slate-900/30"
+              >
+                <p class="text-sm font-bold text-slate-600 dark:text-slate-300">官方暂未公布时间窗口</p>
+                <p class="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">
+                  平台尚未采集到该赛事的报名或比赛月份。
+                </p>
+                <a
+                  v-if="officialUrl"
+                  :href="officialUrl"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="mt-3 inline-flex items-center gap-1 text-xs font-bold text-blue-600 hover:underline
+                         dark:text-blue-400"
+                >
+                  去官网查看通知 <span aria-hidden="true">↗</span>
+                </a>
+              </div>
+            </article>
+
+            <!-- 赛事简介 -->
+            <article
+              class="rounded-3xl border border-slate-200/70 bg-white p-6 shadow-sm
+                     dark:border-slate-700 dark:bg-slate-800 lg:col-span-5"
+            >
+              <div class="flex items-center gap-2">
+                <span class="h-4 w-[3px] rounded-full bg-slate-400" aria-hidden="true"></span>
+                <h3 class="text-sm font-bold tracking-wide text-slate-700 dark:text-slate-200">赛事简介</h3>
+                <span class="ml-auto text-[10px] font-bold uppercase tracking-[0.18em] text-slate-400">
+                  Overview
+                </span>
+              </div>
+
+              <div v-if="introParagraphs.length" class="mt-4 space-y-3">
+                <p
+                  v-for="(text, i) in introParagraphs"
+                  :key="i"
+                  class="text-sm leading-7 text-slate-600 dark:text-slate-300"
+                >
+                  {{ text }}
+                </p>
+              </div>
+
+              <div v-else class="mt-4 rounded-2xl border border-dashed border-slate-200 p-4 dark:border-slate-700">
+                <p class="text-sm font-bold text-slate-500 dark:text-slate-400">暂未收录赛事简介</p>
+                <p class="mt-1 text-xs leading-5 text-slate-400 dark:text-slate-500">
+                  平台尚未采集到该赛事的简介或摘要。
+                </p>
+              </div>
+            </article>
+
+            <!-- 参赛对象 -->
+            <article
+              class="rounded-3xl border border-teal-200/80 bg-gradient-to-br from-teal-50/90 via-white
+                     to-emerald-50/60 p-5 shadow-sm dark:border-teal-400/20 dark:from-teal-500/[0.09]
+                     dark:via-slate-800 dark:to-emerald-500/[0.05] lg:col-span-4"
+            >
+              <div class="flex items-center gap-2">
+                <span class="h-4 w-[3px] rounded-full bg-teal-500" aria-hidden="true"></span>
+                <h3 class="text-sm font-bold tracking-wide text-teal-700 dark:text-teal-300">参赛对象</h3>
+                <span class="ml-auto text-[10px] font-bold uppercase tracking-[0.18em] text-teal-400/70">
+                  Eligibility
+                </span>
+              </div>
+
+              <p
+                v-if="participants"
+                class="mt-3 text-sm leading-7 text-slate-600 dark:text-slate-300"
+              >
+                {{ participants }}
+              </p>
+
+              <div
+                v-else
+                class="mt-4 rounded-2xl border border-dashed border-teal-200/80 bg-white/60 p-4
+                       dark:border-teal-400/20 dark:bg-slate-900/30"
+              >
+                <p class="text-sm font-bold text-slate-600 dark:text-slate-300">暂未收录参赛对象</p>
+                <p class="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">
+                  平台尚未采集到该赛事的参赛资格与组队要求。
+                </p>
+                <a
+                  v-if="officialUrl"
+                  :href="officialUrl"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="mt-3 inline-flex items-center gap-1 text-xs font-bold text-teal-600 hover:underline
+                         dark:text-teal-400"
+                >
+                  去官网查看 <span aria-hidden="true">↗</span>
+                </a>
+              </div>
+            </article>
+
+            <!-- 内容范围 -->
+            <article
+              class="rounded-3xl border border-amber-200/80 bg-gradient-to-br from-amber-50/90 via-white
+                     to-orange-50/60 p-5 shadow-sm dark:border-amber-400/20 dark:from-amber-500/[0.09]
+                     dark:via-slate-800 dark:to-orange-500/[0.05] lg:col-span-4"
+            >
+              <div class="flex items-center gap-2">
+                <span class="h-4 w-[3px] rounded-full bg-amber-500" aria-hidden="true"></span>
+                <h3 class="text-sm font-bold tracking-wide text-amber-700 dark:text-amber-300">内容范围</h3>
+                <span class="ml-auto text-[10px] font-bold uppercase tracking-[0.18em] text-amber-400/70">
+                  Scope
+                </span>
+              </div>
+
+              <p
+                v-if="contentScope"
+                class="mt-3 text-sm leading-7 text-slate-600 dark:text-slate-300"
+              >
+                {{ contentScope }}
+              </p>
+
+              <div
+                v-else
+                class="mt-4 rounded-2xl border border-dashed border-amber-200/80 bg-white/60 p-4
+                       dark:border-amber-400/20 dark:bg-slate-900/30"
+              >
+                <p class="text-sm font-bold text-slate-600 dark:text-slate-300">暂未收录内容范围</p>
+                <p class="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">
+                  平台尚未采集到该赛事的赛项与作品范围说明。
+                </p>
+                <a
+                  v-if="officialUrl"
+                  :href="officialUrl"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="mt-3 inline-flex items-center gap-1 text-xs font-bold text-amber-600 hover:underline
+                         dark:text-amber-400"
+                >
+                  去官网查看 <span aria-hidden="true">↗</span>
+                </a>
+              </div>
+            </article>
+
+            <!-- 考试安排 -->
+            <article
+              class="rounded-3xl border border-violet-200/80 bg-gradient-to-br from-violet-50/90 via-white
+                     to-fuchsia-50/60 p-5 shadow-sm dark:border-violet-400/20 dark:from-violet-500/[0.09]
+                     dark:via-slate-800 dark:to-fuchsia-500/[0.05] lg:col-span-4"
+            >
+              <div class="flex items-center gap-2">
+                <span class="h-4 w-[3px] rounded-full bg-violet-500" aria-hidden="true"></span>
+                <h3 class="text-sm font-bold tracking-wide text-violet-700 dark:text-violet-300">考试安排</h3>
+                <span class="ml-auto text-[10px] font-bold uppercase tracking-[0.18em] text-violet-400/70">
+                  Format
+                </span>
+              </div>
+
+              <p
+                v-if="examArrangement"
+                class="mt-3 text-sm leading-7 text-slate-600 dark:text-slate-300"
+              >
+                {{ examArrangement }}
+              </p>
+
+              <div
+                v-else
+                class="mt-4 rounded-2xl border border-dashed border-violet-200/80 bg-white/60 p-4
+                       dark:border-violet-400/20 dark:bg-slate-900/30"
+              >
+                <p class="text-sm font-bold text-slate-600 dark:text-slate-300">暂未收录考试安排</p>
+                <p class="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">
+                  平台尚未采集到该赛事的赛制、考试或答辩安排。
+                </p>
+                <a
+                  v-if="officialUrl"
+                  :href="officialUrl"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="mt-3 inline-flex items-center gap-1 text-xs font-bold text-violet-600 hover:underline
+                         dark:text-violet-400"
+                >
+                  去官网查看 <span aria-hidden="true">↗</span>
+                </a>
+              </div>
+            </article>
+          </div>
+
+          <!-- 技术栈：有真实数据才渲染，不占空壳 -->
+          <div
+            v-if="techStack.length"
+            class="mt-5 rounded-3xl border border-slate-200/70 bg-white p-6 shadow-sm
+                   dark:border-slate-700 dark:bg-slate-800"
+          >
+            <div class="flex items-center gap-2">
+              <span class="h-4 w-[3px] rounded-full bg-sky-500" aria-hidden="true"></span>
+              <h3 class="text-sm font-bold tracking-wide text-slate-700 dark:text-slate-200">涉及技术栈</h3>
+              <span class="ml-auto text-[10px] font-bold uppercase tracking-[0.18em] text-slate-400">
+                Stack
+              </span>
+            </div>
+            <ul class="mt-4 flex flex-wrap gap-2">
               <li
                 v-for="tag in techStack"
                 :key="tag"
-                class="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600 dark:bg-slate-700 dark:text-slate-300"
+                class="rounded-full bg-sky-50 px-3 py-1.5 text-xs font-bold text-sky-700
+                       ring-1 ring-sky-200 dark:bg-sky-500/10 dark:text-sky-300 dark:ring-sky-500/20"
               >
                 {{ tag }}
               </li>
@@ -512,52 +813,126 @@ const hasArchive = computed(
           </div>
         </section>
 
-        <!-- 4. 参赛全流程攻略：有内容直接渲染；为空时提供「按需生成」入口 -->
-        <div
-          v-if="detail.full_process_guide"
-          class="mt-8 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 rounded-2xl p-6"
-        >
-          <div class="mb-4 flex flex-wrap items-center justify-between gap-2">
-            <h3 class="text-xl font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2">🗺️ 参赛全流程攻略</h3>
-            <p v-if="detail.guide_generated_at" class="text-xs text-slate-400 dark:text-slate-500">
-              AI 生成于 {{ detail.guide_generated_at }}，请以官网通知为准
-            </p>
-          </div>
-          <div class="prose prose-slate dark:prose-invert max-w-none text-slate-600 dark:text-slate-300" v-html="renderedGuide"></div>
-        </div>
-
-        <div
-          v-else
-          class="mt-8 rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-6 py-8 text-center dark:border-slate-700 dark:bg-slate-800/30"
-        >
-          <template v-if="guideBusy">
-            <p class="text-slate-600 dark:text-slate-300">✨ AI 正在整理该赛事的参赛攻略…</p>
-            <p class="mt-2 text-xs text-slate-400 dark:text-slate-500">通常需要 30–60 秒，可以先浏览其他内容</p>
-            <div class="mx-auto mt-4 h-1.5 w-40 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-700">
-              <div class="h-full w-1/2 animate-pulse rounded-full bg-blue-500"></div>
-            </div>
-          </template>
-          <template v-else>
-            <p class="text-slate-500 dark:text-slate-400">该赛事攻略正在收集中，敬请期待...</p>
-            <button
-              v-if="canGenerateGuide"
-              type="button"
-              class="mt-4 inline-flex items-center gap-2 rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-blue-500 dark:hover:bg-blue-400"
-              :disabled="guideRequesting"
-              @click="onGenerateGuide"
+        <!-- 5. 参赛全流程攻略：有内容直接渲染；为空时保留卡片外壳 + 生成按钮 -->
+        <section id="guide" class="mt-8 scroll-mt-28">
+          <div
+            v-if="detail.full_process_guide"
+            class="overflow-hidden rounded-3xl border border-slate-200/80 bg-white shadow-sm
+                   dark:border-slate-700 dark:bg-slate-800"
+          >
+            <div
+              class="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200/80
+                     bg-gradient-to-r from-indigo-50 via-white to-sky-50 px-6 py-5
+                     dark:border-slate-700 dark:from-indigo-500/[0.10] dark:via-slate-800 dark:to-sky-500/[0.06]"
             >
-              <span
-                v-if="guideRequesting"
-                class="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white"
-              ></span>
-              <span>{{ guideRequesting ? '提交中…' : '✨ 生成 AI 攻略' }}</span>
-            </button>
-            <p v-if="guideError" class="mt-3 text-sm text-red-500 dark:text-red-400">{{ guideError }}</p>
-            <p class="mt-3 text-xs text-slate-400 dark:text-slate-500">
-              需登录后使用；攻略由 AI 依据平台已有资料生成，具体时间与规则请以官网通知为准。
-            </p>
-          </template>
-        </div>
+              <div class="flex items-center gap-3">
+                <span
+                  class="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-indigo-600
+                         text-xl text-white shadow-sm shadow-indigo-600/25"
+                  aria-hidden="true"
+                >
+                  🗺️
+                </span>
+                <div>
+                  <h2 class="text-lg font-bold text-slate-900 dark:text-slate-100">参赛全流程攻略</h2>
+                  <p class="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+                    AI 依据平台已收录资料整理 · 具体规则请以官网当年通知为准
+                  </p>
+                </div>
+              </div>
+              <div class="flex flex-wrap items-center gap-2">
+                <span
+                  v-if="detail.guide_generated_at"
+                  class="rounded-full bg-white/80 px-3 py-1 text-xs font-semibold text-slate-500
+                         ring-1 ring-slate-200 dark:bg-slate-900/40 dark:text-slate-400 dark:ring-slate-700"
+                >
+                  生成于 {{ detail.guide_generated_at }}
+                </span>
+                <span
+                  class="rounded-full bg-emerald-50 px-3 py-1 text-xs font-bold text-emerald-700
+                         ring-1 ring-emerald-200 dark:bg-emerald-500/10 dark:text-emerald-300 dark:ring-emerald-500/20"
+                >
+                  AI 生成
+                </span>
+              </div>
+            </div>
+
+            <div
+              class="prose prose-slate dark:prose-invert max-w-none px-6 py-6 text-slate-600
+                     prose-headings:scroll-mt-28 prose-h2:text-xl prose-h2:font-bold
+                     prose-h3:text-base prose-h3:font-bold prose-p:text-sm prose-p:leading-7
+                     prose-li:text-sm prose-table:text-sm
+                     dark:text-slate-300 sm:px-8"
+              v-html="renderedGuide"
+            ></div>
+          </div>
+
+          <div
+            v-else
+            class="relative overflow-hidden rounded-3xl border border-indigo-200/70
+                   bg-gradient-to-br from-indigo-50 via-white to-sky-50 px-6 py-12 text-center
+                   shadow-sm dark:border-indigo-400/20 dark:from-indigo-500/[0.10]
+                   dark:via-slate-800 dark:to-sky-500/[0.06]"
+          >
+            <div
+              class="pointer-events-none absolute -right-12 -top-12 h-48 w-48 rounded-full bg-indigo-200/40 blur-3xl
+                     dark:bg-indigo-500/10"
+              aria-hidden="true"
+            ></div>
+
+            <div class="relative">
+              <div
+                class="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-white text-2xl
+                       shadow-sm ring-1 ring-indigo-100 dark:bg-slate-800 dark:ring-indigo-400/20"
+                aria-hidden="true"
+              >
+                🗺️
+              </div>
+              <h2 class="mt-4 text-xl font-bold text-slate-900 dark:text-slate-100">参赛全流程攻略</h2>
+              <p class="mx-auto mt-2 max-w-xl text-sm leading-6 text-slate-500 dark:text-slate-400">
+                该赛事还没有生成结构化攻略。AI 可以基于平台已收录的赛事资料，整理报名、备赛、提交与答辩的完整流程。
+              </p>
+
+              <div v-if="guideBusy" class="mt-6">
+                <p class="text-sm font-semibold text-indigo-700 dark:text-indigo-300">
+                  ✨ AI 正在整理该赛事的参赛攻略…
+                </p>
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                  通常需要 30–60 秒，可以先浏览上方内容
+                </p>
+                <div class="mx-auto mt-4 h-1.5 w-44 overflow-hidden rounded-full bg-indigo-100 dark:bg-slate-700">
+                  <div class="h-full w-1/2 animate-pulse rounded-full bg-indigo-500"></div>
+                </div>
+              </div>
+
+              <template v-else>
+                <button
+                  v-if="canGenerateGuide"
+                  type="button"
+                  class="mt-6 inline-flex items-center justify-center gap-2 rounded-xl bg-indigo-600 px-6 py-3
+                         text-sm font-bold text-white shadow-sm shadow-indigo-600/25 transition
+                         hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60
+                         dark:bg-indigo-500 dark:hover:bg-indigo-400"
+                  :disabled="guideRequesting"
+                  @click="onGenerateGuide"
+                >
+                  <span
+                    v-if="guideRequesting"
+                    class="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white"
+                  ></span>
+                  <span>{{ guideRequesting ? '提交中…' : '✨ 生成 AI 攻略' }}</span>
+                </button>
+
+                <p v-if="guideError" class="mt-3 text-sm font-semibold text-red-500 dark:text-red-400">
+                  {{ guideError }}
+                </p>
+                <p class="mt-4 text-xs text-slate-400 dark:text-slate-500">
+                  需登录后使用 · 生成内容仅供参考，具体规则请以官网通知为准
+                </p>
+              </template>
+            </div>
+          </div>
+        </section>
       </template>
     </main>
   </div>

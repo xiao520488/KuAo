@@ -1,22 +1,31 @@
 # CRAWLER_HANDOVER.md
 
 > 交接范围：`backend/` 下高校新闻获奖采集、赛事基础数据采集、**生产库赛事批量补全**、**赛氪网数据源预检**、**候选表与审核 CLI**、**AI 攻略/灵感生成链路**、**云端定时任务链**、测试库联调与数据库迁移。
-> 生成时间：2026-11-07（Asia/Shanghai）｜最后更新：2026-11-08 18:30（详情页去套话：前端改为真实字段驱动）
+> 生成时间：2026-11-07（Asia/Shanghai）｜最后更新：2026-11-08 19:35（交接：当前 TODO 切换为赛氪详情补充器）
 > 原则：后续接手请先读本文件，再按需读代码。
 
 ---
 
 ## 零、接手必读（30 秒版）
 
-**当前阶段：爬虫闭环 + AI 内容生成闭环已完成；2026-11-08 已完成阿里云部署（原地升级 `/root/KuAo` + systemd + crontab，见 12.5），下一步 = 80 条候选审核 + 新闻 `LIST_URL` 确定后补挂 cron。**
+**当前阶段：爬虫闭环 + AI 内容生成闭环已完成；2026-11-08 已完成阿里云部署（原地升级 `/root/KuAo` + systemd + crontab，见 12.5），下一步 = 开发赛氪详情补充器（`enrich_saikr_details.py`）+ 80 条候选审核 + 新闻 `LIST_URL` 确定后补挂 cron。**
 
-> **【当前紧急 TODO｜2026-11-08 19:00】详情页 UI 回滚 + 云端旧版待排查（优先级最高）**
+**详情页卡片版已构建完成；云端前端发布目录问题已定位（实际 root = `/var/www/html`），下一步核心任务见下方【当前紧急 TODO】。**
+
+> **【当前紧急 TODO｜2026-11-08 19:35】开发赛氪详情补充器（`enrich_saikr_details.py`）**
 >
-> 1. **前端 UI 被改废，需要恢复“分块卡片”专业排版**：本轮把 `CompetitionDetailView.vue` 原有的分块卡片详情版式删成了线性「赛事档案」。新窗口必须恢复之前的专业卡片排版，规则是：**有数据就渲染真实数据**（官网、报名/比赛月份、简介、技术栈、攻略），**无数据保留原有卡片空壳**，并在攻略位保留「✨ 生成 AI 攻略」按钮；不允许再出现写死的“套话”文案。参考历史提交 `9a88775` 之前的 `CompetitionDetailView.vue`（可用 `git show 9a88775:frontend/src/views/CompetitionDetailView.vue` 取回旧版对照）。验证要求：`/competition/10`、`/1` 有真实官网/月份/攻略；`/competition/11` 无攻略时显示空壳 + 生成按钮；桌面 + 移动端各截一张图。
+> **核心任务：** 新建 `backend/enrich_saikr_details.py`，利用赛氪详情 API 补全现有比赛的 `participants`、`content_scope`、`exam_schedule` 字段。
 >
-> 2. **云端 `112.126.90.252` 疑似仍是旧版页面**：上一轮构建产物上传覆盖疑似未生效，或 Nginx / 浏览器缓存未刷新。新窗口排查顺序：① 本地 `dist/index.html` 的 `index-*.js` 哈希；② 服务器 `/opt/kuao/frontend/dist/index.html` 引用哈希、文件 mtime；③ `curl -s http://112.126.90.252/ | grep assets` 实际返回哈希；④ Nginx `root` 是否指向 `/opt/kuao/frontend/dist`、`index.html` 是否被缓存（必要时加 `Cache-Control: no-cache` 或用 `?v=` 破缓存）；⑤ 强刷后截图确认。**排查结论回填本文件。**
+> - 默认 dry-run；只补 NULL，不覆盖已有值；生产库必须 `--allow-production`，写前自动备份（复用 `discover_common.py` / `backup_db.py` 的库保护逻辑）。
+> - 先确认三列是否已存在（`db.py` / `schema_v2.sql` / `models/schemas.py`）；缺失则先补迁移与 API 模型，否则写入会直接报错。
+> - 赛氪详情 API：`GET https://apiv4buffer.saikr.com/api/pc/contest/info?contest_id=<id>`；沿用 `saikr_map.json` 映射，3–5 秒限速。
+> - 先用 3–5 条赛事验证字段映射，再批量；无法映射时保留 NULL，不编造。
 >
-> **【已修复 2026-11-08 18:30，但 UI 版式已被 19:00 TODO 推翻】** 详情页真实数据不展示：结论——**后端接口完全正常**，`GET /api/competitions/1`、`/10` 均返回 `official_url` / `reg_*_month` / `contest_*_month` / `full_process_guide` / `guide_status=ready`（id=10 攻略 5082 字，官网 `http://jsjds.blcu.edu.cn/`，比赛月份 7-8；id=1 攻略完整、官网 `https://cy.ncss.cn/`）。真正的 bug 在 **`CompetitionDetailView.vue`**：①「时间安排 / 参赛对象 / 内容范围 / 考试安排」四段和「参赛形式 / 竞赛内容 / 作品提交要求」三张卡片是**硬编码静态文案**，且**无条件渲染**，把真实信息压在下面，看起来就是“全是套话”；②官网与月份虽已绑定真实字段，但展示层级太低；③攻略按钮/渲染本身没有字段名错位（后端返回 `full_process_guide`，前端读的也是它），线上旧包被浏览器缓存时会表现为“只有套话”。**修复**：删除全部静态区块，改为完全由接口字段驱动的「赛事档案」（官网、级别、类别、报名/比赛月份、简介、技术栈）+ 真实攻略；字段为空则整块隐藏，不再输出任何编造文案。已用 headless Chrome 实测 `/competition/10`、`/1`、`/11`：无 console 报错、无横向溢出，`hasGuide=true`、`hasBoilerplate=false`。**本次只改前端，需重新构建并上传 `dist/`，后端无需重启。**
+> ~~**已解决（2026-11-08 19:10）：云端 Nginx 目录问题**：线上旧版根因是前端发布目录错误——实际 root 是 `/var/www/html`，上传到 `/root/KuAo/frontend/dist` / `/opt/kuao/frontend/dist` 都不会生效；线上无强缓存，正确覆盖命令已记录在 18:30 小节。~~
+>
+> **已完成（2026-11-08 19:10）：详情页卡片排版恢复**：顶部 4 张速览卡 + 中部 12 栅格卡片（时间安排 / 赛事简介 / 参赛对象 / 内容范围 / 考试安排），有 `full_process_guide` 渲染真实 Markdown，无攻略保留空壳 +「✨ 生成 AI 攻略」按钮；`/competition/10`、`/1`、`/11` 桌面 + 移动端已验收，截图见 `backend/workspace/final_detail*.png`。
+>
+> **历史记录（2026-11-08 18:30，已被 19:10 版式取代）** 详情页真实数据不展示：结论——**后端接口完全正常**，`GET /api/competitions/1`、`/10` 均返回 `official_url` / `reg_*_month` / `contest_*_month` / `full_process_guide` / `guide_status=ready`（id=10 攻略 5082 字，官网 `http://jsjds.blcu.edu.cn/`，比赛月份 7-8；id=1 攻略完整、官网 `https://cy.ncss.cn/`）。真正的 bug 在 **`CompetitionDetailView.vue`**：①「时间安排 / 参赛对象 / 内容范围 / 考试安排」四段和「参赛形式 / 竞赛内容 / 作品提交要求」三张卡片是**硬编码静态文案**，且**无条件渲染**，把真实信息压在下面，看起来就是“全是套话”；②官网与月份虽已绑定真实字段，但展示层级太低；③攻略按钮/渲染本身没有字段名错位（后端返回 `full_process_guide`，前端读的也是它），线上旧包被浏览器缓存时会表现为“只有套话”。**18:30 的修复**删除了全部静态区块、改为纯「赛事档案」；19:10 又在此基础上恢复了分块卡片空壳。**本次只改前端，需重新构建并上传 `dist/`，后端无需重启。**
 
 | 项目 | 现状 |
 |---|---|
@@ -199,7 +208,7 @@
 
 验证截图：`backend/workspace/cover-light.png`、`cover-dark.png`、`cover-detail.png`。
 
-### 详情页真实数据修复（2026-11-08 18:30，前端）
+### 详情页真实数据修复（2026-11-08 18:30，前端；历史记录 + 19:10 修正）
 
 **结论：后端无 bug，前端有“硬编码套话”bug。**
 
@@ -225,24 +234,38 @@
 - `/competition/11`（无攻略）：只显示真实档案 + 诚实的空攻略状态，不再出现假文案。
 - 截图：`backend/workspace/detail10_after.png`、`detail10_mobile_after.png`；对比图 `detail10_before.png`。
 
-**部署（只改前端，后端不用重启）：**
+> **2026-11-08 19:10 补充（云端旧版根因）**：18:30 这次上传到 `/opt/kuao/frontend/dist` 的构建**没有生效**。线上实际返回 `index-DbqXR3xu.js` + `CompetitionDetailView-PUdWNMzm.js`（chunk 里仍含“将在官方日程公布后同步更新”等旧套话），`Last-Modified=2026-11-08 14:07:17 CST`；本机 18:46 / 19:06 的 `index-C8mrSLYM.js` / `index-BLl1Vlbq.js` 请求回来是 `text/html`（SPA fallback），说明文件没进 Web 根。`workspace/kuao-cutover.sh` 第 91–94 行与 12.5 证明 Nginx `root` 是 **`/var/www/html`**；线上响应没有 `Cache-Control` / `Expires`，只有 `ETag` / `Last-Modified`，不是强缓存。**正确目录是 `/var/www/html`，不是 `/opt/kuao/frontend/dist`，也不是 `/root/KuAo/frontend/dist`。**
+
+**部署（只改前端，后端不用重启；2026-11-08 19:10 修正）：**
 
 ```powershell
 cd D:\agent-lab\KuAo-Platform\frontend
 npm.cmd run build
+# 先确认本次构建哈希（应与服务器上解压后的 index.html 一致）
+Select-String -Path dist\index.html -Pattern 'assets/index-'
 tar -czf dist.tar.gz -C dist .
-scp .\dist.tar.gz kuao@112.126.90.252:/tmp/dist.tar.gz
+scp .\dist.tar.gz root@112.126.90.252:/tmp/dist.tar.gz
 ```
 
 ```bash
-ssh kuao@112.126.90.252
-sudo -u kuao -H mkdir -p /opt/kuao/frontend/dist
-sudo -u kuao -H tar -xzf /tmp/dist.tar.gz -C /opt/kuao/frontend/dist
-sudo -u kuao -H chmod -R a+rX /opt/kuao/frontend/dist
-ls -l /opt/kuao/frontend/dist/index.html   # 应看到新的 index-*.js 哈希
+ssh root@112.126.90.252
+set -euo pipefail
+WEB_ROOT=/var/www/html                 # 以 nginx -T 里的 root 为准
+TS=$(date +%Y%m%d-%H%M%S)
+mkdir -p /root/kuao-backups
+tar -czf "/root/kuao-backups/frontend-$TS.tar.gz" -C "$WEB_ROOT" .
+mv "$WEB_ROOT" "/var/www/html.bak-$TS"
+mkdir -p "$WEB_ROOT"
+tar -xzf /tmp/dist.tar.gz -C "$WEB_ROOT"
+chmod -R a+rX "$WEB_ROOT"
+nginx -t
+systemctl reload nginx
+# 本机自检：输出应与上面本机 dist/index.html 的哈希一致
+grep -o 'assets/index-[^"]*' "$WEB_ROOT/index.html"
+curl -s http://127.0.0.1/ | grep -o 'assets/index-[^"]*'
 ```
 
-浏览器验收务必 **Ctrl + F5 / Cmd + Shift + R 强刷**；若仍是旧页面，先 `curl -s http://112.126.90.252/ | grep assets` 确认引用的是新哈希。
+浏览器验收务必 **Ctrl + F5 / Cmd + Shift + R 强刷**；若仍是旧页面，先 `curl -s http://112.126.90.252/ | grep -o 'assets/index-[^"]*'` 确认引用的是新哈希。**如果 `nginx -T` 显示的 root 不是 `/var/www/html`，把 `WEB_ROOT` 改成实际路径即可；不要再用 `/opt/kuao/frontend/dist`。**
 
 ### 测试库与产物（非源码）
 
