@@ -5,6 +5,8 @@ __pycache__/
 # 生产库写前自动备份（competitions.db.bak-<时间戳>），体积大且属本地产物
 *.db.bak
 *.db.bak-*
+*.bak
+*.bak-*
 *.db-wal
 *.db-shm
 *.log

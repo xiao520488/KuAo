@@ -1,14 +1,14 @@
 # CRAWLER_HANDOVER.md
 
 > 交接范围：`backend/` 下高校新闻获奖采集、赛事基础数据采集、**生产库赛事批量补全**、**赛氪网数据源预检**、**候选表与审核 CLI**、**AI 攻略/灵感生成链路**、**云端定时任务链**、测试库联调与数据库迁移。
-> 生成时间：2026-11-07（Asia/Shanghai）｜最后更新：2026-11-08 13:15（AI 按需生成 + 每日慢刷 + 生产库 ai_jobs 迁移完成）
+> 生成时间：2026-11-07（Asia/Shanghai）｜最后更新：2026-11-08 13:40（Git 安全存档 + 爬虫边界测试 + 《云端部署手册》交付）
 > 原则：后续接手请先读本文件，再按需读代码。
 
 ---
 
 ## 零、接手必读（30 秒版）
 
-**当前阶段：爬虫闭环 + AI 内容生成闭环已完成并经测试验证；下一阶段主线 = 写《云端部署手册》+ 挂新的 crontab 链，80 条候选审核并行推进。**
+**当前阶段：爬虫闭环 + AI 内容生成闭环已完成并经测试验证；《云端部署手册》已交付（`CLOUD_DEPLOYMENT_GUIDE.md`），下一步 = 按手册上阿里云 + 挂 crontab 链，80 条候选审核并行推进。**
 
 | 项目 | 现状 |
 |---|---|
@@ -39,8 +39,8 @@
 
 **下一步安排（按优先级）：**
 
-1. **写《云端部署手册》**：服务器/venv、DB 迁移与完整性校验、systemd + Nginx、对象存储备份、crontab 挂载与回滚；参考第七节「下一阶段重点 ①」+ 第十节。
-2. **挂 Crontab 新链**：备份 → 新闻（周一/周四）→ 新赛事发现 → AI 慢刷 → 周度补全 → 日志清理；见第十节 10.4，先手动逐条验收再挂。
+1. **《云端部署手册》已交付**：见 `CLOUD_DEPLOYMENT_GUIDE.md`（服务器依赖、代码拉取、`.env`、DB 迁移与 WAL、systemd/Nginx、crontab 链、验收/回滚）。**尚未在服务器执行**，按手册逐节敲。
+2. **挂 Crontab 新链**：按手册第 7 节先手动逐条验收，再写入服务器 `crontab -e`；备份 → 新闻（周一/周四）→ 新赛事发现 → AI 慢刷 → 周度补全 → 日志清理。
 3. **并行人工审核**：生产库 80 条 pending 继续用 `review_candidates.py` 审核；服务/广告类（「辅助报名」「考试入口」）直接 `--reject`。
 
 > ⚠️ 生产库现在**允许写**（用户 2026-11-07 明确授权），但每次写库前必须自动备份，且所有脚本默认 dry-run —— 见第四节红线。
@@ -155,6 +155,9 @@
 | `cleanup_orphan_ai.py` | 新增（2026-11-08）：孤儿 insights/ideas 清理（默认 dry-run，写生产需 `--allow-production` + 自动备份） |
 | `test_ai_guide.py` | 新增（2026-11-08）：16 例单测/接口测试（ai_jobs、幂等、409/429、列表瘦身、Prompt、孤儿清理），全部 mock 大模型 |
 | `AI_AUTOMATION_PLAN.md` | 新增（2026-11-08）：AI 生成与自动化方案评审稿（调研 + 设计 + crontab 链） |
+| `backup_db.py` | 新增（2026-11-08）：SQLite 在线备份（backup API，WAL 安全，单文件 DELETE 模式，integrity + 行数校验，按天/份数保留）；供 crontab 02:30 调用 |
+| `test_crawler_boundaries.py` | 新增（2026-11-08）：上云边界测试 20 例——Timeout/ConnectionError 不中断批量、残缺 JSON `safe_json` 兜底、空网页 `extract_page` 抛可预期 `CrawlError` 且批量继续 |
+| `CLOUD_DEPLOYMENT_GUIDE.md` | 新增（2026-11-08）：《云端部署手册》——阿里云 Ubuntu 依赖、代码拉取、`.env`、DB 快照/WAL、systemd、Nginx、crontab 链、验收与回滚 |
 | `CRAWLER_HANDOVER.md` | 本交接文档 |
 
 ### 修改文件
@@ -668,6 +671,7 @@ Copy-Item .\competitions.db .\test_crawl.db -Force
 32. **`ai_jobs` 的 15 分钟租约**：进程被 kill 后，下一次抢占会把 `running` 超过 15 分钟的任务标 failed，不会永久卡死；排查生成问题先看 `ai_jobs.error`。
 33. **测试库已有真机生成的攻略**：`test_crawl.db` 的 id=21、12 是本轮真机产物（2 条 ai_jobs done）；不要再把它们当“空攻略”用例，需要空攻略请另建临时库。
 34. **列表响应瘦身是破坏性变更**：`GET /api/competitions` 不再返回 `full_process_guide`；前端列表本来就不读该字段（已 grep 确认），若后续有调用方依赖，必须改用详情接口。
+35. **已知小 bug（上云前未修，待评估）**：`frontend/src/services/api.js` 的 `submitFeedback()` 调的是 `api.post('/api/feedback')`，而 axios 实例 `baseURL` 已是 `/api`，实际请求会变成 `/api/api/feedback`。正确写法应为 `api.post('/feedback')`。不影响爬虫/AI/部署主链路，反馈功能抽检时若 404 可先按此修。
 
 ---
 
@@ -785,6 +789,9 @@ AI 任务表/查询：     db.py (AI_JOBS_DDL / claim_ai_job / start|finish|fail
 每日慢刷：          daily_ai_worker.py (build_parser / run / save_report)
 兼容攻略 CLI：      generate_guides.py（调用 ai_content；--db-path / --allow-production）
 孤儿清理：          cleanup_orphan_ai.py（count/delete_orphan_ai_content）
+每日备份：          backup_db.py（make_backup / _prune / main；WAL 安全，单文件）
+上云边界测试：      test_crawler_boundaries.py（20 例：网络异常 / 残缺 JSON / 空网页）
+部署手册：          CLOUD_DEPLOYMENT_GUIDE.md（依赖 / DB 迁移 / systemd / Nginx / crontab）
 AI 测试：            test_ai_guide.py（16 例；ai_jobs / 幂等 / 409 / 429 / 列表瘦身 / Prompt）
 攻略接口：          routers/competitions.py (POST/GET /api/competitions/{id}/generate_guide)
 攻略模型：          models/schemas.py (CompetitionDetail.full_process_guide / guide_status / guide_generated_at)
@@ -1061,4 +1068,88 @@ cd ..\frontend; npm.cmd run build   # 7.36s / 115 modules
 | 新增 | `ai_content.py`、`ai_jobs_runner.py`、`daily_ai_worker.py`、`cleanup_orphan_ai.py`、`test_ai_guide.py`、`AI_AUTOMATION_PLAN.md` |
 | 修改 | `db.py`、`routers/competitions.py`、`models/schemas.py`、`config.py`、`generate_guides.py`、`migrate_production.py`、`frontend/src/services/api.js`、`frontend/src/views/CompetitionDetailView.vue` |
 | 数据 | 生产库 `ai_jobs` + 4 列；孤儿 insights/ideas 清零；测试库真机 2 篇攻略 |
-| 未做（下一步） | 《云端部署手册》、crontab 实机挂载、17 条空攻略的正式回填（等上云后由 worker 分批跑） |
+| 未做（下一步） | 服务器实机部署、crontab 实机挂载、17 条空攻略的正式回填（等上云后由 worker 分批跑） |
+
+---
+
+## 十二、上云前安全检查 / 边界测试 / 部署手册（2026-11-08）
+
+### 12.1 Git 安全存档
+
+- `.gitignore` 已补：`*.db.bak` / `*.db.bak-*` / `*.db-wal` / `*.db-shm` / `workspace/` / `.pytest_cache/` / `.ruff_cache/`。
+- 已执行 `git rm --cached backend/competitions.db.bak-20261106-115044`，停止跟踪遗留的本地备份库。
+  - 注意：该文件仍存在于旧提交历史（`41dde0b`）中；本轮只停止跟踪，**未重写历史**。若确认历史里含敏感数据，再用 `git filter-repo` 清理并强推。
+- 敏感信息扫描：
+  - 源码/文档无 `sk-*` 硬编码（`git grep` 只命中 README 占位符与 `config.py` 的 dev JWT 占位常量）；
+  - `.env` 未被跟踪；
+  - `config.py` 的 `_DEV_JWT_SECRET` 只是 fail-fast 哨兵，不是真实密钥。
+- 本地存档 commit：**`c64cb8ae6caa14364326ba8e4ca8b308aba50afa`**（`chore: 上云前安全存档…`）。打完后 `git status` 干净。
+- 遗留（未动，避免影响 RAG 首启）：`chroma_db/` 仍被 Git 跟踪（约 5 MB，可重建索引）。后续可 `git rm -r --cached chroma_db` + 加入 `.gitignore`，并在部署时用 `retriever.sync_awards_to_chroma(rebuild=True)` 重建。
+
+### 12.2 爬虫上云边界测试（20 例全绿）
+
+新增 `test_crawler_boundaries.py`，全部离线（不连网、不写真实库、不调模型），覆盖：
+
+| 场景 | 用例 | 断言 |
+|---|---|---|
+| `requests.Timeout` / `ConnectionError` | `test_fetch_html_wraps_network_error_as_crawl_error`（2 参数） | 按 `retries` 重试；最终包装成 `CrawlError`，信息含底层原因 |
+| 单条网络失败不中断批量 | `test_batch_loop_survives_timeout_and_connection_error` | 3 条候选（2 失败 / 1 正常）→ `rc=0`、`attempted=3`、`failed=2`，正常条继续处理 |
+| 残缺 / 非标准 JSON | `test_safe_json_truncated_json_falls_back_without_raising`、`test_safe_json_repairs_truncated_and_nonstandard_json` | 修不了返回 fallback（不抛异常）；截断对象/数组/代码围栏能修复 |
+| 任意垃圾输入 | `test_safe_json_never_raises_for_garbage`（8 参数） | 默认模式永不抛异常；`strict=True` 才抛 `LLMError` |
+| 空网页 | `test_extract_page_empty_html_raises_crawl_error_not_crash`（4 参数） | 空串/空 HTML/空白 body/空容器 → 可预期 `CrawlError`，不是 `AttributeError` |
+| 清洗边界 | `test_clean_text_handles_none_and_blank` | `None` / 空白 / 零宽字符 → `""` |
+| 空网页不中断批量 | `test_batch_loop_survives_empty_page` | 空页记 `crawl/llm` 失败，后续正常条继续 |
+
+运行结果：
+
+```powershell
+.\venv\Scripts\python.exe -m pytest test_crawler_boundaries.py -q
+# 20 passed in 1.84s
+
+.\venv\Scripts\python.exe -m pytest -q
+# 127 passed, 2 skipped, 3 warnings in 12.19s
+```
+
+### 12.3 每日备份脚本 `backup_db.py`
+
+- 用 `sqlite3.Connection.backup()`（不是 `cp`），把一个**包含已提交 WAL** 的一致性快照写成单文件；备份文件 `PRAGMA journal_mode=DELETE`，恢复时不依赖 `-wal/-shm`。
+- 备份后自动 `PRAGMA integrity_check` + 统计 `competitions / awards / competition_candidates / ai_jobs` 行数；支持 `--keep-days` / `--keep-count` / `--label` / `--json`。
+- 实测（WAL 未 checkpoint 写入一条新数据后立刻备份）：备份内行数包含该条，`integrity=ok`，备份旁无 `-wal`。
+- 对生产库只读冒烟：`competitions=33 / awards=87 / competition_candidates=82 / ai_jobs=0`，`integrity=ok`。
+
+```bash
+./venv/bin/python backup_db.py --db competitions.db --backup-dir backups --keep-days 30 --label daily
+```
+
+> 备份文件 SHA 与线上库 SHA 不同是正常的（页布局/日志模式被重写）；验收看 `integrity_check` + 行数。
+
+### 12.4 《云端部署手册》
+
+文件：**`CLOUD_DEPLOYMENT_GUIDE.md`**（约 1410 行），包含：
+
+1. 部署蓝图、目录/端口规划、维护窗口；
+2. 服务器初始化（时区、用户、Swap、UFW + 阿里云安全组）；
+3. 依赖安装（Ubuntu 22.04 deadsnakes / 24.04 默认 Python、venv、Node 可选）；
+4. 代码拉取（HTTPS / Deploy Key）与 `.env` 模板、JWT 生成、权限；
+5. **数据库迁移**：本地 `sqlite3.backup()` 快照 → SHA/行数校验 → scp → 服务器落库 → `migrate_production.py` 体检/迁移 → WAL 问答 → 恢复与回滚；
+6. systemd 服务（`--workers 1`、`127.0.0.1:8000`、加固项）；
+7. 前端 `dist` 上传 + Nginx（`/api` 反代、SPA fallback、HTTPS/certbot、混合内容提醒）；
+8. **crontab 链**：02:30 备份 → 03:00 新闻（周一/四）→ 04:10 赛氪候选 → 04:40 AI 慢刷 → 05:20 周度补全 → 05:40 日志清理 → 05:50 备份清理；含 `flock`、`%` 转义、时区、失败告警、常见坑；另附可选 OSS 异地备份。
+9. 上线验收清单、回滚预案、故障排查表；
+10. 附录：`.env`、校验 SQL、crontab、systemd/Nginx 路径、本地快照命令。
+
+**尚未在服务器执行**；执行人按手册从第 1 节顺序敲，并在 12.5 回填结果。
+
+### 12.5 上云记录（服务器执行后回填）
+
+| 项 | 值 |
+|---|---|
+| 发布 commit | `git -C /opt/kuao log -1 --format=%H` |
+| 部署时间 | 待填 |
+| 服务器 | 阿里云 Ubuntu `112.126.90.252` |
+| 迁移后 DB SHA-256 | `sha256sum /opt/kuao/backend/competitions.db` |
+| 迁移后行数 | competitions / awards / candidates / guides / ai_jobs |
+| 每日备份路径 | `/opt/kuao/backend/backups/` |
+| crontab 生效时间 | 待填 |
+| 首次验收人 | 待填 |
+| 回滚 commit / 备份 | 待填 |
