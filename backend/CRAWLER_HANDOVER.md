@@ -21,6 +21,8 @@
 > - 赛氪详情 API：`GET https://apiv4buffer.saikr.com/api/pc/contest/info?contest_id=<id>`；沿用 `saikr_map.json` 映射，3–5 秒限速。
 > - 先用 3–5 条赛事验证字段映射，再批量；无法映射时保留 NULL，不编造。
 >
+> **已完成（2026-11-08 20:00，仅本地 `test_crawl.db`，未上云）**：`competitions` 新增 `participants` / `content_scope` / `exam_schedule` 三列（`db._MIGRATION_COLUMNS` + `schema_v2.sql` + `migrate_production.py` 目标列 + 详情 API 模型）；新建 `enrich_saikr_details.py`，实跑补全 **23 条 / 58 个字段**（参赛对象 21 / 内容范围 20 / 考试安排 17）；往年届次跳过 5 条、无映射 3 条。生产库**未迁移、未写入**，等数据质量验收；**尚未引入大模型防侵权改写，也未接入自动化流水线**。详见 12.6。
+>
 > ~~**已解决（2026-11-08 19:10）：云端 Nginx 目录问题**：线上旧版根因是前端发布目录错误——实际 root 是 `/var/www/html`，上传到 `/root/KuAo/frontend/dist` / `/opt/kuao/frontend/dist` 都不会生效；线上无强缓存，正确覆盖命令已记录在 18:30 小节。~~
 >
 > **已完成（2026-11-08 19:10）：详情页卡片排版恢复**：顶部 4 张速览卡 + 中部 12 栅格卡片（时间安排 / 赛事简介 / 参赛对象 / 内容范围 / 考试安排），有 `full_process_guide` 渲染真实 Markdown，无攻略保留空壳 +「✨ 生成 AI 攻略」按钮；`/competition/10`、`/1`、`/11` 桌面 + 移动端已验收，截图见 `backend/workspace/final_detail*.png`。
@@ -1235,3 +1237,44 @@ cd ..\frontend; npm.cmd run build   # 7.36s / 115 modules
 | 回滚 | `bash /root/kuao-rollback.sh 20261108-143324`；代码回退 `git checkout 3ee9dd5`；库回退用上述备份目录的 `competitions.db` |
 
 > 与手册 0.2 的差异：主库仍在 `/root/KuAo/backend/competitions.db`，未迁到 `/opt/kuao`；因此所有 cron、systemd、备份路径都按 `/root/KuAo` 配置。后续若迁移到 `/opt/kuao`，必须同步改 systemd `WorkingDirectory`、cron 的 `cd`、日志/备份路径，并先停服务、删 `-wal/-shm` 再移库。
+
+---
+
+## 十三、赛氪详情补充器（2026-11-08，本地测试库已跑通）
+
+> **当前进展（2026-11-08 20:05）**：详情页字段结构已建好，本地测试跑通 23 个比赛，但尚未引入大模型防侵权改写，且未接入自动化流水线。
+
+**目标**：详情页「参赛对象 / 内容范围 / 考试安排」三张卡片此前恒为空，因为库里没有对应列和数据；赛氪详情 API 的 `content`（HTML 通知正文）里有这些章节。
+
+**结构升级（已完成，测试库已迁移）**
+
+| 位置 | 改动 |
+|---|---|
+| `schema_v2.sql` | `competitions` 新增 `participants` / `content_scope` / `exam_schedule`（TEXT，可空） |
+| `db.py` | 加入 `_MIGRATION_COLUMNS`（老库幂等补列）；`_enrich` 统一兜底空串；新增 `fill_competition_detail_text()`（**只填空字段**，可传 `db_path`） |
+| `migrate_production.py` | `TARGET_COLUMNS` 纳入三列，迁移前后体检/复检覆盖 |
+| `models/schemas.py` + `routers/competitions.py` | `CompetitionDetail` 返回三字段（仅详情接口，列表接口不返回） |
+
+**`enrich_saikr_details.py`**
+
+- 赛事清单：默认读生产库（只读）`competitions.db`，写目标库默认 `test_crawl.db`；写生产库必须 `--apply --allow-production`，写前自动备份。
+- contest_id：沿用 `saikr_map.json`；无映射时按名称相似度（≥0.93）兜底；同一 contest_id 只请求一次，父/子赛事复用。
+- 抓取：`GET https://apiv4buffer.saikr.com/api/pc/contest/info?contest_id=<id>`，3–5 秒随机限速、2 次重试。
+- 抽取：HTML → 叶子块 → 标题层级（一、/（一）/1./短标题）→ 按关键词选章节（参赛对象/赛项/赛程）；`participation_detail`、`contest_stage` 作为结构化兜底；带正文质量闸门（参赛对象须含学生/团队等，考试安排须含日期/赛段等）；奖项标题不当作内容范围；去官网/联系方式/页码噪声；单字段 1200 字截断。
+- 护栏：沿用「报名结束超 400 天 = 往年届次」，整条跳过（`--allow-stale` 可强制）；只写 NULL/空串，不覆盖已有值；抽不到保持 NULL。
+
+**实跑结果（`test_crawl.db`，2026-11-08 19:51，备份 `test_crawl.db.bak-20261108-195140`）**
+
+| 指标 | 值 |
+|---|---|
+| 生产库赛事清单 | 33 条 |
+| 可定位 contest_id | 30 条（无映射 3 条：id=25 / 35 / 36） |
+| 往年届次跳过 | 5 条（id=2 / 4 / 17 / 26 / 30） |
+| 实际更新 | **23 条赛事 / 58 个字段** |
+| 字段覆盖 | 参赛对象 21 / 内容范围 20 / 考试安排 17 |
+| 仍为空 | id=9（学创杯）、id=19（全球校园 AI 算法）页面正文无可用章节；id=10 缺参赛对象，id=13 缺内容范围，id=21 只有参赛对象 |
+| 校验 | `db.fill_competition_detail_text()` 二次写入返回 `{}`（不覆盖）；详情接口可返回三字段；`pytest` 127 passed / 2 skipped |
+
+**已知质量待评审点**：id=1 的「参赛要求」章节偏项目要求（含年龄/学籍条款）；id=18 参赛对象为平台结构化短句；id=15 内容范围取自「竞赛规则」；id=2/30 等旧届数据被护栏挡掉。预览文件：`workspace/saikr_enrich_applied.json`。
+
+**上云前还需（按用户要求，等质量验收后再做）**：生产库执行 `migrate_production.py --apply` 补三列 → `enrich_saikr_details.py --apply --allow-production --db-path competitions.db --source-db competitions.db` → 备份云端库后同步；前端卡片如需保留换行，考虑给 `<p>` 加 `whitespace-pre-line`。

@@ -105,6 +105,9 @@ def _row_to_detail(row: Dict[str, Any]) -> CompetitionDetail:
         full_process_guide=row.get("full_process_guide") or "",
         guide_status=state.get("status", "idle"),
         guide_generated_at=row.get("guide_generated_at"),
+        participants=row.get("participants") or "",
+        content_scope=row.get("content_scope") or "",
+        exam_schedule=row.get("exam_schedule") or "",
     )
 
 

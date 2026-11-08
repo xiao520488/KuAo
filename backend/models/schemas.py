@@ -104,6 +104,18 @@ class CompetitionDetail(Competition):
     guide_generated_at: Optional[str] = Field(
         None, description="攻略生成时间（本地时间字符串），未生成时为空"
     )
+    participants: str = Field(
+        "",
+        description="参赛对象/参赛资格（赛氪详情清洗文本），未采集时为空串",
+    )
+    content_scope: str = Field(
+        "",
+        description="内容范围/赛项设置（赛氪详情清洗文本），未采集时为空串",
+    )
+    exam_schedule: str = Field(
+        "",
+        description="考试/赛程安排（赛氪详情清洗文本），未采集时为空串",
+    )
 
 
 class CategoryList(BaseModel):

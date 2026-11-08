@@ -59,6 +59,11 @@ CREATE TABLE IF NOT EXISTS competitions (
     intro           TEXT,
     summary         TEXT,
     tech_stack      TEXT    NOT NULL DEFAULT '[]',
+    -- 详情补充（2026-11-08）：由赛氪详情 API 清洗出的真实文本，
+    -- 只在详情接口返回；无法抽取时保持 NULL，不编造。
+    participants    TEXT,
+    content_scope   TEXT,
+    exam_schedule   TEXT,
     created_at      TEXT    NOT NULL DEFAULT (datetime('now', 'localtime'))
 );
 

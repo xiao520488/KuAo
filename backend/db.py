@@ -106,6 +106,10 @@ def _enrich(row: dict) -> dict:
     # full_process_guide 兜底为空串，避免前端拿到 None 需额外判空
     if row.get("full_process_guide") is None:
         row["full_process_guide"] = ""
+    # 详情补充三字段统一兜底为空串，前端按「空 -> 空壳」渲染
+    for key in _DETAIL_TEXT_FIELDS:
+        if key in row and row.get(key) is None:
+            row[key] = ""
     return row
 
 
@@ -265,7 +269,14 @@ _MIGRATION_COLUMNS = {
     "guide_model": "TEXT",
     "guide_prompt_ver": "TEXT",
     "guide_input_hash": "TEXT",
+    # 详情补充（2026-11-08）：由 enrich_saikr_details.py 从赛氪详情 API 清洗后写入
+    "participants": "TEXT",
+    "content_scope": "TEXT",
+    "exam_schedule": "TEXT",
 }
+
+# 详情补充文本字段（只由详情接口返回，列表接口不返回）
+_DETAIL_TEXT_FIELDS = ("participants", "content_scope", "exam_schedule")
 
 # awards 表补列：列名 -> DDL 片段（ALTER TABLE ADD COLUMN 用）
 #
@@ -477,7 +488,7 @@ def update_competition(cid: int, data: dict) -> None:
                "sort_order", "intro", "summary", "tech_stack",
                "full_process_guide", "image_url", "contest_start_month",
                "contest_end_month", "discover_source", "last_checked_at",
-               "is_active")
+               "is_active", "participants", "content_scope", "exam_schedule")
     fields, values = [], []
     for key in allowed:
         if key in data:
@@ -504,6 +515,47 @@ def update_full_process_guide(cid: int, guide: str) -> None:
             "UPDATE competitions SET full_process_guide = ? WHERE id = ?",
             (guide, cid),
         )
+
+
+def fill_competition_detail_text(cid: int, *, participants=None,
+                                 content_scope=None, exam_schedule=None,
+                                 only_empty: bool = True,
+                                 db_path: Optional[str] = None) -> dict:
+    """写入赛氪详情补充文本（participants / content_scope / exam_schedule）。
+
+    参数:
+        cid: 比赛 id。
+        participants / content_scope / exam_schedule: 待写入文本；
+            None 或空白串表示该字段本次不写。
+        only_empty: 默认 True，只填 NULL / 空串，已有值一律保留（不覆盖）。
+        db_path: 可选目标库，默认生产库；测试脚本可传 test_crawl.db。
+
+    返回:
+        {字段名: 实际写入的文本}；已有值/空值被跳过时不包含该键。
+    """
+    updates = {}
+    for key, val in (("participants", participants),
+                     ("content_scope", content_scope),
+                     ("exam_schedule", exam_schedule)):
+        if val is None:
+            continue
+        text = str(val).strip()
+        if not text:
+            continue
+        updates[key] = text
+    if not updates:
+        return {}
+
+    written = {}
+    with get_conn(db_path) as conn:
+        for key, text in updates.items():
+            sql = f"UPDATE competitions SET {key} = ? WHERE id = ?"
+            if only_empty:
+                sql += f" AND ({key} IS NULL OR TRIM({key}) = '')"
+            cur = conn.execute(sql, (text, cid))
+            if cur.rowcount == 1:
+                written[key] = text
+    return written
 
 
 def save_generated_guide(cid: int, guide: str, *, model: Optional[str] = None,

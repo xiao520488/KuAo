@@ -52,9 +52,11 @@ DEFAULT_BACKUP_PATH = os.path.join(BASE_DIR, "competitions.db.bak")
 
 # 本次迁移关心的新列（体检 & 迁移后复检都用它）
 # 2026-11-08 追加：攻略生成溯源 4 列（配合 ai_jobs 表，见 AI_AUTOMATION_PLAN.md）
+# 2026-11-08 追加：赛氪详情补充 3 列（enrich_saikr_details.py 写入）
 TARGET_COLUMNS = (
     "image_url", "contest_start_month", "contest_end_month",
     "guide_generated_at", "guide_model", "guide_prompt_ver", "guide_input_hash",
+    "participants", "content_scope", "exam_schedule",
 )
 
 # 需要比对行数的核心表
