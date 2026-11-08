@@ -8,7 +8,9 @@
 
 ## 零、接手必读（30 秒版）
 
-**当前阶段：爬虫闭环 + AI 内容生成闭环已完成并经测试验证；《云端部署手册》已交付（`CLOUD_DEPLOYMENT_GUIDE.md`），下一步 = 按手册上阿里云 + 挂 crontab 链，80 条候选审核并行推进。**
+**当前阶段：爬虫闭环 + AI 内容生成闭环已完成；2026-11-08 已完成阿里云部署（原地升级 `/root/KuAo` + systemd + crontab，见 12.5），下一步 = 80 条候选审核 + 新闻 `LIST_URL` 确定后补挂 cron。**
+
+> **【紧急 TODO｜2026-11-08】详情页数据无法正常展示**：电脑/手机访问 `/competition/10` 时，「时间安排、参赛对象」显示通用套话，官网链接、具体比赛月份、已抓取攻略均未展示。排查顺序：① 生产库 `id=10` 的真实字段（`official_url` / `reg_*` / `contest_*` / `full_process_guide`）；② `GET /api/competitions/10` 的 JSON 返回是否包含这些字段；③ 前端 `frontend/src/views/CompetitionDetailView.vue` 的兜底与渲染逻辑（`signUpTime` / `contestTime` 拼接、`resolveImage`）。
 
 | 项目 | 现状 |
 |---|---|
@@ -39,8 +41,8 @@
 
 **下一步安排（按优先级）：**
 
-1. **《云端部署手册》已交付**：见 `CLOUD_DEPLOYMENT_GUIDE.md`（服务器依赖、代码拉取、`.env`、DB 迁移与 WAL、systemd/Nginx、crontab 链、验收/回滚）。**尚未在服务器执行**，按手册逐节敲。
-2. **挂 Crontab 新链**：按手册第 7 节先手动逐条验收，再写入服务器 `crontab -e`；备份 → 新闻（周一/周四）→ 新赛事发现 → AI 慢刷 → 周度补全 → 日志清理。
+1. **《云端部署手册》已执行（2026-11-08）**：见 `CLOUD_DEPLOYMENT_GUIDE.md`；实际采用原地升级，完整记录见 12.5。后续按 12.5 的回滚路径维护。
+2. **Crontab 已挂（2026-11-08）**：5 条任务（02:30 备份 / 04:10 候选 / 04:40 AI / 周日 05:20 补全 / 05:40+05:50 清理）；**新闻采集暂缓**，`LIST_URL` 确定后单独加一条。
 3. **并行人工审核**：生产库 80 条 pending 继续用 `review_candidates.py` 审核；服务/广告类（「辅助报名」「考试入口」）直接 `--reject`。
 
 > ⚠️ 生产库现在**允许写**（用户 2026-11-07 明确授权），但每次写库前必须自动备份，且所有脚本默认 dry-run —— 见第四节红线。
@@ -1138,18 +1140,24 @@ cd ..\frontend; npm.cmd run build   # 7.36s / 115 modules
 9. 上线验收清单、回滚预案、故障排查表；
 10. 附录：`.env`、校验 SQL、crontab、systemd/Nginx 路径、本地快照命令。
 
-**尚未在服务器执行**；执行人按手册从第 1 节顺序敲，并在 12.5 回填结果。
+**已于 2026-11-08 在服务器执行（原地升级，见 12.5）**；首次部署按第 1~8 节顺序完成，回滚与后续维护以 12.5 记录为准。
 
-### 12.5 上云记录（服务器执行后回填）
+### 12.5 上云记录（2026-11-08 已完成）
 
 | 项 | 值 |
 |---|---|
-| 发布 commit | `git -C /opt/kuao log -1 --format=%H` |
-| 部署时间 | 待填 |
-| 服务器 | 阿里云 Ubuntu `112.126.90.252` |
-| 迁移后 DB SHA-256 | `sha256sum /opt/kuao/backend/competitions.db` |
-| 迁移后行数 | competitions / awards / candidates / guides / ai_jobs |
-| 每日备份路径 | `/opt/kuao/backend/backups/` |
-| crontab 生效时间 | 待填 |
-| 首次验收人 | 待填 |
-| 回滚 commit / 备份 | 待填 |
+| 发布 commit | `81e768633e420163982bda692239e8dd590760af`（`test+docs: 上云边界测试、WAL 安全备份脚本与云端部署手册`） |
+| 部署时间 | 2026-11-08 14:33（切换完成）/ 15:29（cron + 验收完成，Asia/Shanghai） |
+| 服务器 | 阿里云 Ubuntu 24.04.2 LTS · `112.126.90.252` · 1.6 GiB RAM（+2 GiB Swap） |
+| 部署方式 | **原地升级** `/root/KuAo`：未按手册新建 `/opt/kuao` + `kuao` 用户；systemd 以 `root` 运行（与既有部署一致） |
+| 迁移后 DB SHA-256 | `297e17df05ffda4f63ba14e0136599a7f9575ea6c38816471699b4e2b859b486` |
+| 迁移后行数 | competitions **33** / awards **87** / candidates **82** / guides **7** / ai_jobs **0**（`integrity_check=ok`） |
+| 服务 | systemd `kuao-backend`（`127.0.0.1:8000`，`--workers 1`）+ Nginx `:80` 反代 `/api/`；前端静态目录 `/var/www/html` |
+| 每日备份路径 | `/root/KuAo/backend/backups/`（`backup_db.py`，保留 30 天） |
+| 切换前备份 | `/root/kuao-backups/20261108-143324/`（旧库 / `.env` / nginx 配置 / 旧前端） |
+| crontab 生效时间 | 2026-11-08 15:29 CST；5 条任务：02:30 备份 / 04:10 候选 / 04:40 AI / 周日 05:20 补全 / 05:40+05:50 清理 |
+| 新闻采集 | **未挂**：`LIST_URL` 待定；确定后单独加一条（模板见手册 7.4） |
+| 首次验收 | 用户人工验收：crontab / systemd / 端口 / 健康 / 行数 / 权限 / 时区全部通过 |
+| 回滚 | `bash /root/kuao-rollback.sh 20261108-143324`；代码回退 `git checkout 3ee9dd5`；库回退用上述备份目录的 `competitions.db` |
+
+> 与手册 0.2 的差异：主库仍在 `/root/KuAo/backend/competitions.db`，未迁到 `/opt/kuao`；因此所有 cron、systemd、备份路径都按 `/root/KuAo` 配置。后续若迁移到 `/opt/kuao`，必须同步改 systemd `WorkingDirectory`、cron 的 `cd`、日志/备份路径，并先停服务、删 `-wal/-shm` 再移库。
