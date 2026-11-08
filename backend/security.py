@@ -68,8 +68,13 @@ def create_access_token(user_id: int, username: str,
 def decode_access_token(token: str) -> dict:
     """解析并验证令牌，失败抛 401。"""
     try:
+        # require：显式要求 exp / sub 存在。缺少任一 claim 的 token 一律 401，
+        # 避免「payload 为空 / 只有 username」的畸形 token 进入用户解析流程。
         return jwt.decode(
-            token, config.JWT_SECRET_KEY, algorithms=[config.JWT_ALGORITHM]
+            token,
+            config.JWT_SECRET_KEY,
+            algorithms=[config.JWT_ALGORITHM],
+            options={"require": ["exp", "sub"]},
         )
     except jwt.ExpiredSignatureError:
         raise HTTPException(

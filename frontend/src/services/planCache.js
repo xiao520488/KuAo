@@ -1,7 +1,9 @@
+import { getTokenUserId } from './tokenStore'
+
 /**
  * 备赛计划本地持久化（localStorage）
  *
- * key = plan_${competitionId}
+ * key = plan_v2_${userId}_${competitionId}
  * 存 { plan, messages, history, savedAt }：
  *   - plan     ：当前完整计划 Markdown 正文
  *   - messages ：对话气泡（仅追问 / 提示，不含计划正文）
@@ -13,7 +15,10 @@
  * 绝不能因为缓存异常阻断主流程。
  */
 
+// 旧版 key 是 plan_${competitionId}，被同一浏览器的所有账号共享，会串数据；
+// v2 起在 key 中加入用户 ID，按账号隔离。
 const PLAN_PREFIX = 'plan_'
+const PLAN_VERSION = 'v2'
 
 /** 单条记录最多保留的对话数量，避免 localStorage 被超长对话撑爆 */
 const MAX_MESSAGES = 200
@@ -57,7 +62,30 @@ function normalizeHistory(raw) {
 }
 
 export function planKey(competitionId) {
-  return `${PLAN_PREFIX}${competitionId}`
+  // 无 token（理论上受保护路由不会出现）时落到 anon 命名空间，
+  // 绝不回退去读旧版 plan_${cid}，避免读到上一个账号的计划。
+  const uid = getTokenUserId() || 'anon'
+  return `${PLAN_PREFIX}${PLAN_VERSION}_${uid}_${competitionId}`
+}
+
+/**
+ * 清理旧版未按用户分区的 plan_${competitionId} 缓存。
+ * 这些数据无法判断属于哪个账号，升级后一律丢弃，防止 B 读到 A 的计划。
+ */
+export function purgeLegacyPlanCaches() {
+  const ls = store()
+  if (!ls) return false
+  try {
+    const legacy = []
+    for (let i = 0; i < ls.length; i++) {
+      const key = ls.key(i)
+      if (typeof key === 'string' && /^plan_\d+$/.test(key)) legacy.push(key)
+    }
+    legacy.forEach((key) => ls.removeItem(key))
+    return true
+  } catch (e) {
+    return false
+  }
 }
 
 /**

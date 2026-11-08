@@ -1,5 +1,6 @@
 import axios from 'axios'
 import { clearUserLocalData } from './localUserData'
+import { clearToken, getToken } from './tokenStore'
 
 /**
  * 全局 axios 实例
@@ -14,9 +15,6 @@ const api = axios.create({
     'Content-Type': 'application/json'
   }
 })
-
-/** localStorage 中存放 access_token 的键名（与 services/auth.js 保持一致） */
-const TOKEN_KEY = 'access_token'
 
 /**
  * 把 FastAPI 的错误 detail 归一化成可读字符串。
@@ -34,24 +32,6 @@ function normalizeDetail(detail) {
   return ''
 }
 
-/** 读取 token（存储不可用时静默降级，不影响请求发出） */
-function readToken() {
-  try {
-    return localStorage.getItem(TOKEN_KEY) || ''
-  } catch {
-    return ''
-  }
-}
-
-/** 清理本地登录态（401 时调用） */
-function clearAuthStorage() {
-  try {
-    localStorage.removeItem(TOKEN_KEY)
-  } catch {
-    /* 忽略 */
-  }
-}
-
 /**
  * 请求拦截器：自动携带 Token
  * 登录/注册等公开接口无需鉴权，这里统一判断：有 token 就带上。
@@ -59,7 +39,7 @@ function clearAuthStorage() {
  */
 api.interceptors.request.use(
   (config) => {
-    const token = readToken()
+    const token = getToken()
     if (token) {
       if (typeof config.headers?.set === 'function') {
         config.headers.set('Authorization', `Bearer ${token}`)
@@ -91,7 +71,7 @@ api.interceptors.response.use(
         const isCredentialRequest =
           requestUrl.includes('/auth/login') || requestUrl.includes('/auth/register')
 
-        clearAuthStorage()
+        clearToken()
 
         if (!isCredentialRequest) {
           // 计划 / 对话 / 收藏都只属于当前登录用户，凭证失效时必须一并清空，

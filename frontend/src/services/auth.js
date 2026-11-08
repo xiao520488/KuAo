@@ -1,6 +1,13 @@
 import { reactive } from 'vue'
 import api from './api'
 import { clearUserLocalData } from './localUserData'
+import {
+  clearToken,
+  getToken,
+  getTokenUserId,
+  purgeLegacyToken,
+  setToken
+} from './tokenStore'
 
 /**
  * 鉴权服务
@@ -9,36 +16,11 @@ import { clearUserLocalData } from './localUserData'
  *   POST /api/auth/login    body: { username, password }  -> { access_token, token_type, expires_in }
  *   POST /api/auth/register body: { username, password }  -> { access_token, token_type, expires_in }
  *   GET  /api/auth/me       header: Authorization: Bearer <token> -> { ...用户信息 }
- * Token 放 localStorage，请求拦截器（api.js）自动注入 Authorization 头。
+ *
+ * Token 存 sessionStorage（按标签页隔离），请求拦截器（api.js）自动注入。
+ * 旧版曾存 localStorage，会跨窗口共享导致账号串号，详见 tokenStore.js。
  */
-
-const TOKEN_KEY = 'access_token'
-
-/* ------------------------------------------------------------------ */
-/* localStorage 读写（统一入口，方便日后改造）                          */
-/* ------------------------------------------------------------------ */
-
-export function getToken() {
-  try {
-    return localStorage.getItem(TOKEN_KEY) || ''
-  } catch {
-    // 隐私模式 / 禁用存储时兜底，避免整个应用崩掉
-    return ''
-  }
-}
-
-export function setToken(token) {
-  try {
-    if (token) localStorage.setItem(TOKEN_KEY, token)
-    else localStorage.removeItem(TOKEN_KEY)
-  } catch {
-    /* 忽略存储异常 */
-  }
-}
-
-export function clearToken() {
-  setToken('')
-}
+export { clearToken, getToken, getTokenUserId, purgeLegacyToken, setToken }
 
 /* ------------------------------------------------------------------ */
 /* 全局登录态：跨组件共享，Header / AuthModal 都读它                     */

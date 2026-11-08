@@ -314,8 +314,9 @@ onBeforeUnmount(() => {
 
       <!-- 右：搜索 + 登录/注册/用户菜单（右对齐分组，固定宽度，不参与拉伸） -->
       <div class="ml-auto flex min-w-0 shrink-0 items-center gap-2 sm:gap-3">
-        <!-- xl 及以上：常显搜索胶囊，宽度固定（260 / 2xl 300），杜绝被 flex 拉长 -->
-        <div class="hidden w-[260px] shrink-0 xl:block 2xl:w-[300px]">
+        <!-- xl 及以上：常显搜索胶囊。宽度由 .header-search-box 强制锁定 240px，
+             flex-shrink: 0，任何分辨率下都不参与拉伸 / 压缩（P1 修复）。 -->
+        <div class="header-search-box hidden xl:block">
           <div
             class="group flex h-9 w-full items-center gap-2 rounded-full bg-slate-100/80 dark:bg-slate-700/60
                    px-4 ring-1 ring-slate-200/70 dark:ring-slate-700 transition-all

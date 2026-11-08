@@ -4,7 +4,7 @@
     uvicorn main:app --reload --port 8000
 """
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 import config
@@ -35,6 +35,24 @@ app.add_middleware(
     allow_headers=["Authorization", "Content-Type"],
     max_age=600,
 )
+
+
+# ---------------------------------------------------------------------------
+# API 响应禁止共享缓存（P0 账号串号防线）
+# ---------------------------------------------------------------------------
+# 鉴权 / 用户数据接口如果被浏览器、Nginx、CDN 或运营商中间缓存，
+# 就可能把 A 的响应（含 /api/auth/me 的身份）发给 B。这里统一对 /api/*
+# 加 no-store，确保任何中间层都不得存储/复用 API 响应。
+@app.middleware("http")
+async def add_api_no_store_headers(request: Request, call_next):
+    response = await call_next(request)
+    if request.url.path.startswith("/api/"):
+        response.headers["Cache-Control"] = (
+            "no-store, no-cache, must-revalidate, private, max-age=0"
+        )
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    return response
 
 
 # ---------------------------------------------------------------------------
