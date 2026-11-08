@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { authState, logout } from '@/services/auth'
 import { authModalState, openAuthModal } from '@/composables/useAuthModal'
@@ -13,6 +13,31 @@ const router = useRouter()
 /* ---------------- 顶部全局搜索 ---------------- */
 const keyword = ref('')      // 顶部搜索框输入值
 const searching = ref(false) // 防重复提交
+
+/* ---------------- 中屏（lg~xl）折叠搜索 ----------------
+ * lg~xl 区间放不下「导航 + 固定宽度搜索框 + 登录注册」，
+ * 因此该区间只留一个放大镜按钮，点开后在按钮下方展开浮层输入框。
+ * 浮层是绝对定位，不参与 flex 布局，永远不会挤压导航或登录区。
+ */
+const searchOpen = ref(false)
+const searchWrapRef = ref(null)
+const searchInputRef = ref(null)
+
+watch(searchOpen, async (open) => {
+  if (!open) return
+  await nextTick()
+  searchInputRef.value?.focus()
+})
+
+/**
+ * 折叠态搜索：先收起浮层再走统一的回车搜索逻辑
+ */
+function onCompactSearch() {
+  const q = keyword.value.trim()
+  if (!q || searching.value) return
+  searchOpen.value = false
+  onSearch()
+}
 
 /**
  * 顶部搜索：回车触发，跳转首页并携带 q 参数
@@ -164,12 +189,17 @@ function onDocClick(e) {
   if (themeMenuOpen.value && themeMenuRef.value && !themeMenuRef.value.contains(e.target)) {
     themeMenuOpen.value = false
   }
+  // 中屏折叠搜索浮层：点空白处收起
+  if (searchOpen.value && searchWrapRef.value && !searchWrapRef.value.contains(e.target)) {
+    searchOpen.value = false
+  }
 }
 
 function onKeydown(e) {
   if (e.key !== 'Escape') return
   themeMenuOpen.value = false
   menuOpen.value = false
+  searchOpen.value = false
 }
 
 async function onLogout() {
@@ -214,9 +244,10 @@ watch(mobileOpen, (open) => {
   document.body.style.overflow = open ? 'hidden' : ''
 })
 
-// 路由变化时自动关闭抽屉
+// 路由变化时自动关闭抽屉 / 折叠搜索浮层
 watch(() => route.fullPath, () => {
   if (mobileOpen.value) mobileOpen.value = false
+  if (searchOpen.value) searchOpen.value = false
 })
 
 onMounted(() => {
@@ -237,7 +268,7 @@ onBeforeUnmount(() => {
            bg-white/60 dark:bg-slate-900/70 backdrop-blur-xl backdrop-saturate-150
            border-b border-white/40 shadow-sm shadow-slate-900/5"
   >
-    <div class="mx-auto h-full max-w-7xl px-6 flex items-center justify-between">
+    <div class="relative mx-auto flex h-full max-w-7xl items-center gap-3 px-6">
       <!-- 左：Logo -->
       <button
         type="button"
@@ -281,35 +312,94 @@ onBeforeUnmount(() => {
         </template>
       </nav>
 
-      <!-- 中右：全局搜索（胶囊状） -->
-      <div class="hidden lg:block flex-1 max-w-xs mx-6">
-        <div
-          class="group flex items-center gap-2 rounded-full bg-slate-100/80 dark:bg-slate-700/60
-                 px-4 py-2 ring-1 ring-slate-200/70 dark:ring-slate-700 transition-all
-                 focus-within:bg-white dark:focus-within:bg-slate-800 focus-within:ring-blue-500/40"
-        >
-          <svg class="h-4 w-4 shrink-0 text-slate-500 dark:text-slate-400" fill="none" viewBox="0 0 24 24"
-               stroke="currentColor" stroke-width="2" stroke-linecap="round"
-               stroke-linejoin="round">
-            <path
-              stroke-linecap="round"
-              d="M21 21l-4.35-4.35M17 10.5a6.5 6.5 0 1 1-13 0 6.5 6.5 0 0 1 13 0z" />
-          </svg>
+      <!-- 右：搜索 + 登录/注册/用户菜单（右对齐分组，固定宽度，不参与拉伸） -->
+      <div class="ml-auto flex min-w-0 shrink-0 items-center gap-2 sm:gap-3">
+        <!-- xl 及以上：常显搜索胶囊，宽度固定（260 / 2xl 300），杜绝被 flex 拉长 -->
+        <div class="hidden w-[260px] shrink-0 xl:block 2xl:w-[300px]">
+          <div
+            class="group flex h-9 w-full items-center gap-2 rounded-full bg-slate-100/80 dark:bg-slate-700/60
+                   px-4 ring-1 ring-slate-200/70 dark:ring-slate-700 transition-all
+                   focus-within:bg-white dark:focus-within:bg-slate-800 focus-within:ring-blue-500/40"
+          >
+            <svg class="h-4 w-4 shrink-0 text-slate-500 dark:text-slate-400" fill="none" viewBox="0 0 24 24"
+                 stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                 stroke-linejoin="round">
+              <path
+                stroke-linecap="round"
+                d="M21 21l-4.35-4.35M17 10.5a6.5 6.5 0 1 1-13 0 6.5 6.5 0 0 1 13 0z" />
+            </svg>
 
-          <input
-            v-model="keyword"
-            type="text"
-            placeholder="搜索..."
-            class="w-full min-w-0 bg-transparent text-sm font-medium text-slate-800 dark:text-slate-100
-                   placeholder:text-slate-500 dark:placeholder:text-slate-500 focus:outline-none"
-            :disabled="searching"
-            @keyup.enter="onSearch"
-          />
+            <input
+              v-model="keyword"
+              type="text"
+              placeholder="搜索..."
+              class="h-5 w-full min-w-0 bg-transparent text-sm font-medium leading-5 text-slate-800
+                     dark:text-slate-100 placeholder:text-slate-500 dark:placeholder:text-slate-500
+                     focus:outline-none"
+              :disabled="searching"
+              @keyup.enter="onSearch"
+            />
+          </div>
         </div>
-      </div>
 
-      <!-- 右：登录/注册 或 用户菜单 -->
-      <div class="flex items-center gap-2 sm:gap-3">
+        <!-- lg ~ xl：空间不足，改为放大镜按钮 + 浮层输入框（绝对定位，不挤压导航） -->
+        <div ref="searchWrapRef" class="relative hidden lg:block xl:hidden">
+          <button
+            type="button"
+            class="grid h-9 w-9 place-items-center rounded-full text-slate-600
+                   hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300
+                   dark:hover:bg-slate-700/60 dark:hover:text-white transition-colors
+                   cursor-pointer bg-transparent border-0
+                   focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+            :aria-expanded="searchOpen ? 'true' : 'false'"
+            aria-label="搜索竞赛"
+            @click.stop="searchOpen = !searchOpen"
+          >
+            <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"
+                 stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 21l-4.35-4.35M17 10.5a6.5 6.5 0 1 1-13 0 6.5 6.5 0 0 1 13 0z" />
+            </svg>
+          </button>
+
+          <Transition
+            enter-active-class="transition duration-150 ease-out"
+            enter-from-class="opacity-0 -translate-y-1"
+            enter-to-class="opacity-100 translate-y-0"
+            leave-active-class="transition duration-100 ease-in"
+            leave-from-class="opacity-100 translate-y-0"
+            leave-to-class="opacity-0 -translate-y-1"
+          >
+            <div
+              v-if="searchOpen"
+              class="absolute right-0 top-full z-50 mt-3 w-[320px] rounded-2xl bg-white p-2
+                     shadow-xl shadow-slate-900/10 ring-1 ring-slate-900/5
+                     dark:bg-slate-800 dark:ring-white/10"
+            >
+              <div
+                class="flex h-10 items-center gap-2 rounded-full bg-slate-100/80 px-4
+                       ring-1 ring-slate-200/70 focus-within:bg-white focus-within:ring-blue-500/40
+                       dark:bg-slate-700/60 dark:ring-slate-700 dark:focus-within:bg-slate-900"
+              >
+                <svg class="h-4 w-4 shrink-0 text-slate-500 dark:text-slate-400" fill="none" viewBox="0 0 24 24"
+                     stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                     stroke-linejoin="round">
+                  <path d="M21 21l-4.35-4.35M17 10.5a6.5 6.5 0 1 1-13 0 6.5 6.5 0 0 1 13 0z" />
+                </svg>
+                <input
+                  ref="searchInputRef"
+                  v-model="keyword"
+                  type="text"
+                  placeholder="搜索竞赛..."
+                  class="h-5 w-full min-w-0 bg-transparent text-sm font-medium leading-5 text-slate-800
+                         dark:text-slate-100 placeholder:text-slate-500 dark:placeholder:text-slate-400
+                         focus:outline-none"
+                  :disabled="searching"
+                  @keyup.enter="onCompactSearch"
+                />
+              </div>
+            </div>
+          </Transition>
+        </div>
         <!-- AM-THEME-TOGGLE-START：三选项主题切换菜单 -->
         <div ref="themeMenuRef" class="relative">
           <button
@@ -435,7 +525,7 @@ onBeforeUnmount(() => {
             >
               {{ (user?.username || 'U').charAt(0).toUpperCase() }}
             </span>
-            <span class="max-w-[8rem] truncate text-sm font-bold text-slate-700 dark:text-slate-200">
+            <span class="max-w-[5rem] truncate text-sm font-bold text-slate-700 dark:text-slate-200 2xl:max-w-[8rem]">
               {{ user?.username }}
             </span>
             <svg
@@ -501,44 +591,46 @@ onBeforeUnmount(() => {
             </div>
           </Transition>
         </div>
+
+        <!-- mobile hamburger（<md 才出现，跟随右侧分组对齐） -->
+        <button
+          type="button"
+          class="md:hidden grid h-10 w-10 shrink-0 place-items-center rounded-xl
+                 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700/60 transition-colors
+                 bg-transparent border-0 cursor-pointer"
+          :aria-expanded="mobileOpen ? 'true' : 'false'"
+          aria-label="Menu"
+          @click.stop="toggleMobile"
+        >
+          <svg
+            v-if="!mobileOpen"
+            class="h-6 w-6"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <path d="M4 6h16M4 12h16M4 18h16" />
+          </svg>
+          <svg
+            v-else
+            class="h-6 w-6"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <path d="M6 6l12 12M18 6L6 18" />
+          </svg>
+        </button>
       </div>
     </div>
 
     <!-- 轻量提示 -->
-      <!-- mobile hamburger (below md) -->
-      <button
-        type="button"
-        class="md:hidden grid h-10 w-10 shrink-0 place-items-center rounded-xl
-               text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700/60 transition-colors"
-        :aria-expanded="mobileOpen ? 'true' : 'false'"
-        aria-label="Menu"
-        @click.stop="toggleMobile"
-      >
-        <svg
-          v-if="!mobileOpen"
-          class="h-6 w-6"
-          fill="none"
-          viewBox="0 0 24 24"
-          stroke="currentColor"
-          stroke-width="2"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-        >
-          <path d="M4 6h16M4 12h16M4 18h16" />
-        </svg>
-        <svg
-          v-else
-          class="h-6 w-6"
-          fill="none"
-          viewBox="0 0 24 24"
-          stroke="currentColor"
-          stroke-width="2"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-        >
-          <path d="M6 6l12 12M18 6L6 18" />
-        </svg>
-      </button>
 
     <!-- mobile drawer mask -->
     <Transition

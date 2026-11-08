@@ -511,6 +511,26 @@ const worksLoading = ref(true)
 const worksError = ref('')
 
 /**
+ * 后端 /awards 返回 snake_case（award_grade / origin_url），
+ * 而卡片与详情弹窗沿用 camelCase；这里统一转一次，
+ * 避免两套命名各自兜底、出现「奖项标签空白」这类问题。
+ */
+function normalizeWork(item) {
+  if (!item || typeof item !== 'object') return item
+  return {
+    ...item,
+    awardGrade: item.awardGrade || item.award_grade || '',
+    originUrl: item.originUrl || item.origin_url || '',
+  }
+}
+
+// 卡片底部元信息标签：灰底 + 细描边，替代原来的图片占位区
+const META_TAG_CLASS =
+  'inline-flex max-w-full items-center whitespace-nowrap rounded-md bg-slate-100/80 px-2 py-1 ' +
+  'text-[11px] font-semibold text-slate-600 ring-1 ring-slate-200/60 ' +
+  'dark:bg-slate-700/50 dark:text-slate-300 dark:ring-slate-600/40'
+
+/**
  * 拉取当前竞赛的获奖作品。
  * 只在挂载 / 路由竞赛 ID 变化时调用，Tab 切换不重复请求。
  */
@@ -529,7 +549,7 @@ async function loadWorks() {
     const res = await getCompetitionAwards(cid, { limit: 20 })
     // 切走赛事后旧响应不得写回，否则会串成上一场竞赛的获奖列表
     if (routedId.value !== cid) return
-    works.value = res.items
+    works.value = (res.items || []).map(normalizeWork)
   } catch (e) {
     if (routedId.value !== cid) return
     works.value = []
@@ -1370,7 +1390,7 @@ onBeforeUnmount(() => {
         <div
           v-for="n in 6"
           :key="n"
-          class="h-64 animate-pulse rounded-2xl bg-white dark:bg-slate-800 ring-1 ring-slate-200/70 dark:ring-slate-700"
+          class="h-40 animate-pulse rounded-2xl bg-white dark:bg-slate-800 ring-1 ring-slate-200/70 dark:ring-slate-700"
         ></div>
       </div>
 
@@ -1399,27 +1419,57 @@ onBeforeUnmount(() => {
         <article
           v-for="work in works"
           :key="work.id"
-          class="group flex cursor-pointer flex-col rounded-2xl bg-white dark:bg-slate-800 p-5 ring-1 ring-slate-200/70 dark:ring-slate-700
-                 shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-lg hover:shadow-slate-900/10"
+          class="group flex cursor-pointer flex-col rounded-2xl bg-white dark:bg-slate-800 p-5
+                 ring-1 ring-slate-200/70 dark:ring-slate-700 shadow-sm
+                 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg hover:shadow-slate-900/10"
           @click="openWork(work)"
         >
-          <div class="mb-4 aspect-[4/3] w-full overflow-hidden rounded-xl bg-slate-100 dark:bg-slate-700/60">
-            <div class="flex h-full w-full items-center justify-center">
-              <svg class="h-8 w-8 text-slate-300" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6M9 8h6M7 3h7l5 5v13H7z" />
+          <!-- 顶行：奖项（视觉锚点） -->
+          <div class="flex items-center justify-between gap-3">
+            <span
+              class="inline-flex max-w-[72%] items-center gap-1.5 rounded-full
+                     bg-gradient-to-r from-amber-50 to-orange-50 px-2.5 py-1
+                     text-[11px] font-bold text-amber-700 ring-1 ring-amber-200/70
+                     dark:from-amber-500/15 dark:to-orange-500/10 dark:text-amber-300 dark:ring-amber-500/25"
+            >
+              <svg class="h-3 w-3 shrink-0" fill="none" stroke="currentColor" stroke-width="2"
+                   viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M8 21h8M12 17v4M7 4h10v4a5 5 0 01-10 0V4zM17 5h3v2a3 3 0 01-3 3M7 5H4v2a3 3 0 003 3" />
               </svg>
+              <span class="truncate">{{ zhAwardGrade(work.awardGrade) || '获奖作品' }}</span>
+            </span>
+          </div>
+
+          <!-- 标题：卡片视觉重心 -->
+          <h3 class="mt-3 line-clamp-2 text-[18px] font-bold leading-snug tracking-tight text-slate-900 dark:text-slate-100">
+            {{ work.title || '未命名作品' }}
+          </h3>
+
+          <p
+            v-if="work.summary"
+            class="mt-2 line-clamp-2 text-xs leading-relaxed text-slate-500 dark:text-slate-400"
+          >
+            {{ work.summary }}
+          </p>
+
+          <!-- 元信息：灰底小标签（团队独占一行，年份 / 分类 / 级别 一行） -->
+          <div class="mt-auto space-y-1.5 pt-4">
+            <div v-if="work.team" class="flex min-w-0">
+              <span :class="META_TAG_CLASS" class="min-w-0">
+                <span class="min-w-0 truncate">团队 · {{ work.team }}</span>
+              </span>
+            </div>
+            <div class="flex flex-wrap items-center gap-1.5">
+              <span v-if="work.year" :class="META_TAG_CLASS" class="tabular-nums">{{ work.year }} 年</span>
+              <span v-if="work.track" :class="META_TAG_CLASS">{{ work.track }}</span>
+              <span v-if="work.level" :class="META_TAG_CLASS">{{ zhLevel(work.level) }}</span>
             </div>
           </div>
 
-          <h3 class="text-base font-bold leading-snug text-slate-900 dark:text-slate-100">{{ work.title }}</h3>
-          <p class="mt-2 text-xs font-medium text-slate-500 dark:text-slate-400">{{ work.team }} · {{ work.year }}</p>
-
-          <div class="mt-3 flex items-center justify-between">
-            <span class="rounded-full bg-amber-50 dark:bg-amber-500/15 px-2.5 py-1 text-xs font-bold text-amber-700 dark:text-amber-300">
-              {{ work.award }}
-            </span>
-            <span class="text-xs font-bold text-blue-600 dark:text-blue-400 opacity-0 transition-opacity group-hover:opacity-100">
-              查看详情 →
+          <div class="mt-3 flex items-center justify-between border-t border-slate-100 pt-3 dark:border-slate-700/60">
+            <span class="text-[11px] font-medium text-slate-400 dark:text-slate-500">作品档案</span>
+            <span class="text-xs font-bold text-blue-600 opacity-0 transition-opacity group-hover:opacity-100 dark:text-blue-400">
+              详情 →
             </span>
           </div>
         </article>
@@ -1434,7 +1484,8 @@ onBeforeUnmount(() => {
       >
         <div class="flex max-h-[88vh] w-full max-w-3xl flex-col overflow-hidden rounded-3xl bg-white dark:bg-slate-800 shadow-2xl">
           <!-- ===== 档案头部：标题 + 基础信息 ===== -->
-          <div class="shrink-0 border-b border-slate-100 dark:border-slate-700 bg-gradient-to-br from-blue-50/80 via-white to-white px-7 pb-5 pt-6">
+          <div class="shrink-0 border-b border-slate-100 bg-gradient-to-br from-blue-50/80 via-white to-white
+                      px-7 pb-5 pt-6 dark:border-slate-700 dark:from-slate-800 dark:via-slate-800 dark:to-slate-800">
             <div class="flex items-start justify-between gap-4">
               <div class="min-w-0">
                 <h3 class="text-xl font-black leading-snug text-slate-900 dark:text-slate-100">
@@ -1462,7 +1513,7 @@ onBeforeUnmount(() => {
                   </span>
                   <span
                     v-if="selectedWork.track"
-                    class="rounded-full bg-indigo-50 dark:bg-indigo-500/15 px-3 py-1 text-xs font-semibold text-indigo-700 ring-1 ring-indigo-200"
+                    class="rounded-full bg-indigo-50 dark:bg-indigo-500/15 px-3 py-1 text-xs font-semibold text-indigo-700 ring-1 ring-indigo-200 dark:text-indigo-300 dark:ring-indigo-500/30"
                   >
                     {{ selectedWork.track }}
                   </span>
@@ -1482,6 +1533,7 @@ onBeforeUnmount(() => {
               </div>
               <button
                 type="button"
+                aria-label="关闭作品详情"
                 class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-slate-500 dark:text-slate-400
                        transition-colors hover:bg-slate-100 dark:hover:bg-slate-700/60 hover:text-slate-600 dark:hover:text-slate-300"
                 @click="closeWork"

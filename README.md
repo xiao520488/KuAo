@@ -2,19 +2,18 @@
 
 # KuAo · 库奥
 
-**大学生竞赛 AI 智库**
+**智能学科竞赛备赛平台**
 
-把散落的赛事信息、获奖作品与备赛经验，变成可检索、可对话、可复用的知识资产。
+从「发现赛事」到「生成攻略」，把分散的竞赛信息沉淀为可检索、可审核、可复用的备赛知识库。
 
 [![Vue](https://img.shields.io/badge/Vue-3-42B883?logo=vuedotjs&logoColor=white)](https://vuejs.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.162-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![SQLite](https://img.shields.io/badge/SQLite-WAL-003B57?logo=sqlite&logoColor=white)](https://www.sqlite.org/)
 [![ChromaDB](https://img.shields.io/badge/ChromaDB-1.5-FF6B6B)](https://www.trychroma.com/)
-[![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS-3.4-06B6D4?logo=tailwindcss&logoColor=white)](https://tailwindcss.com/)
-[![AI](https://img.shields.io/badge/AI-DeepSeek-4D6BFE)](https://www.deepseek.com/)
-[![Code Review](https://img.shields.io/badge/Code_Review-Passed-2EA043)](#-工程化与质量保证)
+[![DeepSeek](https://img.shields.io/badge/AI-DeepSeek-4D6BFE)](https://www.deepseek.com/)
+[![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 
-[项目简介](#-项目简介) · [核心亮点](#-核心功能亮点) · [技术架构](#-技术栈与架构) · [质量保证](#-工程化与质量保证) · [快速启动](#-快速启动指南) · [项目结构](#-项目结构)
+[项目简介](#-项目简介) · [核心特性](#-核心特性) · [技术栈](#-技术栈) · [目录结构](#-目录结构) · [快速启动](#-快速启动) · [自动化运维](#-自动化运维)
 
 </div>
 
@@ -22,306 +21,173 @@
 
 ## 🎯 项目简介
 
-**KuAo（库奥）** 是一个面向大学生的竞赛 AI 智库。它不止于“把比赛列出来”，而是围绕真实备赛流程，将 **赛事检索、AI 备考、获奖作品解析与灵感生成** 整合进同一套工作台：
-
-- **找得到**：用自然语言描述需求，系统理解意图并召回最相关的竞赛；
-- **备得清**：AI 教练通过多轮对话补齐背景，生成可执行的备赛计划；
-- **学得透**：从历年获奖作品中拆解技术亮点、评审偏好与可复用套路；
-- **想得出**：按赛事聚合洞察与选题灵感，让“不知道做什么”变成“知道从哪开始”。
-
-| 用户场景 | 常见痛点 | KuAo 的解法 |
-| --- | --- | --- |
-| 寻找合适竞赛 | 信息分散、筛选成本高、不知道哪些适合自己 | 结构化赛事库 + 自然语言语义检索 |
-| 制定备赛计划 | 时间紧、无从下手、计划不可执行 | 多轮对话教练，先追问再生成、可增量修改 |
-| 学习获奖作品 | 作品多、看不懂、难以提炼共性 | 单作品深度解析 + 赛事级获奖套路分析 |
-| 寻找选题灵感 | 同质化严重、缺少往届参照 | 按赛事隔离的赛事洞察与选题灵感资产 |
-
-> **产品定位**：不是赛事信息聚合页，而是一套面向“检索 → 决策 → 备赛 → 复盘”的 AI 工作流。
-
----
-
-## ✨ 核心功能亮点
-
-### 01 · AI 智能语义检索
-
-告别“关键词必须完全匹配”的检索方式。用户可以直接输入：
-
-> “我想找寒假能准备的算法赛”
->
-> “有没有适合计算机专业、对新手友好的创新创业比赛？”
-
-系统会完成 **查询向量化 → 获奖作品语义召回 → 竞赛级聚合 → 结构化重排**，返回最相关的赛事结果。
-
-- **L1 向量召回**：基于 ChromaDB cosine 相似度进行多路召回；
-- **L2 结构化重排**：回到 SQLite 读取作品与竞赛真值，做硬过滤与软加权；
-- **竞赛级聚合**：同一赛事的多件命中作品合并计分，避免结果碎片化；
-- **优雅降级**：向量库或 Embedding 服务异常时，自动回退关键词检索，页面不白屏。
-
-### 02 · 备赛工作台：多轮对话生成计划
-
-不是“一次性丢给模型一段话”，而是模拟真实教练的渐进式对话：
-
-| 阶段 | 行为 | 返回状态 |
-| --- | --- | --- |
-| 信息收集 | 背景不足时先反问关键信息 | `ask` |
-| 计划生成 | 信息足够后输出完整 Markdown 备赛计划 | `plan` |
-| 增量修改 | 在既有计划上继续对话并整合修改 | `refine` |
-
-- 后端自动注入数据库中的真实赛事信息（名称、类别、级别、报名窗口、官网、简介），降低模型编造赛制的概率；
-- 支持多轮历史拼接、计划本地恢复与按赛事隔离；
-- 输出统一经过 Markdown 安全渲染，兼顾可读性与 XSS 防护。
-
-### 03 · 获奖作品解析：带数据库级缓存
-
-围绕“获奖作品”提供两种分析视角：
-
-- **单作品深度解析**：作品概览、技术亮点、获奖要素、可借鉴之处、潜在不足、模仿路径；
-- **赛事共性分析**：横向对比多件获奖作品，提炼选题共性、技术套路、创新模式与“获奖公式”。
-
-更关键的是成本控制：
-
-- 分析结果持久化到 SQLite 的 `ai_analysis_cache`，不是进程内临时缓存；
-- 以实际送入模型的 prompt 计算 **SHA-256 指纹**，数据变化时自动失效；
-- 同一作品 / 同一赛事再次访问可直接命中缓存，**跳过重复的大模型调用**；
-- 缓存读写异常自动降级，不影响主接口可用性。
-
-### 04 · 灵感工作台
-
-围绕具体赛事聚合两类 AI 资产：
-
-- **赛事洞察**：经验（experience）、趋势（trend）、差距（gap）；
-- **选题灵感**：标题、一句话 pitch、详细方案、新颖度、风险、难度与参考作品。
-
-灵感数据按 `competition_id` 严格隔离，`evidence` / `ref_awards` 还会做作品归属校验，避免跨赛事“串台”。用户可以收藏感兴趣的灵感，形成自己的选题池。
-
-### 05 · 暗黑模式与多主题切换
-
-内置三套完整主题，覆盖首页、列表、详情、工作台与个人中心：
-
-| 主题 | 视觉语言 |
-| --- | --- |
-| **官方风** `official` | 校园主题背景 + 半透明遮罩，默认主题 |
-| **极简风** `minimal` | 纯白留白，突出内容本身 |
-| **科技蓝** `tech` | 深色底 + 蓝色高光，即暗黑模式 |
-
-- 首屏内联脚本在 CSS 加载前写入主题 class，避免 FOUC 闪白；
-- 主题选择持久化到 `localStorage`，隐私模式下静默降级；
-- 同步 `color-scheme`，让滚动条、输入框等原生控件跟随主题；
-- 动效适配 `prefers-reduced-motion`，对减少动态效果的用户友好。
-
-### 06 · JWT 用户鉴权与 AI 额度防刷
-
-- **JWT Bearer 鉴权**：PyJWT 签发与校验，未登录、过期、伪造、用户已删除统一返回 `401`；
-- **密码安全**：bcrypt 加盐哈希，不存储明文密码；
-- **JWT 启动强校验**：默认开发密钥或长度不足 32 位时，服务直接拒绝启动；
-- **AI 每日配额**：按登录用户维度计数，AI 生成类接口统一挂载配额依赖，超额返回 `429` 与 `Retry-After`；
-- **登录态边界**：`401` 后清理本地凭证与用户本地数据，避免共享设备上读到上一账号的计划与收藏；
-- **前端安全渲染**：Markdown 统一走 `marked → DOMPurify.sanitize`，净化后再交给 `v-html`。
-
----
-
-## 🛠️ 技术栈与架构
-
-### 技术栈
-
-| 层级 | 技术 | 职责 |
-| --- | --- | --- |
-| **前端** | Vue 3（Composition API） | 页面与交互状态管理 |
-| | Vite 5 | 开发服务器、构建、`/api` 代理 |
-| | Tailwind CSS 3.4 | 原子化样式、三套主题与暗黑变体 |
-| | Vue Router 4 | 路由、鉴权守卫、懒加载 |
-| | Axios | 请求封装、Token 注入、401/429 统一处理 |
-| | marked + DOMPurify | Markdown 渲染与 XSS 清洗 |
-| **后端** | FastAPI + Uvicorn | REST API、依赖注入、OpenAPI 文档 |
-| | Pydantic 2 | 请求/响应模型与边界校验 |
-| | SQLite（WAL） | 业务真值库、用户、配额、分析缓存 |
-| | PyJWT + bcrypt | 用户鉴权与密码哈希 |
-| **AI / 检索** | DeepSeek Chat API | 备赛计划、作品解析、洞察生成 |
-| | ChromaDB | 获奖作品向量索引与 cosine 召回 |
-| | 云端 Embedding API | 文本向量化，默认模型 `bge-m3`，可配置切换 |
-| | JSON Repair | 大模型 JSON 输出的容错修复 |
-
-### 整体架构
+**KuAo（库奥）** 是面向大学生的智能学科竞赛备赛平台，基于 **Vue 3 + FastAPI + SQLite + ChromaDB** 构建。平台围绕真实备赛流程，提供赛事检索、AI 备赛计划、获奖作品解析、赛事洞察与选题灵感，并已打通 **数据采集 → 候选审核 → AI 提纯 → 内容生成** 的全自动内容生产链路。
 
 ```mermaid
 flowchart LR
-    subgraph FE["前端 · Vue 3 + Vite + Tailwind"]
-        UI["页面 / 主题 / 路由守卫"]
-        AX["Axios · Token · 401/429"]
-    end
-
-    subgraph BE["后端 · FastAPI"]
-        API["API 层 / Pydantic 校验"]
-        AUTH["JWT 鉴权 + 每日配额"]
-        BIZ["赛事 · 备赛 · 解析 · 灵感"]
-        RET["检索服务 · L1 + L2"]
-    end
-
-    subgraph DATA["数据与智能层"]
-        SQL[("SQLite · WAL")]
-        CHROMA[("ChromaDB · 可重建索引")]
-        CACHE[("AI 分析缓存")]
-        LLM["DeepSeek Chat API"]
-        EMB["云端 Embedding API"]
-    end
-
-    UI --> AX
-    AX -->|"HTTPS · /api"| API
-    API --> AUTH
-    API --> BIZ
-    API --> RET
-    BIZ --> LLM
-    BIZ --> CACHE
-    CACHE --> SQL
-    RET --> EMB
-    RET --> CHROMA
-    RET --> SQL
-    CHROMA -.->|"从 SQLite 同步 / 可重建"| SQL
+    A["高校竞赛目录<br/>教务处通知 / 新闻"] --> D["发现器<br/>discover_* / crawler_*"]
+    C["赛氪（极低频）"] --> D
+    D --> P[("候选池<br/>competition_candidates")]
+    P -->|"人工审核<br/>review_candidates.py"| M[("主库<br/>competitions / awards")]
+    M --> E["AI 提纯<br/>enrich_saikr_details.py"]
+    E --> M
+    M --> G["AI 生成<br/>攻略 / 灵感"]
+    G --> M
+    M --> API["FastAPI"]
+    API --> WEB["Vue 3 前端"]
 ```
 
-### 关键架构决策
-
-#### 1. 为轻量云服务器而生的云端 Embedding
-
-> [!IMPORTANT]
-> 项目已移除本地重型 Embedding 模型（`sentence-transformers` / 本地 BGE 权重）的加载路径，改为调用 **OpenAI 兼容的云端 Embedding API**。这不是简单的依赖替换，而是面向轻量级云服务器的关键部署取舍。
-
-| 维度 | 本地 Embedding 方案 | 当前云端 API 方案 |
-| --- | --- | --- |
-| 常驻内存 | 需加载模型权重与推理运行时 | 仅保留业务进程、SQLite 与 Chroma 索引 |
-| 冷启动 | 启动时加载模型，耗时较长 | 懒加载 HTTP 客户端，启动轻快 |
-| 依赖体积 | 需要 PyTorch / Transformers 等重依赖 | 仅需 `openai` 兼容客户端 |
-| 弹性扩容 | 受单机 CPU / 内存限制 | 向量化能力随 API 弹性扩展 |
-| 运维成本 | 需维护模型文件与推理环境 | 只需管理密钥、网络与限流 |
-
-**带来的直接收益：**
-
-- 极大降低后端**常驻内存占用**，避免了本地模型权重带来的数百 MB 级内存压力；
-- 显著缩小依赖与镜像体积，更适合 **1C2G / 2C4G** 级别的轻量云服务器；
-- 把“重推理”交给云端，把“轻服务”留在本机，部署边界更清晰。
-
-**工程上的配套处理：**
-
-- `embedder.py` 保持 `encode_docs` / `encode_query` / `dim` / `self_test` 接口不变，检索层无感切换；
-- 批量分批（默认 32 条/批）、L2 归一化、指数退避重试，兼容 429 / 5xx / 网络抖动；
-- Embedding 调用失败**不会静默写入 mock 向量**，避免污染真实索引；仅显式设置 `KB_EMBED_MODE=mock` 时用于离线调试。
-
-#### 2. SQLite 是真值源，ChromaDB 只是可重建索引
-
-- 所有赛事、作品、用户、配额、缓存以 SQLite 为准；
-- Chroma 中的 `award:{id}` 向量与 metadata 可从 SQLite 全量重建；
-- 检索采用 **L1 向量召回 + L2 SQLite 结构化重排**，命中结果若已删除或未审核会被丢弃；
-- 即使向量索引损坏，也不会影响业务数据正确性。
-
-#### 3. 数据库级 AI 缓存，控制推理成本
-
-- 以 `(target_type, target_id)` 定位缓存对象；
-- 以 prompt 的 SHA-256 指纹判断内容是否仍有效；
-- 缓存命中直接返回，缓存异常自动降级，不让“加速手段”变成故障点。
-
-#### 4. SQLite 并发友好配置
-
-- 统一连接入口，所有业务函数通过上下文管理器获取连接；
-- 开启 `journal_mode=WAL`，读写不互相阻塞；
-- 设置 `busy_timeout=10000`，写锁竞争时等待而非立即报错；
-- 正常提交、异常回滚、最终关闭，避免连接泄漏与锁残留。
+> **数据原则**：所有新赛事先进入候选池，人工审核后才写入主库；所有 AI 生成内容只依据库内真实字段，缺依据时明确留空或写「未公布」。
 
 ---
 
-## 🛡️ 工程化与质量保证
+## ✨ 核心特性
 
-> 交付前，前后端分别完成了**全链路 Code Review**，并针对核心业务路径与边界条件设计了可执行的测试用例。审查报告与用例清单与代码同仓维护，作为持续回归资产。
+### 01 · 全自动数据采集
 
-### 全链路 Code Review
+- **高校目录发现**：解析全国普通高校学科竞赛排行榜（84 项）目录页，自动配对赛事名称与官网，归一化去重后写入候选池；支持文本行、表格、裸域名等多种页面形态。
+- **赛氪极低频抓取**：每日最多 2 页 / 20 条，请求间隔 3–5 秒，自动跳过报名结束超过 400 天的往年届次，并通过每日守卫防止重复执行。
+- **新闻与通知采集**：支持列表页批量抓取、自动翻页、正文抽取与获奖信息识别；按 `source_url` 查重，`content_hash` 唯一索引兜底。
+- **统一补全管线**：`pipeline_update.py` 融合赛氪详情、封面质量闸门、报名月份与官网通知页抽取，默认只读预检，`--apply` 才写库。
 
-| 范围 | 审查重点 | 交付文档 |
-| --- | --- | --- |
-| **后端** | 鉴权、CORS、密钥管理、SQL 注入、SQLite 并发、LLM 超时重试、配额、缓存、依赖可部署性、错误处理 | [后端 Code Review](backend/CODE_REVIEW_BACKEND.md) |
-| **前端** | API 地址与部署、密钥泄露、401 会话边界、竞态与状态隔离、XSS、本地缓存、主题一致性、可访问性 | [前端 Code Review](frontend/CODE_REVIEW_FRONTEND.md) |
+### 02 · AI 智能提纯（防幻觉 · 防侵权 · 防污染）
 
-审查方式覆盖 **静态代码阅读 + 数据流/调用链推演 + 依赖与部署配置核对**，并对关键风险按 P0 / P1 / P2 / P3 分级，逐项给出修复方案与验收口径。
+- **防幻觉 Prompt**：所有抽取字段必须能在原文找到依据，无依据一律 `NULL`；明确区分「比赛时间」与「报名 / 作品提交截止」。
+- **洗稿过滤**：赛氪原始正文**绝不直接入库**。详情提纯时，每个赛事只调用一次大模型，将内容改写为「1. 短句」列表（每条 ≤ 50 字、≤ 8 条）；与原文字面重合 ≥ 40 字视为照抄，该字段保留 `NULL`，不回落原文、不编造。
+- **候选池防污染**：发现脚本只能写 `competition_candidates`。人工审核 `approve` 时才在同一事务写入主表，并重新执行封面质量检查、同名查重，审核通过后自动补全详情字段。
+- **只补空，不覆盖**：采集与提纯链路统一逐字段 `IS NULL` 写入；人工录入或历史值优先，避免平台口径覆盖官方口径。
 
-### 边界测试用例设计
+### 03 · AI 内容生成
 
-| 层级 | 交付物 | 规模 | 覆盖重点 |
-| --- | --- | --- | --- |
-| 后端 | [TEST_CASES_BACKEND.md](backend/TEST_CASES_BACKEND.md) + [test_api_boundaries.py](backend/test_api_boundaries.py) | **74 个测试方法** | 鉴权、配额、竞赛、灵感、计划、分析、检索、备赛、LLM 重试、DB 事务、请求体安全 |
-| 前端 | [TEST_CASES_FRONTEND.md](frontend/TEST_CASES_FRONTEND.md) | **156 条用例**（P0 57 / P1 69 / P2 30） | 登录态、路由守卫、检索竞态、筛选、工作台切赛事、缓存、主题、可访问性、性能、安全 |
+- **按需生成全流程攻略**：详情页「✨ 生成 AI 攻略」按钮，登录后异步生成。接口幂等，支持 `202 / 409 / 429` 状态区分、15 分钟僵尸任务回收与失败冷却。
+- **每日慢刷备赛灵感**：`daily_ai_worker.py` 每天最多生成 4 篇攻略 + 2 条灵感，带 token 预算熔断、3 天失败冷却与写前自动备份。
+- **结构化攻略内容**：结合报名/比赛月份、官网、获奖作品生成分阶段备赛路线；缺少确定信息时明确写「未公布」，不虚构日期与赛制。
+- **灵感资产**：按赛事隔离生成经验、趋势、差距与选题灵感，支持收藏沉淀为个人选题池。
 
-边界用例重点覆盖：
+### 04 · 优雅的前端交互
 
-- **空值与类型错误**：空字符串、纯空白、`null`、非整数 ID、非法枚举；
-- **数值边界**：`0`、负数、恰好用完配额、`limit + 1`、超大 `top_k`；
-- **长度边界**：超长用户名/密码、8000 字用户输入、32000 字已有计划；
-- **资源与并发**：并发抢配额、并发备赛写入、SQLite 锁竞争；
-- **安全载荷**：SQL 注入、XSS、伪造/过期 JWT、跨赛事缓存污染；
-- **外部依赖异常**：LLM 超时、429、5xx、空正文、Embedding 不可用、向量库降级；
-- **前端状态**：慢网响应乱序、切赛事竞态、脏 localStorage、隐私模式、主题闪白。
-
-### P0 / P1 级风险修复闭环
-
-| 风险项 | 修复措施 | 落点 |
-| --- | --- | --- |
-| **API 密钥泄露** | 前端不再持有模型密钥；密钥统一收敛到后端环境变量，`.env` 被 `.gitignore` 排除；JWT Secret 启动时强校验，默认值/短密钥直接拒绝启动 | `config.py`、`.gitignore` |
-| **CORS 跨域配置不当** | 改为 `CORS_ALLOW_ORIGINS` 白名单；检测到 `*` 直接拒绝启动；关闭 `allow_credentials`，仅保留必要方法与请求头 | `main.py` |
-| **SQLite 并发锁** | 启用 WAL 日志模式，设置 `busy_timeout=10000`；连接统一走上下文管理器，确保提交/回滚/关闭 | `db.py` |
-| **大模型超时与重试叠加** | 关闭 SDK 自带重试（`max_retries=0`），设置连接 5s / 读取 45s；应用层使用有界指数退避，避免 3×2 次叠加放大 | `llm.py` |
-| **JWT 生命周期与鉴权边界** | 默认有效期收敛至 24 小时；统一 `401` 与 `WWW-Authenticate: Bearer`；前端 `401` 后清理本地用户数据 | `config.py`、`security.py`、`api.js` |
-| **输入与配额边界** | 用户输入、已有计划、检索 query 设置 `max_length`；ID 使用 `gt=0`；AI 接口按用户日配额原子扣减，超额返回 `429` | `routers/ai.py`、`security.py` |
-
-> [!TIP]
-> Code Review 文档中同时保留了问题背景、风险推演与修复记录，便于后续维护者理解“为什么这样设计”，而不是只看到最终代码。
-
-### 工程化细节
-
-- **配置集中化**：`config.py` 统一读取与容错转换，业务模块不散落 `os.getenv`；
-- **依赖锁定**：`requirements.txt` 锁定 FastAPI、OpenAI、ChromaDB、PyJWT 等运行时版本；
-- **前端请求治理**：Axios 统一注入 Token、归一化错误、处理 401/429，避免各页面重复实现；
-- **竞态防护**：检索、赛事详情、作品解析等异步请求均保留请求上下文校验，过期响应不覆盖新状态；
-- **降级策略**：`localStorage` 不可用、缓存损坏、向量检索失败、LLM 调用失败均有可理解的兜底路径；
-- **安全渲染**：Markdown 统一净化，外链与图片资源谨慎处理，避免把模型输出直接当作可信 HTML。
+- **无图卡片兜底**：封面缺失或加载失败时，按赛事名称哈希生成稳定渐变色 + 赛事首字，深浅色主题自动适配，布局尺寸不变。
+- **详情页结构化排版**：顶部速览卡 + 中部栅格卡片（时间安排、赛事简介、参赛对象、内容范围、考试安排），攻略以安全 Markdown 渲染；无攻略时保留空壳与生成按钮。
+- **多主题与响应式**：官方风、极简风、科技蓝三套主题，首屏防闪白，移动端与桌面端一致可用。
+- **完整备赛工作台**：多轮对话生成/修订备赛计划，单作品深度解析与赛事共性分析，结果落库缓存以控制模型成本。
 
 ---
 
-## 🚀 快速启动指南
+## 🛠️ 技术栈
+
+| 层级 | 技术 | 说明 |
+| --- | --- | --- |
+| **前端** | Vue 3（Composition API） | 页面与交互状态 |
+| | Vite 5 | 开发服务器、构建与 `/api` 代理 |
+| | Tailwind CSS 3.4 | 原子化样式、主题与暗黑模式 |
+| | Vue Router 4 / Axios | 路由守卫、请求封装与 Token 注入 |
+| | marked + DOMPurify | Markdown 渲染与 XSS 清洗 |
+| **后端** | FastAPI + Uvicorn | REST API、依赖注入、OpenAPI |
+| | Pydantic 2 | 请求/响应模型与边界校验 |
+| | PyJWT + bcrypt | JWT 鉴权与密码哈希 |
+| **数据** | SQLite（WAL） | 业务真值库：赛事、获奖、候选、任务、配额 |
+| | ChromaDB | 获奖作品向量索引，可从 SQLite 重建 |
+| | 云端 Embedding API | 默认 `bge-m3`，轻量服务器无需本地推理 |
+| **AI** | DeepSeek Chat API | 信息抽取、攻略、灵感与作品解析 |
+| | json_repair | 大模型 JSON 输出容错修复 |
+| **采集** | requests + BeautifulSoup4 + lxml | 静态页抓取与正文解析 |
+| **运维** | systemd + Nginx + Crontab + flock | 常驻服务、反向代理、定时任务链 |
+
+---
+
+## 📂 目录结构
+
+> 仅列出核心模块，完整清单见 [交接文档](backend/CRAWLER_HANDOVER.md)。
+
+```text
+KuAo-Platform/
+├── backend/
+│   ├── main.py                    # FastAPI 入口：CORS、路由、启动初始化
+│   ├── config.py / security.py    # 集中配置、JWT 与配额
+│   ├── db.py / schema_v2.sql      # SQLite 数据层、建表与幂等迁移
+│   ├── llm.py / embedder.py       # 大模型 JSON 抽取、云端向量化
+│   ├── retriever.py               # Chroma 索引 + L1 召回 + L2 重排
+│   │
+│   ├── crawler_news.py            # 新闻/通知采集：获奖抽取、翻页、去重
+│   ├── crawler_competitions.py    # 赛事详情采集：正文、封面、字段抽取
+│   ├── pipeline_update.py         # 赛氪 + 通知页统一预检/补全管线
+│   ├── enrich_saikr_details.py    # 赛氪详情补充：AI 提纯、backfill/daily 双模式
+│   ├── batch_update_competitions.py # 存量赛事批量补全（只填空）
+│   │
+│   ├── discover_common.py         # 发现公共层：目标库保护、备份、去重入库
+│   ├── discover_university.py     # 高校 84 项目录发现
+│   ├── discover_saikr.py          # 赛氪每日增量发现（≤20 条/天）
+│   ├── review_candidates.py       # 候选审核 CLI：list / approve / reject
+│   │
+│   ├── ai_content.py              # Prompt 与生成核心（攻略/灵感）
+│   ├── ai_jobs_runner.py          # ai_jobs 编排：线程池、预算、冷却
+│   ├── daily_ai_worker.py         # 每日慢刷 worker（cron 入口）
+│   ├── generate_guides.py         # 单条/批量攻略 CLI（兼容入口）
+│   ├── analyzer.py                # 赛事洞察与选题灵感
+│   ├── cleanup_orphan_ai.py       # 孤儿 insights/ideas 清理
+│   │
+│   ├── backup_db.py               # WAL 安全在线备份 + 完整性校验
+│   ├── migrate_production.py      # 生产库体检 / 迁移
+│   ├── merge_test_competitions.py # 测试库 → 生产库合并
+│   ├── verify_crawl.py            # 采集结果读回校验
+│   │
+│   ├── routers/                   # auth / competitions / preparations / ai / feedback
+│   ├── models/schemas.py          # Pydantic 响应模型
+│   ├── workspace/                 # 采集报告、预检 JSON、验证截图（gitignored）
+│   ├── backups/                   # 生产库定时备份
+│   └── CRAWLER_HANDOVER.md        # 架构与运维交接文档（接手必读）
+│
+├── frontend/
+│   ├── src/views/                 # 首页、赛事列表/详情、备赛工作台、个人中心
+│   ├── src/components/            # 卡片、Header、登录弹窗、Toast 等
+│   ├── src/services/              # API、鉴权、计划缓存、Markdown 渲染
+│   ├── src/utils/coverFallback.js # 无图封面渐变色兜底
+│   └── src/router/                # 路由表与鉴权守卫
+│
+├── .gitignore
+└── README.md
+```
+
+**后端模块速查**
+
+| 类别 | 模块 |
+| --- | --- |
+| 采集器 | `crawler_news.py`、`crawler_competitions.py`、`pipeline_update.py` |
+| 发现器 | `discover_university.py`、`discover_saikr.py` |
+| 审核 / 提纯 | `review_candidates.py`、`enrich_saikr_details.py` |
+| AI Worker | `ai_content.py`、`ai_jobs_runner.py`、`daily_ai_worker.py` |
+| CLI 工具 | `generate_guides.py`、`batch_update_competitions.py`、`backup_db.py`、`migrate_production.py`、`verify_crawl.py` |
+
+---
+
+## 🚀 快速启动
 
 ### 环境要求
 
 | 依赖 | 版本建议 |
 | --- | --- |
-| Python | 3.10+ |
+| Python | 3.10+（云端为 3.11） |
 | Node.js | 18+ |
 | npm | 9+ |
 | 网络 | 可访问 DeepSeek 与 Embedding API |
 
-> 前端默认通过 Vite 将 `/api` 代理到 `http://127.0.0.1:8000`，因此本地开发无需额外配置跨域。
-
-### 1. 获取代码
-
-```bash
-git clone <your-repository-url>
-cd KuAo-Platform
-```
-
-### 2. 启动后端
+### 1. 安装后端依赖
 
 ```bash
 cd backend
 
-# 创建虚拟环境
 python -m venv venv
-
 # Windows PowerShell
 .\venv\Scripts\Activate.ps1
-
 # macOS / Linux
 # source venv/bin/activate
 
-# 安装依赖
 python -m pip install -r requirements.txt
 ```
 
-在 `backend/` 下创建 `.env`（不要提交到版本库），填入真实配置：
+### 2. 配置 `.env`
+
+在 `backend/` 下创建 `.env`（不要提交到版本库）：
 
 ```dotenv
 # ---------- 大模型 ----------
@@ -335,15 +201,18 @@ EMBEDDING_BASE_URL=https://api.siliconflow.cn/v1
 EMBEDDING_MODEL=bge-m3
 
 # ---------- 鉴权 ----------
-# 至少 32 位，建议使用随机生成的 64 位字符串
+# 至少 32 位；未配置或过短时后端会拒绝启动
 JWT_SECRET_KEY=replace-with-a-random-string-at-least-32-chars
 JWT_EXPIRE_MINUTES=1440
 
 # ---------- CORS ----------
-CORS_ALLOW_ORIGINS=http://localhost:5173,http://127.0.0.1:5173,http://localhost:4173,http://127.0.0.1:4173
+CORS_ALLOW_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
 
 # ---------- AI 配额 ----------
 AI_DAILY_QUOTA=30
+AI_GUIDE_DAILY_LIMIT=8
+AI_GUIDE_QUEUE_MAX=5
+AI_GUIDE_FAIL_COOLDOWN_MIN=30
 ```
 
 生成随机 JWT 密钥：
@@ -352,23 +221,36 @@ AI_DAILY_QUOTA=30
 python -c "import secrets; print(secrets.token_urlsafe(48))"
 ```
 
-> [!WARNING]
-> `JWT_SECRET_KEY` 未配置、使用默认开发密钥或长度小于 32 位时，后端会主动拒绝启动。这是有意的 fail-fast 安全设计。
+### 3. 初始化数据库
 
-启动 API 服务（命令需在 `backend/` 目录执行）：
+后端启动时会自动执行幂等建表与补列，首次运行即可生成 `backend/competitions.db`。若使用历史数据库，建议先体检再迁移：
 
 ```bash
+python migrate_production.py            # 只读体检
+python migrate_production.py --apply    # 备份后补列
+```
+
+本地调试请优先使用测试库，避免污染生产数据：
+
+```bash
+# 后端服务未写入时可直接复制
+cp competitions.db test_crawl.db          # macOS / Linux
+# Copy-Item .\competitions.db .\test_crawl.db   # Windows PowerShell
+```
+
+### 4. 启动后端
+
+```bash
+# 在 backend/ 目录执行
 python -m uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-验证服务：
-
 - 健康检查：<http://127.0.0.1:8000/api/health>
-- Swagger 文档：<http://127.0.0.1:8000/docs>
+- Swagger：<http://127.0.0.1:8000/docs>
 
-### 3. 启动前端
+### 5. 启动前端
 
-另开一个终端：
+另开终端：
 
 ```bash
 cd frontend
@@ -376,105 +258,87 @@ npm install
 npm run dev
 ```
 
-浏览器访问：<http://localhost:5173>
+访问 <http://localhost:5173>。Vite 默认将 `/api` 代理到 `http://127.0.0.1:8000`；如需修改，在 `frontend/.env` 中设置 `VITE_API_BASE_URL`。
 
-如需连接非默认后端地址，可在 `frontend/.env` 中设置（可选）：
-
-```dotenv
-VITE_API_BASE_URL=http://127.0.0.1:8000/api
-```
-
-> 生产环境推荐使用同源反向代理（Nginx `/api` → 后端），同时避免 CORS 与 HTTPS Mixed Content 问题。
-
-### 4. 生产构建
+### 6. 生产构建
 
 ```bash
 cd frontend
 npm run build
 ```
 
-构建产物输出到 `frontend/dist/`。服务端需为 History 路由配置 fallback（如 Nginx `try_files $uri $uri/ /index.html;`），并把 `/api` 反向代理到 FastAPI。
-
-### 常用地址
-
-| 服务 | 地址 |
-| --- | --- |
-| 前端开发服务器 | <http://localhost:5173> |
-| 后端 API | <http://127.0.0.1:8000> |
-| Swagger | <http://127.0.0.1:8000/docs> |
-| 健康检查 | <http://127.0.0.1:8000/api/health> |
+产物输出到 `frontend/dist/`。Nginx 需配置 SPA History fallback，并将 `/api` 反向代理到 FastAPI。
 
 ---
 
-## 📂 项目结构
+## ⚙️ 自动化运维
 
-```text
-KuAo-Platform/
-├── backend/
-│   ├── main.py                  # FastAPI 入口：CORS、路由注册、启动初始化、健康检查
-│   ├── config.py                # 集中配置：LLM、Embedding、JWT、CORS、AI 配额
-│   ├── security.py              # bcrypt 密码哈希、JWT 签发/校验、用户与配额依赖
-│   ├── db.py                    # SQLite 数据访问层：连接、事务、查询、缓存、配额
-│   ├── schema_v2.sql            # 10 张表的统一建表脚本与索引
-│   ├── llm.py                   # DeepSeek 客户端：超时、重试、JSON 修复、用量统计
-│   ├── embedder.py              # 云端 Embedding 封装：批量、归一化、退避重试
-│   ├── retriever.py             # Chroma 索引管理 + L1 向量召回 + L2 结构化重排
-│   ├── routers/
-│   │   ├── auth.py              # 注册、登录、当前用户
-│   │   ├── competitions.py      # 赛事列表、详情、分类、获奖作品
-│   │   ├── preparations.py      # 我的备赛清单：增删查
-│   │   └── ai.py                # 检索、备赛计划、作品解析、灵感、配额
-│   ├── models/
-│   │   └── schemas.py           # Pydantic 响应模型
-│   ├── chroma_db/               # 向量索引（运行时生成，可从 SQLite 重建）
-│   ├── competitions.db          # SQLite 业务库（运行时数据）
-│   ├── requirements.txt         # 后端依赖清单
-│   ├── CODE_REVIEW_BACKEND.md   # 后端 Code Review 报告
-│   ├── TEST_CASES_BACKEND.md    # 后端测试用例清单
-│   └── test_api_boundaries.py   # 后端边界自动化用例
-│
-├── frontend/
-│   ├── src/
-│   │   ├── views/               # 首页、赛事列表/详情、备赛工作台、个人中心
-│   │   ├── components/          # Header、赛事卡片、登录弹窗、Toast、返回顶部
-│   │   ├── services/            # API、鉴权、计划缓存、收藏、Markdown 渲染
-│   │   ├── composables/         # 主题、登录弹窗、全局 Toast
-│   │   ├── router/              # 路由表与鉴权守卫
-│   │   └── assets/              # 样式与静态资源
-│   ├── index.html               # 应用入口、首屏主题防闪白脚本
-│   ├── vite.config.js           # 开发代理与构建配置
-│   ├── tailwind.config.js       # Tailwind 主题与 darkMode 配置
-│   ├── package.json             # 前端依赖与脚本
-│   ├── CODE_REVIEW_FRONTEND.md  # 前端 Code Review 报告
-│   └── TEST_CASES_FRONTEND.md   # 前端测试用例清单
-│
-├── .gitignore                   # 排除虚拟环境、依赖、数据库、.env 等
-└── README.md
+生产环境部署在 Linux 服务器：FastAPI 由 `systemd` 常驻，Nginx 托管前端并反代 `/api`，Crontab 驱动数据采集与 AI 生成链路。
+
+### 定时任务链
+
+| 时间（Asia/Shanghai） | 任务 | 脚本 |
+| --- | --- | --- |
+| 每天 02:30 | 生产库在线备份（WAL 安全，保留 30 天） | `backup_db.py` |
+| 每天 04:10 | 赛氪增量发现，只写候选池 | `discover_saikr.py` |
+| 每天 04:40 | AI 慢刷：4 篇攻略 + 2 条灵感，预算熔断 | `daily_ai_worker.py` |
+| 每周日 05:20 | 存量赛事补全（限 20 条） | `pipeline_update.py` |
+| 每天 05:40 | 清理 7 天前日志 | `find` |
+| 每周日 05:50 | 清理 30 天前本地备份 | `find` |
+
+> 顺序不可颠倒：**先备份，再写库**；发现只写候选，AI 消费当天数据；清理最后执行。新闻采集与每日详情补全可按需追加，前者需先确定 `LIST_URL`。
+
+### Crontab 示例
+
+```cron
+SHELL=/bin/bash
+PATH=/usr/local/bin:/usr/bin:/bin
+MAILTO=""
+
+# 0) 每天 02:30 生产库备份
+30 2 * * * cd /root/KuAo/backend && flock -n /var/lock/kuao_backup.lock ./venv/bin/python backup_db.py --db competitions.db --backup-dir backups --keep-days 30 --label daily >> logs/backup-$(date +\%F).log 2>&1
+
+# 1) 每天 04:10 新赛事发现（只写候选表）
+10 4 * * * cd /root/KuAo/backend && flock -n /var/lock/kuao_saikr.lock ./venv/bin/python discover_saikr.py --db-path competitions.db --apply --allow-production >> logs/discover-$(date +\%F).log 2>&1
+
+# 2) 每天 04:40 AI 慢刷
+40 4 * * * cd /root/KuAo/backend && flock -n /var/lock/kuao_ai.lock ./venv/bin/python daily_ai_worker.py --db-path competitions.db --apply --allow-production --limit 4 --idea-limit 2 --budget-tokens 300000 >> logs/ai-$(date +\%F).log 2>&1
+
+# 3) 每周日 05:20 存量补全
+20 5 * * 0 cd /root/KuAo/backend && flock -n /var/lock/kuao_pipeline.lock ./venv/bin/python pipeline_update.py --db-path competitions.db --apply --allow-production --limit 20 >> logs/pipeline-$(date +\%F).log 2>&1
+
+# 4) 每天 05:40 日志清理（只清 logs/）
+40 5 * * * find /root/KuAo/backend/logs -type f -name '*.log*' -mtime +7 -delete >> /root/KuAo/backend/logs/cleanup.log 2>&1
+
+# 5) 每周日 05:50 备份清理
+50 5 * * 0 find /root/KuAo/backend/backups -type f -name 'competitions.db.bak-*' -mtime +30 -delete >> /root/KuAo/backend/logs/cleanup.log 2>&1
 ```
 
-### 核心目录说明
+> 示例按当前部署路径 `/root/KuAo/backend` 编写；如迁移至 `/opt/kuao`，需同步修改 Crontab、systemd 与 Nginx 中的路径。
 
-| 目录 / 文件 | 说明 |
-| --- | --- |
-| `backend/routers/` | 按业务域拆分的 API 路由；AI 路由统一挂载鉴权与每日配额 |
-| `backend/db.py` + `schema_v2.sql` | SQLite 真值层：连接管理、事务、迁移、10 张业务表 |
-| `backend/llm.py` + `embedder.py` | 模型能力封装：对话生成与向量化，均带超时/重试/错误归一化 |
-| `backend/retriever.py` | 检索内核：Chroma 索引同步、两级召回、降级策略 |
-| `frontend/src/views/` | 面向用户的完整页面流，承载检索、筛选、备赛工作台等交互 |
-| `frontend/src/services/` | 与后端交互的边界层：请求、鉴权、缓存、安全渲染 |
-| `frontend/src/composables/` | 可复用的组合式状态：主题切换、登录弹窗、Toast |
-| `frontend/src/router/` | 路由懒加载与 `requiresAuth` 守卫 |
+### 运维约定
+
+- **统一时区**：Debian/Ubuntu 的 cron 不支持 `CRON_TZ`，必须设置系统时区为 `Asia/Shanghai`。
+- **互斥执行**：所有任务使用 `flock -n`，避免备份、写库与 AI 生成重叠。
+- **生产写库三件套**：`--apply` + `--allow-production` + 写前自动备份，缺一不可；所有脚本默认 dry-run。
+- **限速红线**：赛氪 3–5 秒 / 每日 ≤20 条，补全 5–10 秒，新闻 2–5 秒，不得为提速调小。
+- **候选审核**：`review_candidates.py --list/--approve/--reject`；服务、广告、辅助报名类直接拒绝。
+- **图片策略**：只保存图片 URL，不下载落盘；宽高比 > 2.6 的 banner 一律拒收，无图交给前端渐变兜底。
+- **故障排查**：先看 `ai_jobs` 状态与 `logs/`，再核对 `systemctl status kuao-backend` 与健康检查。
 
 ---
 
-## 📌 生产部署提示
+## 📚 文档索引
 
-- **密钥管理**：生产环境不要提交 `.env`，使用平台 Secret / 环境变量注入；建议定期轮换 DeepSeek 与 Embedding Key。
-- **CORS**：将 `CORS_ALLOW_ORIGINS` 设置为真实前端域名，禁止使用 `*`。
-- **反向代理**：推荐 Nginx 同源代理 `/api`，并配置 SPA History fallback。
-- **SQLite 场景**：建议单实例部署；若需要多实例或多 worker，请改用 PostgreSQL 等支持并发写的数据库。
-- **AI 成本**：通过 `AI_DAILY_QUOTA` 控制单用户额度，并在网关层补充 IP 级限流与请求体大小限制。
-- **内容边界**：AI 生成内容仅作备赛参考，赛事时间、报名要求与评审规则请以官方通知为准。
+| 文档 | 内容 |
+| --- | --- |
+| [CRAWLER_HANDOVER.md](backend/CRAWLER_HANDOVER.md) | 爬虫、AI 链路、审核机制与开发红线（接手必读） |
+| [CLOUD_DEPLOYMENT_GUIDE.md](backend/CLOUD_DEPLOYMENT_GUIDE.md) | 云端部署、数据库迁移、systemd / Nginx / crontab |
+| [AI_AUTOMATION_PLAN.md](backend/AI_AUTOMATION_PLAN.md) | AI 生成与自动化方案设计 |
+| [CODE_REVIEW_BACKEND.md](backend/CODE_REVIEW_BACKEND.md) | 后端 Code Review 报告 |
+| [CODE_REVIEW_FRONTEND.md](frontend/CODE_REVIEW_FRONTEND.md) | 前端 Code Review 报告 |
+| [TEST_CASES_BACKEND.md](backend/TEST_CASES_BACKEND.md) | 后端边界测试用例 |
+| [TEST_CASES_FRONTEND.md](frontend/TEST_CASES_FRONTEND.md) | 前端测试用例清单 |
 
 ---
 
@@ -482,6 +346,6 @@ KuAo-Platform/
 
 **KuAo · 库奥**
 
-让每一次备赛，都有据可循。
+让赛事发现自动化，让备赛有据可循。
 
 </div>
