@@ -30,71 +30,9 @@ watch(
   }
 )
 
-// 四个基础详情区块（先放静态占位文案，后续接真实数据替换 content 即可）
-const sections = [
-  {
-    index: '一',
-    title: '时间安排',
-    content: '报名开始与截止时间、校内选拔时间、初赛与决赛时间节点，将在官方日程公布后同步更新。'
-  },
-  {
-    index: '二',
-    title: '参赛对象',
-    content: '面向全日制在校本科生、研究生，可个人参赛或以团队形式报名，具体组队人数要求详见竞赛章程。'
-  },
-  {
-    index: '三',
-    title: '内容范围',
-    content: '竞赛内容涵盖基础知识、综合应用与创新实践三部分，具体考核范围以后续发布的竞赛大纲为准。'
-  },
-  {
-    index: '四',
-    title: '考试安排',
-    content: '包含初赛（线上/线下）、复赛与决赛环节，考试形式、时长与考场安排将在报名结束后通知。'
-  }
-]
-
-// 三个卡片区块（先放硬编码占位文案，后续接真实数据时替换 items 即可）
-// tone 决定卡片的底色与描边，标题与序号统一用蓝色高亮
-const featureCards = [
-  {
-    key: 'form',
-    title: '参赛形式',
-    tone: 'blue',
-    items: [
-      '个人赛 / 团队赛均可报名，团队赛每队 2–5 人，需指定 1 名队长。',
-      '支持跨年级、跨专业组队，同一赛项每人仅可加入 1 支队伍。',
-      '线上报名、线上提交，无需现场报到；决赛环节视赛项另行通知。'
-    ]
-  },
-  {
-    key: 'content',
-    title: '竞赛内容',
-    tone: 'teal',
-    items: [
-      '基础知识：考察赛项相关学科的核心概念、基本原理与常用方法。',
-      '综合应用：围绕真实场景设计任务，考察方案设计与问题拆解能力。',
-      '创新实践：提交原创作品或解决方案，按创新性与完成度综合评分。'
-    ]
-  },
-  {
-    key: 'submission',
-    title: '作品提交要求',
-    tone: 'amber',
-    items: [
-      '提交时间：以竞赛日程公布的截止时间为准，逾期系统自动关闭提交入口。',
-      '文件格式：作品说明书为 PDF，源文件打包为 ZIP，单个附件不超过 200MB。',
-      '命名规范：「赛项名称-队伍名称-作品名称」，压缩包内需附作品清单。'
-    ]
-  }
-]
-
-// 卡片配色：不同区块用不同底色/描边区分（暗色模式同步适配）
-const cardTones = {
-  blue: 'border-blue-200/80 bg-blue-50/70 dark:border-blue-400/25 dark:bg-blue-500/[0.08]',
-  teal: 'border-teal-200/80 bg-teal-50/70 dark:border-teal-400/25 dark:bg-teal-500/[0.08]',
-  amber: 'border-amber-200/80 bg-amber-50/70 dark:border-amber-400/25 dark:bg-amber-500/[0.08]'
-}
+// 详情页只渲染后端真实字段：
+// 这里不再维护任何静态“套话”区块（时间安排 / 参赛对象 / 内容范围 …），
+// 字段为空时整块隐藏，避免用通用文案冒充真实赛事信息。
 
 // ---- 后端字段格式化 ----
 // 详情接口返回的是 *月份*（reg_*_month / contest_*_month，1-12 的数字），
@@ -361,6 +299,51 @@ function safeExternalUrl(raw) {
 }
 
 const officialUrl = computed(() => safeExternalUrl(detail.value?.official_url))
+
+// 官网域名（用于在没有完整 URL 时也能显示真实来源）
+const officialHost = computed(() => {
+  if (!officialUrl.value) return ''
+  try {
+    return new URL(officialUrl.value).host
+  } catch (e) {
+    return ''
+  }
+})
+
+// 真实级别文案：优先后端 level_label，缺失时按 level 兜底
+const levelText = computed(() => {
+  const label = String(detail.value?.level_label || '').trim()
+  if (label) return label
+  if (detail.value?.level === 'provincial') return '省级'
+  if (detail.value?.level === 'national') return '国家级'
+  return ''
+})
+
+// 简介：intro 与 summary 都是真实采集字段，去重后逐段渲染
+const introParagraphs = computed(() => {
+  const intro = String(detail.value?.intro || '').trim()
+  const summary = String(detail.value?.summary || '').trim()
+  const list = []
+  if (intro) list.push(intro)
+  if (summary && summary !== intro) list.push(summary)
+  return list
+})
+
+const techStack = computed(() => {
+  const raw = detail.value?.tech_stack
+  if (!Array.isArray(raw)) return []
+  return raw.map((item) => String(item ?? '').trim()).filter(Boolean)
+})
+
+// 赛事档案里只要有一个真实字段就展示，全空时整块隐藏
+const hasArchive = computed(
+  () =>
+    Boolean(officialUrl.value) ||
+    Boolean(levelText.value) ||
+    Boolean(String(detail.value?.category || '').trim()) ||
+    introParagraphs.value.length > 0 ||
+    techStack.value.length > 0
+)
 </script>
 
 <template>
@@ -445,62 +428,87 @@ const officialUrl = computed(() => safeExternalUrl(detail.value?.official_url))
           </div>
         </section>
 
-        <!-- 3. 详情区：分割线 + 四个基础区块 + 三个卡片区块 -->
-        <section class="mt-10 border-t border-slate-200 dark:border-slate-700 pt-8">
-          <h2 class="text-xl font-bold text-slate-900 dark:text-slate-100">竞赛详情：</h2>
+        <!-- 3. 赛事档案：全部字段来自 /api/competitions/{id}，没有数据就不渲染 -->
+        <section
+          v-if="hasArchive"
+          class="mt-10 border-t border-slate-200 dark:border-slate-700 pt-8"
+        >
+          <h2 class="text-xl font-bold text-slate-900 dark:text-slate-100">赛事档案</h2>
 
-          <div class="mt-6 space-y-6">
+          <dl class="mt-6 grid gap-4 sm:grid-cols-2">
             <div
-              v-for="sec in sections"
-              :key="sec.index"
-              class="rounded-2xl bg-white dark:bg-slate-800 p-6 ring-1 ring-slate-200/70 dark:ring-slate-700 shadow-sm"
+              v-if="officialUrl"
+              class="rounded-2xl bg-white p-5 ring-1 ring-slate-200/70 shadow-sm dark:bg-slate-800 dark:ring-slate-700 sm:col-span-2"
             >
-              <h3 class="text-lg font-bold text-slate-900 dark:text-slate-100">
-                {{ sec.index }}、{{ sec.title }}
-              </h3>
-              <p class="mt-3 text-sm leading-7 text-slate-600 dark:text-slate-300">
-                {{ sec.content }}
-              </p>
+              <dt class="text-xs font-bold tracking-wide text-slate-400 dark:text-slate-500">赛事官网</dt>
+              <dd class="mt-2 flex flex-wrap items-center gap-2">
+                <a
+                  :href="officialUrl"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="break-all text-sm font-bold text-blue-600 hover:text-blue-700 hover:underline dark:text-blue-400"
+                >
+                  {{ officialHost || officialUrl }}
+                </a>
+                <span class="text-xs text-slate-400 dark:text-slate-500">（点击核对当年通知）</span>
+              </dd>
             </div>
+
+            <div
+              v-if="levelText"
+              class="rounded-2xl bg-white p-5 ring-1 ring-slate-200/70 shadow-sm dark:bg-slate-800 dark:ring-slate-700"
+            >
+              <dt class="text-xs font-bold tracking-wide text-slate-400 dark:text-slate-500">赛事级别</dt>
+              <dd class="mt-2 text-sm font-bold text-slate-800 dark:text-slate-100">{{ levelText }}</dd>
+            </div>
+
+            <div
+              v-if="detail.category"
+              class="rounded-2xl bg-white p-5 ring-1 ring-slate-200/70 shadow-sm dark:bg-slate-800 dark:ring-slate-700"
+            >
+              <dt class="text-xs font-bold tracking-wide text-slate-400 dark:text-slate-500">赛事类别</dt>
+              <dd class="mt-2 text-sm font-bold text-slate-800 dark:text-slate-100">{{ detail.category }}</dd>
+            </div>
+
+            <div class="rounded-2xl bg-white p-5 ring-1 ring-slate-200/70 shadow-sm dark:bg-slate-800 dark:ring-slate-700">
+              <dt class="text-xs font-bold tracking-wide text-slate-400 dark:text-slate-500">报名时间</dt>
+              <dd class="mt-2 text-sm font-bold text-slate-800 dark:text-slate-100">{{ detail.signUpTime }}</dd>
+            </div>
+
+            <div class="rounded-2xl bg-white p-5 ring-1 ring-slate-200/70 shadow-sm dark:bg-slate-800 dark:ring-slate-700">
+              <dt class="text-xs font-bold tracking-wide text-slate-400 dark:text-slate-500">比赛时间</dt>
+              <dd class="mt-2 text-sm font-bold text-slate-800 dark:text-slate-100">{{ detail.contestTime }}</dd>
+            </div>
+          </dl>
+
+          <div
+            v-if="introParagraphs.length"
+            class="mt-6 rounded-2xl bg-white p-6 ring-1 ring-slate-200/70 shadow-sm dark:bg-slate-800 dark:ring-slate-700"
+          >
+            <h3 class="text-lg font-bold text-slate-900 dark:text-slate-100">赛事简介</h3>
+            <p
+              v-for="(text, i) in introParagraphs"
+              :key="i"
+              class="mt-3 text-sm leading-7 text-slate-600 dark:text-slate-300"
+            >
+              {{ text }}
+            </p>
           </div>
 
-          <!-- 3.1 卡片区块：参赛形式 / 竞赛内容 / 作品提交要求（占位文案） -->
-          <div class="mt-6 space-y-5">
-            <article
-              v-for="card in featureCards"
-              :key="card.key"
-              class="rounded-2xl border p-5 shadow-sm sm:p-6"
-              :class="cardTones[card.tone]"
-            >
-              <div class="flex flex-col gap-4 sm:flex-row sm:gap-8">
-                <!-- 左：蓝色高亮小标题 -->
-                <div class="shrink-0 sm:w-28 lg:w-32">
-                  <h3
-                    class="flex items-center gap-2 text-sm font-bold tracking-wide
-                           text-blue-600 dark:text-blue-400"
-                  >
-                    <span class="h-4 w-[3px] rounded-full bg-blue-500" aria-hidden="true"></span>
-                    {{ card.title }}
-                  </h3>
-                </div>
-
-                <!-- 右：带序号的详细说明 -->
-                <ol class="min-w-0 flex-1 space-y-3">
-                  <li v-for="(item, i) in card.items" :key="i" class="flex gap-3">
-                    <span
-                      class="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-md
-                             bg-blue-600/10 text-[11px] font-bold text-blue-600
-                             dark:bg-blue-400/15 dark:text-blue-300"
-                    >
-                      {{ i + 1 }}
-                    </span>
-                    <p class="text-sm leading-6 text-slate-600 dark:text-slate-300">
-                      {{ item }}
-                    </p>
-                  </li>
-                </ol>
-              </div>
-            </article>
+          <div
+            v-if="techStack.length"
+            class="mt-6 rounded-2xl bg-white p-6 ring-1 ring-slate-200/70 shadow-sm dark:bg-slate-800 dark:ring-slate-700"
+          >
+            <h3 class="text-lg font-bold text-slate-900 dark:text-slate-100">涉及技术栈</h3>
+            <ul class="mt-3 flex flex-wrap gap-2">
+              <li
+                v-for="tag in techStack"
+                :key="tag"
+                class="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600 dark:bg-slate-700 dark:text-slate-300"
+              >
+                {{ tag }}
+              </li>
+            </ul>
           </div>
         </section>
 

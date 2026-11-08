@@ -1,7 +1,7 @@
 # CRAWLER_HANDOVER.md
 
 > 交接范围：`backend/` 下高校新闻获奖采集、赛事基础数据采集、**生产库赛事批量补全**、**赛氪网数据源预检**、**候选表与审核 CLI**、**AI 攻略/灵感生成链路**、**云端定时任务链**、测试库联调与数据库迁移。
-> 生成时间：2026-11-07（Asia/Shanghai）｜最后更新：2026-11-08 13:40（Git 安全存档 + 爬虫边界测试 + 《云端部署手册》交付）
+> 生成时间：2026-11-07（Asia/Shanghai）｜最后更新：2026-11-08 18:30（详情页去套话：前端改为真实字段驱动）
 > 原则：后续接手请先读本文件，再按需读代码。
 
 ---
@@ -10,9 +10,13 @@
 
 **当前阶段：爬虫闭环 + AI 内容生成闭环已完成；2026-11-08 已完成阿里云部署（原地升级 `/root/KuAo` + systemd + crontab，见 12.5），下一步 = 80 条候选审核 + 新闻 `LIST_URL` 确定后补挂 cron。**
 
-> **【紧急 TODO｜2026-11-08】详情页数据无法正常展示**：电脑/手机访问 `/competition/10` 时，「时间安排、参赛对象」显示通用套话，官网链接、具体比赛月份、已抓取攻略均未展示。排查顺序：① 生产库 `id=10` 的真实字段（`official_url` / `reg_*` / `contest_*` / `full_process_guide`）；② `GET /api/competitions/10` 的 JSON 返回是否包含这些字段；③ 前端 `frontend/src/views/CompetitionDetailView.vue` 的兜底与渲染逻辑（`signUpTime` / `contestTime` 拼接、`resolveImage`）。
-
-> **【紧急全局 Bug｜2026-11-08】所有赛事详情页均未展示真实数据**：不只是 id=10，任意赛事详情页都显示相同的「套话」（时间安排、参赛对象等），真实基础信息与攻略全部缺失；电脑端、手机端表现一致。**疑似前端写死套话，或接口字段映射错误**（前端读取的字段名与 `/api/competitions/{id}` 实际返回不一致）。优先核查：① `/api/competitions/1`、`/api/competitions/10` 的真实 JSON；② `CompetitionDetailView.vue` 是否使用静态文案/错误字段名；③ `routers/competitions.py` 的 `_row_to_competition` 映射与 `models/schemas.py` 的 `CompetitionDetail` 字段。该问题优先级高于候选审核与 cron 观察。
+> **【当前紧急 TODO｜2026-11-08 19:00】详情页 UI 回滚 + 云端旧版待排查（优先级最高）**
+>
+> 1. **前端 UI 被改废，需要恢复“分块卡片”专业排版**：本轮把 `CompetitionDetailView.vue` 原有的分块卡片详情版式删成了线性「赛事档案」。新窗口必须恢复之前的专业卡片排版，规则是：**有数据就渲染真实数据**（官网、报名/比赛月份、简介、技术栈、攻略），**无数据保留原有卡片空壳**，并在攻略位保留「✨ 生成 AI 攻略」按钮；不允许再出现写死的“套话”文案。参考历史提交 `9a88775` 之前的 `CompetitionDetailView.vue`（可用 `git show 9a88775:frontend/src/views/CompetitionDetailView.vue` 取回旧版对照）。验证要求：`/competition/10`、`/1` 有真实官网/月份/攻略；`/competition/11` 无攻略时显示空壳 + 生成按钮；桌面 + 移动端各截一张图。
+>
+> 2. **云端 `112.126.90.252` 疑似仍是旧版页面**：上一轮构建产物上传覆盖疑似未生效，或 Nginx / 浏览器缓存未刷新。新窗口排查顺序：① 本地 `dist/index.html` 的 `index-*.js` 哈希；② 服务器 `/opt/kuao/frontend/dist/index.html` 引用哈希、文件 mtime；③ `curl -s http://112.126.90.252/ | grep assets` 实际返回哈希；④ Nginx `root` 是否指向 `/opt/kuao/frontend/dist`、`index.html` 是否被缓存（必要时加 `Cache-Control: no-cache` 或用 `?v=` 破缓存）；⑤ 强刷后截图确认。**排查结论回填本文件。**
+>
+> **【已修复 2026-11-08 18:30，但 UI 版式已被 19:00 TODO 推翻】** 详情页真实数据不展示：结论——**后端接口完全正常**，`GET /api/competitions/1`、`/10` 均返回 `official_url` / `reg_*_month` / `contest_*_month` / `full_process_guide` / `guide_status=ready`（id=10 攻略 5082 字，官网 `http://jsjds.blcu.edu.cn/`，比赛月份 7-8；id=1 攻略完整、官网 `https://cy.ncss.cn/`）。真正的 bug 在 **`CompetitionDetailView.vue`**：①「时间安排 / 参赛对象 / 内容范围 / 考试安排」四段和「参赛形式 / 竞赛内容 / 作品提交要求」三张卡片是**硬编码静态文案**，且**无条件渲染**，把真实信息压在下面，看起来就是“全是套话”；②官网与月份虽已绑定真实字段，但展示层级太低；③攻略按钮/渲染本身没有字段名错位（后端返回 `full_process_guide`，前端读的也是它），线上旧包被浏览器缓存时会表现为“只有套话”。**修复**：删除全部静态区块，改为完全由接口字段驱动的「赛事档案」（官网、级别、类别、报名/比赛月份、简介、技术栈）+ 真实攻略；字段为空则整块隐藏，不再输出任何编造文案。已用 headless Chrome 实测 `/competition/10`、`/1`、`/11`：无 console 报错、无横向溢出，`hasGuide=true`、`hasBoilerplate=false`。**本次只改前端，需重新构建并上传 `dist/`，后端无需重启。**
 
 | 项目 | 现状 |
 |---|---|
@@ -194,6 +198,51 @@
 | `frontend/dist` | 已重新 `npm.cmd run build` 通过（2026-11-08 复验 8.37s / 115 modules）；PowerShell 里必须用 `npm.cmd`，`npm.ps1` 会被执行策略拦截 |
 
 验证截图：`backend/workspace/cover-light.png`、`cover-dark.png`、`cover-detail.png`。
+
+### 详情页真实数据修复（2026-11-08 18:30，前端）
+
+**结论：后端无 bug，前端有“硬编码套话”bug。**
+
+| 核查项 | 结论 |
+|---|---|
+| `GET http://112.126.90.252/api/competitions/10` | 200，返回 `official_url=http://jsjds.blcu.edu.cn/`、`reg 4-5`、`contest 7-8`、`full_process_guide`（5082 字）、`guide_status=ready` |
+| `GET .../api/competitions/1` | 200，官网 `https://cy.ncss.cn/`、`reg 5-8`、`contest 3-7`、攻略完整 |
+| 后端映射 | `routers/competitions.py::_row_to_detail` 正常，`models/schemas.py::CompetitionDetail` 字段齐全 |
+| 前端字段名 | 与后端一致：`reg_*_month`、`contest_*_month`、`official_url`、`full_process_guide` 均读对 |
+| 真正原因 | `CompetitionDetailView.vue` 的 4 段「竞赛详情」+ 3 张卡片是**写死的中文文案且无条件 v-for 渲染**；真实官网/月份/攻略在它们下面，线上旧缓存时更像“只有套话” |
+
+**改动（`frontend/src/views/CompetitionDetailView.vue`）：**
+
+1. 删除 `sections` / `featureCards` / `cardTones` 三组静态数据及对应模板（不再有任何编造的“时间安排、参赛对象、内容范围、考试安排、作品提交要求”）。
+2. 新增数据驱动的「赛事档案」：官网（可点击 + 域名）、赛事级别、赛事类别、报名时间、比赛时间、赛事简介（`intro` + `summary` 去重）、涉及技术栈。字段为空时该块/该行自动隐藏（`hasArchive`）。
+3. 攻略渲染保持原逻辑（`full_process_guide` → marked + DOMPurify），为空时仍显示「✨ 生成 AI 攻略」按钮；不再被静态文案遮挡。
+4. 时间拼接、`resolveImage`、外链安全校验、轮询逻辑均未改动。
+
+**验证（headless Chrome + CDP，本地 `vite build` 产物 + 线上 API）：**
+
+- `/competition/10`：`hasGuide=true`、`hasArchive=true`、`hasBoilerplate=false`、console 0 error、`docScrollWidth==innerWidth`；
+- `/competition/1`：官网 `https://cy.ncss.cn/`、攻略正常；
+- `/competition/11`（无攻略）：只显示真实档案 + 诚实的空攻略状态，不再出现假文案。
+- 截图：`backend/workspace/detail10_after.png`、`detail10_mobile_after.png`；对比图 `detail10_before.png`。
+
+**部署（只改前端，后端不用重启）：**
+
+```powershell
+cd D:\agent-lab\KuAo-Platform\frontend
+npm.cmd run build
+tar -czf dist.tar.gz -C dist .
+scp .\dist.tar.gz kuao@112.126.90.252:/tmp/dist.tar.gz
+```
+
+```bash
+ssh kuao@112.126.90.252
+sudo -u kuao -H mkdir -p /opt/kuao/frontend/dist
+sudo -u kuao -H tar -xzf /tmp/dist.tar.gz -C /opt/kuao/frontend/dist
+sudo -u kuao -H chmod -R a+rX /opt/kuao/frontend/dist
+ls -l /opt/kuao/frontend/dist/index.html   # 应看到新的 index-*.js 哈希
+```
+
+浏览器验收务必 **Ctrl + F5 / Cmd + Shift + R 强刷**；若仍是旧页面，先 `curl -s http://112.126.90.252/ | grep assets` 确认引用的是新哈希。
 
 ### 测试库与产物（非源码）
 
