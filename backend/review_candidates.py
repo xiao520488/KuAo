@@ -5,6 +5,7 @@
   * `--list`            列出 pending 候选（ID / 名称 / 级别 / 来源）；
   * `--approve <id>`    候选 -> competitions（图片重新过 check_image 闸门），
                         同一事务内把候选标记 approved 并回填 competition_id；
+                        **随后自动抓赛氪详情 + AI 提纯三字段并写库**（失败只告警）；
   * `--reject <id>`     标记 rejected，不动主表。
 
 安全红线（CRAWLER_HANDOVER.md 第四/九节）：
@@ -25,6 +26,7 @@
     --db-path .\\competitions.db --allow-production
 """
 import argparse
+import json
 import re
 import sys
 import unicodedata
@@ -32,6 +34,7 @@ from datetime import datetime
 
 import db
 import discover_common as common
+import enrich_saikr_details as enrich
 from batch_update_competitions import check_image
 
 DEFAULT_DB_PATH = common.DEFAULT_DB_PATH
@@ -107,6 +110,60 @@ def verify_cover(candidate: dict):
     return None, "封面拒收：%s" % (reason or "未通过")
 
 
+def candidate_contest_id(candidate: dict):
+    """从 saikr 候选里取 contest_id；其它来源返回 None（由名称相似度兜底）。"""
+    if str(candidate.get("source") or "").strip() != "saikr":
+        return None
+    match = re.search(r"(\d+)\s*$", str(candidate.get("source_key") or ""))
+    if match:
+        return int(match.group(1))
+    raw = candidate.get("raw_json")
+    if raw:
+        try:
+            data = json.loads(raw) if isinstance(raw, str) else raw
+        except (TypeError, ValueError):
+            data = None
+        if isinstance(data, dict):
+            try:
+                contest_id = int(data.get("contest_id") or 0)
+            except (TypeError, ValueError):
+                contest_id = 0
+            if contest_id > 0:
+                return contest_id
+    return None
+
+
+def enrich_after_approve(args, candidate: dict, competition_id: int) -> dict:
+    """approve 后自动抓赛氪详情 + AI 提纯并写库。
+
+    失败只告警，不回滚已入库的赛事（详情属于增强数据，不是准入条件）。
+    """
+    if args.skip_enrich:
+        log("[补全] 已按 --skip-enrich 跳过详情抓取")
+        return {"status": "skipped"}
+    log("[补全] 抓取赛氪详情 + AI 提纯（可能需要 20~60 秒）…")
+    try:
+        result = enrich.enrich_competition(
+            args.db_path,
+            competition_id,
+            contest_id=candidate_contest_id(candidate),
+            allow_stale=False,
+        )
+    except (Exception, SystemExit) as exc:  # noqa: BLE001 - 增强失败不影响主流程
+        log("[补全] ⚠ 失败（赛事已入库，详情保持 NULL）：%s" % exc)
+        return {"status": "failed", "error": str(exc)}
+
+    status = result.get("status")
+    if status == "updated":
+        labels = [enrich.FIELD_LABELS[field] for field in result.get("written") or []]
+        log("[补全] 已写入：%s" % "、".join(labels))
+    else:
+        reason = result.get("reason") or ""
+        log("[补全] 跳过（%s%s），详情保持 NULL" % (
+            status, "：" + reason if reason else ""))
+    return result
+
+
 def require_production_permission(db_path: str, allow_production: bool) -> None:
     if common.is_production_db(db_path) and not allow_production:
         raise SystemExit("拒绝写生产库：必须同时传 --allow-production")
@@ -171,6 +228,8 @@ def cmd_approve(args) -> int:
     )
     log("[通过] 候选 %s -> competitions id=%s（sort_order=%s，首页不曝光）" % (
         args.approve, competition_id, DEFAULT_SORT_ORDER))
+    # 2.2：入库后立即补详情（抓赛氪 + AI 提纯），失败不回滚
+    enrich_after_approve(args, candidate, competition_id)
     return 0
 
 
@@ -207,6 +266,8 @@ def parse_args(argv=None):
                         help="目标库（默认 test_crawl.db）")
     parser.add_argument("--allow-production", action="store_true",
                         help="允许写生产库（写前自动备份）")
+    parser.add_argument("--skip-enrich", action="store_true",
+                        help="approve 后不抓取赛氪详情、不调模型（离线/应急）")
     parser.add_argument("--limit", type=int, default=100,
                         help="--list 最多显示条数（默认 100）")
     args = parser.parse_args(argv)

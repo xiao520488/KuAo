@@ -1,46 +1,54 @@
 # -*- coding: utf-8 -*-
-"""enrich_saikr_details.py —— 赛氪详情补充器（只补空字段，默认 dry-run）
+"""enrich_saikr_details.py —— 赛氪详情补充器（AI 提纯 + 存量回填 / 每日巡检）
 
 背景
 ----
 详情页的「参赛对象 / 内容范围 / 考试安排」三张卡片依赖
-`competitions.participants / content_scope / exam_schedule` 三列，
-但这两列此前没有数据。赛氪详情 API 的 `content`（HTML 正文通知）里
-包含「参赛对象 / 赛项设置 / 赛程安排」等章节，本脚本负责把它们清洗成
-纯文本并按赛事回填。
-
-合规与安全（与 CRAWLER_HANDOVER.md 第四/九节红线一致）
-------------------------------------------------------
-* 只处理生产库里已有的赛事（通过 `saikr_map.json` 的 contest_id 定点补全），
-  不遍历全站、不发现新赛事；
-* 请求间隔 3~5 秒（`--delay` 最低 3 秒），随机抖动；
-* 默认 dry-run，只抓取 + 抽取 + 写预览 JSON，不碰数据库；
-* `--apply` 才写库，且**只填 NULL/空串**，已有值一律保留；
-* 目标库若是生产库，必须 `--apply --allow-production`，写前自动备份；
-* 抽取不出来就保留 NULL，绝不编造。
+`competitions.participants / content_scope / exam_schedule` 三列。
+赛氪详情 API 的 `content`（HTML 正文通知）里有对应章节，但**原文不能直接入库**
+（版权风险），必须先交给 `llm.py` 用自己的话提炼成结构化短句，再写库。
 
 数据流
 ------
-    source-db（默认生产库，只读）  取 33 条赛事 id/name
-        -> saikr_map.json          映射 contest_id
-        -> 赛氪详情 API            GET .../contest/info?contest_id=xxx
-        -> HTML 章节解析           参赛对象 / 内容范围 / 考试安排
-        -> target-db（默认 test_crawl.db） 仅补空字段
+    目标库 competitions          取「三字段有空」的赛事（默认只读预览）
+        -> saikr_map.json        映射 contest_id；无映射按名称相似度兜底
+        -> 赛氪详情 API          GET .../contest/info?contest_id=xxx
+        -> HTML 章节解析         参赛对象 / 内容范围 / 考试安排（原始文本）
+        -> llm.py                **每个 contest_id 只调用一次**，三字段一起提纯
+        -> 目标库                仅补空字段；AI 失败或疑似照抄 -> 保留 NULL
+
+模式
+----
+    --backfill       存量：遍历所有三字段为空的赛事（不传模式时默认）
+    --daily-update   每日：只处理最近 7 天新入库（created_at）且字段为空的赛事
+
+合规与安全（与 CRAWLER_HANDOVER.md 第四/九节红线一致）
+------------------------------------------------------
+* 只处理库里已有的赛事，不遍历全站、不发现新赛事；
+* 请求间隔 3~5 秒（`--delay` 最低 3 秒），随机抖动；
+* 默认 dry-run，只抓取 + 抽取 + AI 提纯 + 写预览 JSON，不碰数据库；
+* `--apply` 才写库，且**只填 NULL/空串**，已有值一律保留；
+* `--apply` 必须走 AI 提纯；`--no-llm` 仅供 dry-run 调试抽取效果，禁止写库；
+* 目标库若是生产库，必须 `--apply --allow-production`，写前自动备份；
+* 抽不到 / AI 提炼失败 / 疑似整句照抄，一律保留 NULL，绝不写原文、绝不编造。
 
 用法
 ----
-    # 1. 预演（默认）：只抓取并生成预览，不写库
-    .\\venv\\Scripts\\python.exe enrich_saikr_details.py
+    # 1. 存量回填预演（默认）：只抓取 + AI 提纯 + 生成预览，不写库
+    .\\venv\\Scripts\\python.exe enrich_saikr_details.py --backfill
 
     # 2. 只验证 3~5 条
-    .\\venv\\Scripts\\python.exe enrich_saikr_details.py --ids 1,6,10,12
+    .\\venv\\Scripts\\python.exe enrich_saikr_details.py --backfill --ids 1,6,10,12
 
     # 3. 写测试库
-    .\\venv\\Scripts\\python.exe enrich_saikr_details.py --apply
+    .\\venv\\Scripts\\python.exe enrich_saikr_details.py --backfill --apply
 
-    # 4. 写生产库（必须先看过预览）
-    .\\venv\\Scripts\\python.exe enrich_saikr_details.py --apply --allow-production \\
-        --db-path .\\competitions.db --source-db .\\competitions.db
+    # 4. 每日巡检：只补最近 7 天新入库且字段为空的比赛
+    .\\venv\\Scripts\\python.exe enrich_saikr_details.py --daily-update --apply
+
+    # 5. 写生产库（必须先看过预览）
+    .\\venv\\Scripts\\python.exe enrich_saikr_details.py --backfill --apply \\
+        --allow-production --db-path .\\competitions.db
 """
 import argparse
 import difflib
@@ -57,6 +65,7 @@ from bs4 import BeautifulSoup
 
 import db
 import discover_common as common
+import llm
 
 SAIKR_DETAIL = "https://apiv4buffer.saikr.com/api/pc/contest/info"
 MAP_PATH = os.path.join(common.BASE_DIR, "saikr_map.json")
@@ -75,6 +84,14 @@ MIN_BODY_LEN = 16         # 章节正文过短视为没抽到，保留 NULL
 MIN_NAME_RATIO = 0.93     # 名称兜底匹配阈值
 SHANGHAI = timezone(timedelta(hours=8))
 STALE_DAYS = 400          # 报名结束超过 400 天视为往年届次，整条跳过（沿用既有护栏）
+DAILY_WINDOW_DAYS = 7     # --daily-update 只处理最近 N 天新入库的赛事
+
+# AI 提纯（防版权）：每个 contest_id 只调用一次，三字段一起改写
+AI_PROMPT_VER = "saikr-enrich-v1"
+AI_MAX_TOKENS = 2000
+AI_ITEM_MAX_CHARS = 50    # 单条短句上限（不含「1. 」编号）
+AI_MAX_ITEMS = 8          # 单字段最多保留条目，避免列表失控
+AI_COPY_WINDOW = 40       # 与原文连续重合 >= 40 字视为照抄，整字段丢弃（短专有名词列表不算）
 
 # 章节关键词：同字段内按优先级排列，越靠前越可信
 _FIELD_RULES = (
@@ -478,7 +495,206 @@ def extract_fields(detail: dict) -> dict:
 
 
 # ============================================================
-# 三、赛事映射与目标库
+# 三、AI 提纯（防版权：原文不写库，只写模型改写后的短句）
+# ============================================================
+
+AI_PURIFY_SYSTEM = (
+    "你是严谨的赛事信息编辑。把用户给出的原始通知文本改写成简明的事实条目，"
+    "必须用自己的话概括，不得整句照抄，不得添加原文没有的信息。只输出 JSON。"
+)
+
+AI_PURIFY_SCHEMA_HINT = (
+    '{"participants": "1. ...\\n2. ...", "content_scope": "1. ...", '
+    '"exam_schedule": "1. ..."}'
+)
+
+_RE_PURIFY_ITEM = re.compile(
+    r"^\s*(?:\d{1,2}\s*[.、．)）]|[（(]\s*\d{1,2}\s*[）)]|[-*•·])\s*"
+)
+_RE_PURIFY_LABEL = re.compile(
+    r"^(?:参赛对象|内容范围|考试安排|参赛资格|竞赛内容|赛程安排|赛事安排)\s*[：:]\s*"
+)
+_RE_PURIFY_SPLIT = re.compile(r"[；;]\s*(?=\d{1,2}\s*[.、．)）])")
+_RE_PURIFY_INLINE = re.compile(r"(?<=\S)\s+(?=\d{1,2}\s*[.、．)）])")
+
+
+def _cap_item(text: str, limit: int = AI_ITEM_MAX_CHARS) -> str:
+    """把单条短句压到 limit 字以内（优先在标点处截断）。"""
+    text = _clean_inline(text).strip(" \t，、；,;。")
+    if len(text) <= limit:
+        return text
+    head = text[:limit]
+    cut = max(head.rfind("。"), head.rfind("；"), head.rfind("，"),
+              head.rfind("、"), head.rfind(" "))
+    if cut >= int(limit * 0.6):
+        head = head[:cut]
+    head = head.rstrip(" \t，、；,;。")
+    if len(head) >= limit:
+        head = head[:limit - 1].rstrip(" \t，、；,;。")
+    return head + "…"
+
+
+def _normalize_purified(value) -> str:
+    """模型输出 -> 「1. 短句」列表；每条 <=50 字、最多 8 条、去重。"""
+    if value is None:
+        return ""
+    if isinstance(value, (list, tuple)):
+        chunks = []
+        for item in value:
+            if isinstance(item, dict):
+                item = item.get("text") or item.get("content") or ""
+            chunks.append(str(item))
+        text = "\n".join(chunks)
+    elif isinstance(value, dict):
+        text = str(value.get("text") or value.get("content") or "")
+    else:
+        text = str(value)
+
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    text = re.sub(r"```[a-zA-Z]*", "", text).replace("```", "")
+    text = _RE_PURIFY_SPLIT.sub("\n", text)
+    text = _RE_PURIFY_INLINE.sub("\n", text)
+
+    items = []
+    for raw_line in text.split("\n"):
+        line = raw_line.strip()
+        if not line:
+            continue
+        line = _RE_PURIFY_LABEL.sub("", line).strip()
+        line = _RE_PURIFY_ITEM.sub("", line).strip()
+        if not line:
+            continue
+        # 仍超长的行按分号拆成多条，避免一条塞进整段
+        parts = [line]
+        if len(line) > AI_ITEM_MAX_CHARS:
+            parts = [part.strip() for part in re.split(r"[；;]", line) if part.strip()]
+        for part in parts:
+            part = _cap_item(part)
+            if part and part not in items:
+                items.append(part)
+        if len(items) >= AI_MAX_ITEMS:
+            break
+    items = items[:AI_MAX_ITEMS]
+    # 前端卡片是 <p> 纯文本，用分号连接可在不依赖 CSS 的情况下保持「1. …；2. …」结构
+    return "；".join("%d. %s" % (index, item)
+                    for index, item in enumerate(items, 1))
+
+
+def _looks_copied(purified: str, raw: str) -> str:
+    """检测与原文的连续重合片段（>= AI_COPY_WINDOW 字），返回重合串或空。"""
+    def _flat(text: str) -> str:
+        text = re.sub(r"(?:^|[；;\n])\s*\d{1,2}\s*[.、．)）]\s*",
+                      "", str(text or ""))
+        return re.sub(r"\s+", "", text)
+
+    left, right = _flat(purified), _flat(raw)
+    if len(left) < AI_COPY_WINDOW or len(right) < AI_COPY_WINDOW:
+        return ""
+    for index in range(len(left) - AI_COPY_WINDOW + 1):
+        piece = left[index:index + AI_COPY_WINDOW]
+        if piece in right:
+            return piece
+    return ""
+
+
+def build_purify_prompt(name: str, raw_fields: dict) -> str:
+    """把待提纯的原始章节拼成一次 LLM 调用的 Prompt（三字段共用一次调用）。"""
+    parts = [
+        "请把下面赛事的原始通知文本改写成可直接展示的结构化短句。",
+        "",
+        "赛事名称：%s" % (name or "（未提供）"),
+        "",
+        "字段说明：",
+        "- participants（参赛对象）：谁可以参赛（身份、学历、年龄、团队人数等）",
+        "- content_scope（内容范围）：比赛内容、赛项、赛道、主题、作品类型",
+        "- exam_schedule（考试安排）：赛程阶段与时间节点（报名、初赛、复赛、决赛、提交截止等）",
+        "",
+        "硬性要求：",
+        "1. 必须用自己的话概括，禁止整句照抄；除赛事/赛项等专有名词外，连续引用不超过 12 个字。",
+        "2. 每个字段输出 1~%d 条，每条一行，用「1. 」「2. 」编号。" % AI_MAX_ITEMS,
+        "3. 每条不超过 %d 个汉字；只写原文有的事实，原文没有的日期/人数不要猜测。" % AI_ITEM_MAX_CHARS,
+        "4. 某个字段没有对应信息就返回空字符串，不要编造。",
+        "5. 不要输出 Markdown、标题或解释。",
+        "",
+        "原始文本：",
+    ]
+    for field in DETAIL_FIELDS:
+        item = raw_fields.get(field)
+        if not item:
+            continue
+        text = item.get("text") if isinstance(item, dict) else item
+        text = _clean_inline(text)
+        if not text:
+            continue
+        parts.append("【%s】" % FIELD_LABELS[field])
+        parts.append(text)
+        parts.append("")
+    return "\n".join(parts)
+
+
+def _pick_ai_value(data: dict, field: str):
+    """兼容模型用中文字段名或包一层 fields 的输出。"""
+    for key in (field, FIELD_LABELS[field]):
+        if key in data:
+            return data[key]
+    return None
+
+
+def purify_fields(name: str, raw_fields: dict,
+                  *, max_chars: int = MAX_FIELD_LEN) -> dict:
+    """调用一次 llm.py，把原始章节提炼为结构化短句。
+
+    返回 {field: {"text", "source", "raw_chars"}}；LLM 失败时抛 llm.LLMError，
+    调用方必须保留 NULL，**绝不能回落写原文**。
+    """
+    needed = {}
+    for field in DETAIL_FIELDS:
+        item = raw_fields.get(field)
+        if not item:
+            continue
+        text = _clean_inline(item.get("text") if isinstance(item, dict) else item)
+        if len(text) < MIN_BODY_LEN:
+            continue
+        source = item.get("source") if isinstance(item, dict) else ""
+        needed[field] = {"text": text, "source": source or "赛氪详情"}
+    if not needed:
+        return {}
+
+    data = llm.chat_json(
+        build_purify_prompt(name, needed),
+        system=AI_PURIFY_SYSTEM,
+        schema_hint=AI_PURIFY_SCHEMA_HINT,
+        temperature=0.2,
+        max_tokens=AI_MAX_TOKENS,
+        retries=1,
+    )
+    if not isinstance(data, dict):
+        raise llm.LLMError("AI 提纯返回的不是 JSON 对象：%r" % type(data).__name__)
+    if isinstance(data.get("fields"), dict):
+        data = data["fields"]
+
+    result = {}
+    for field in DETAIL_FIELDS:
+        if field not in needed:
+            continue
+        text = _normalize_purified(_pick_ai_value(data, field))
+        if not text:
+            continue
+        overlap = _looks_copied(text, needed[field]["text"])
+        if overlap:
+            log("[AI] 丢弃疑似照抄字段 %s（连续重合 %d 字：%s…）"
+                % (FIELD_LABELS[field], len(overlap), overlap[:12]))
+            continue
+        result[field] = {
+            "text": _truncate(text, max_chars),
+            "source": "AI提纯：%s｜%s" % (needed[field]["source"], AI_PROMPT_VER),
+            "raw_chars": len(needed[field]["text"]),
+        }
+    return result
+
+
+# ============================================================
+# 四、赛事映射与目标库
 # ============================================================
 
 def load_map() -> dict:
@@ -509,16 +725,8 @@ def _read_rows(db_path: str, sql: str) -> list:
         conn.close()
 
 
-def load_source_competitions(db_path: str) -> list:
-    if not os.path.exists(db_path):
-        raise SystemExit("源库不存在：%s" % db_path)
-    rows = _read_rows(db_path, "SELECT id, name FROM competitions ORDER BY id")
-    if not rows:
-        raise SystemExit("源库里没有 competitions 数据：%s" % db_path)
-    return rows
-
-
 def load_target_competitions(db_path: str) -> dict:
+    """读取目标库赛事清单（含 created_at，供 --daily-update 判断新入库）。"""
     if not os.path.exists(db_path):
         raise SystemExit("目标库不存在：%s" % db_path)
     columns = [r["name"] for r in _read_rows(
@@ -531,7 +739,7 @@ def load_target_competitions(db_path: str) -> dict:
         )
     rows = _read_rows(
         db_path,
-        "SELECT id, name, participants, content_scope, exam_schedule "
+        "SELECT id, name, created_at, participants, content_scope, exam_schedule "
         "FROM competitions ORDER BY id",
     )
     return {int(row["id"]): row for row in rows}
@@ -541,75 +749,125 @@ def _norm_name(name: str) -> str:
     return db.normalize_competition_name(name or "")
 
 
-def resolve_targets(source_rows: list, target_rows: dict,
-                    mapping: dict) -> tuple:
-    """为每条源赛事确定 (target_row, contest_id, 匹配方式)。
+def _parse_created_at(value):
+    """解析 SQLite 的 created_at（本地时间，无时区）为东八区 datetime。"""
+    text = str(value or "").strip()
+    if not text:
+        return None
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(text[:19], fmt).replace(tzinfo=SHANGHAI)
+        except ValueError:
+            continue
+    return None
 
-    优先用 saikr_map 的 competition_id；没有映射时按名称相似度兜底。
-    返回 (targets, no_mapping)；targets 元素为 dict。
-    """
+
+def _build_by_name(mapping: dict) -> list:
+    """saikr_map -> [(归一化赛氪名, contest_id)]，供名称相似度兜底。"""
     by_name = []
     for item in mapping.values():
         cid = item.get("saikr_contest_id")
         name = _norm_name(item.get("saikr_name") or "")
         if cid and name:
-            by_name.append((name, int(cid), item))
+            by_name.append((name, int(cid)))
+    return by_name
 
+
+def resolve_contest_id(row: dict, mapping: dict, by_name: list) -> tuple:
+    """返回 (contest_id, 匹配方式)；无法定位返回 (None, "")。"""
+    comp_id = int(row["id"])
+    item = mapping.get(comp_id)
+    contest_id = item.get("saikr_contest_id") if item else None
+    match = "saikr_map(%s)" % (item.get("match_type") or "?") if item else ""
+    if contest_id:
+        return int(contest_id), match
+
+    norm = _norm_name(row.get("name") or "")
+    scored = sorted(
+        ((difflib.SequenceMatcher(None, norm, name).ratio(), cid)
+         for name, cid in by_name if name),
+        reverse=True,
+    )
+    if scored and scored[0][0] >= MIN_NAME_RATIO \
+            and (len(scored) == 1 or scored[0][0] - scored[1][0] >= 0.03):
+        return int(scored[0][1]), "名称匹配(%.2f)" % scored[0][0]
+    return None, ""
+
+
+def select_targets(target_rows: dict, mapping: dict, *,
+                   mode: str = "backfill", ids=None,
+                   days: int = DAILY_WINDOW_DAYS, now=None) -> dict:
+    """按模式挑出待补赛事。
+
+    backfill       := 所有三字段有空值的赛事；
+    daily          := 其中 created_at 在最近 days 天内的（新入库）；
+    ids            := 只处理指定 id（仍受 mode / 空字段约束）。
+    """
+    ids = set(ids or ())
+    by_name = _build_by_name(mapping)
+    now = now or datetime.now(SHANGHAI)
+    cutoff = now - timedelta(days=days)
     targets, no_mapping = [], []
-    for source in source_rows:
-        comp_id = int(source["id"])
-        target = target_rows.get(comp_id)
-        if target is None:
-            # 目标库 id 不一致时按名称兜底定位
-            norm = _norm_name(source["name"])
-            for row in target_rows.values():
-                if _norm_name(row["name"]) == norm:
-                    target = row
-                    break
-        if target is None:
-            no_mapping.append((comp_id, source["name"], "目标库无对应赛事"))
-            continue
+    complete = outside_window = 0
 
-        item = mapping.get(comp_id)
-        contest_id = item.get("saikr_contest_id") if item else None
-        match = "saikr_map(%s)" % (item.get("match_type") or "?") if item else ""
+    for row in target_rows.values():
+        comp_id = int(row["id"])
+        if ids and comp_id not in ids:
+            continue
+        missing = [field for field in DETAIL_FIELDS
+                   if not str(row.get(field) or "").strip()]
+        if not missing:
+            complete += 1
+            continue
+        if mode == "daily":
+            created = _parse_created_at(row.get("created_at"))
+            if created is None or created < cutoff:
+                outside_window += 1
+                continue
+        contest_id, match = resolve_contest_id(row, mapping, by_name)
         if not contest_id:
-            norm = _norm_name(source["name"])
-            scored = sorted(
-                ((difflib.SequenceMatcher(None, norm, name).ratio(), cid)
-                 for name, cid, _ in by_name if name),
-                reverse=True,
-            )
-            if scored and scored[0][0] >= MIN_NAME_RATIO \
-                    and (len(scored) == 1 or scored[0][0] - scored[1][0] >= 0.03):
-                contest_id = scored[0][1]
-                match = "名称匹配(%.2f)" % scored[0][0]
-        if not contest_id:
-            no_mapping.append((comp_id, source["name"], "无赛氪 contest_id"))
+            no_mapping.append((comp_id, row.get("name") or "", "无赛氪 contest_id"))
             continue
         targets.append({
             "competition_id": comp_id,
-            "target_id": int(target["id"]),
-            "name": source["name"],
-            "target": target,
+            "target_id": comp_id,
+            "name": row.get("name") or "",
+            "target": row,
             "contest_id": int(contest_id),
             "match": match,
+            "missing_fields": missing,
         })
-    return targets, no_mapping
+
+    return {
+        "targets": targets,
+        "no_mapping": no_mapping,
+        "complete": complete,
+        "outside_window": outside_window,
+    }
 
 
 # ============================================================
-# 四、主流程
+# 五、主流程
 # ============================================================
 
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(
-        description="赛氪详情补充器：只补 participants/content_scope/exam_schedule 空字段（默认 dry-run）"
+        description="赛氪详情补充器：抓取 + AI 提纯 participants/content_scope/"
+                    "exam_schedule，只补空字段（默认 dry-run）"
     )
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--backfill", dest="mode", action="store_const",
+                      const="backfill",
+                      help="存量模式：遍历所有三字段为空的赛事（默认）")
+    mode.add_argument("--daily-update", dest="mode", action="store_const",
+                      const="daily",
+                      help="每日模式：只处理最近 --days 天新入库且字段为空的赛事")
+    parser.set_defaults(mode="backfill")
+
     parser.add_argument("--db-path", default=common.DEFAULT_DB_PATH,
                         help="目标库（默认 test_crawl.db）")
-    parser.add_argument("--source-db", default=common.PRODUCTION_DB_PATH,
-                        help="赛事清单来源库（默认生产库 competitions.db，只读）")
+    parser.add_argument("--source-db", default=None,
+                        help="[已弃用] 兼容旧命令；清单改为直接读 --db-path")
     parser.add_argument("--apply", action="store_true", help="真正写目标库")
     parser.add_argument("--allow-production", action="store_true",
                         help="允许写生产库（必须与 --apply 同用，且会先备份）")
@@ -617,6 +875,9 @@ def parse_args(argv=None):
                         help="只处理指定赛事 id，逗号分隔，例如 1,6,10")
     parser.add_argument("--limit", type=int, default=0,
                         help="最多处理多少条（0=不限）")
+    parser.add_argument("--days", type=int, default=DAILY_WINDOW_DAYS,
+                        help="--daily-update 的新入库窗口天数（默认 %d）"
+                             % DAILY_WINDOW_DAYS)
     parser.add_argument("--delay", default="3,5",
                         help="赛氪请求间隔秒，默认 3,5（最低 3 秒）")
     parser.add_argument("--max-chars", type=int, default=MAX_FIELD_LEN,
@@ -625,6 +886,8 @@ def parse_args(argv=None):
                         help="预览 JSON 文件名（写入 workspace/）")
     parser.add_argument("--allow-stale", action="store_true",
                         help="允许写入往年届次页面（默认沿用 400 天护栏跳过）")
+    parser.add_argument("--no-llm", action="store_true",
+                        help="只用规则抽取、不调模型（仅限 dry-run；禁止与 --apply 同用）")
     return parser.parse_args(argv)
 
 
@@ -642,6 +905,81 @@ def _parse_ids(raw: str) -> set:
     return result
 
 
+def enrich_competition(target_db: str, competition_id: int, *,
+                       contest_id=None, allow_stale: bool = False,
+                       max_chars=None, session=None, mapping=None,
+                       now=None) -> dict:
+    """抓取 + AI 提纯 + 写库，供 CLI 与 review_candidates.approve 复用。
+
+    调用方负责：生产库备份、生产库权限校验、异常兜底。
+    返回 status：updated / complete / no_mapping / stale / no_fields / ai_empty / exists。
+    """
+    target_db = os.path.abspath(target_db)
+    rows = load_target_competitions(target_db)
+    row = rows.get(int(competition_id))
+    if row is None:
+        raise ValueError("目标库没有该赛事：id=%s" % competition_id)
+
+    missing = [field for field in DETAIL_FIELDS
+               if not str(row.get(field) or "").strip()]
+    if not missing:
+        return {"status": "complete", "competition_id": int(competition_id)}
+
+    if contest_id is None:
+        mapping = mapping if mapping is not None else load_map()
+        contest_id, match = resolve_contest_id(row, mapping, _build_by_name(mapping))
+    else:
+        contest_id, match = int(contest_id), "candidate"
+    if not contest_id:
+        return {"status": "no_mapping", "competition_id": int(competition_id),
+                "reason": "无赛氪 contest_id"}
+
+    owns_session = session is None
+    session = session or _session()
+    try:
+        detail = fetch_detail(session, contest_id)
+    finally:
+        if owns_session:
+            try:
+                session.close()
+            except Exception:  # noqa: BLE001 - 关闭失败不影响结果
+                pass
+
+    now = now or datetime.now(SHANGHAI)
+    stale = stale_reason(detail, now)
+    if stale and not allow_stale:
+        return {"status": "stale", "competition_id": int(competition_id),
+                "contest_id": contest_id, "reason": stale}
+
+    raw = extract_fields(detail)
+    needed = {field: raw[field] for field in DETAIL_FIELDS
+              if field in missing and field in raw}
+    if not needed:
+        return {"status": "no_fields", "competition_id": int(competition_id),
+                "contest_id": contest_id, "reason": "页面无可用章节"}
+
+    purified = purify_fields(row.get("name") or "", needed,
+                             max_chars=max_chars or MAX_FIELD_LEN)
+    if not purified:
+        return {"status": "ai_empty", "competition_id": int(competition_id),
+                "contest_id": contest_id, "reason": "AI 未产出可用短句"}
+
+    written = db.fill_competition_detail_text(
+        int(competition_id),
+        only_empty=True,
+        db_path=target_db,
+        **{field: value["text"] for field, value in purified.items()},
+    )
+    return {
+        "status": "updated" if written else "exists",
+        "competition_id": int(competition_id),
+        "contest_id": contest_id,
+        "match": match,
+        "written": sorted(written),
+        "fields": purified,
+    }
+
+
 def main(argv=None) -> int:
     _setup_console()
     global MAX_FIELD_LEN
@@ -655,41 +993,36 @@ def main(argv=None) -> int:
         raise SystemExit("赛氪请求间隔不得低于 3 秒（默认 3,5）")
     if args.max_chars < 100:
         raise SystemExit("--max-chars 至少 100")
+    if args.days < 1:
+        raise SystemExit("--days 必须大于 0")
+    if args.apply and args.no_llm:
+        raise SystemExit("--no-llm 禁止与 --apply 同用：入库必须走 AI 提纯")
     MAX_FIELD_LEN = args.max_chars
 
     target_db = os.path.abspath(args.db_path)
-    source_db = os.path.abspath(args.source_db)
     if args.apply and common.is_production_db(target_db) \
             and not args.allow_production:
         raise SystemExit("拒绝写生产库：必须同时传 --allow-production")
+    if args.source_db:
+        log("[提示] --source-db 已弃用；赛事清单改为直接读目标库")
 
     ids = _parse_ids(args.ids)
     mapping = load_map()
-    source_rows = load_source_competitions(source_db)
     target_rows = load_target_competitions(target_db)
-
-    targets, no_mapping = resolve_targets(source_rows, target_rows, mapping)
-    if ids:
-        targets = [t for t in targets if t["competition_id"] in ids]
-
-    # 只处理「至少一个字段为空」的赛事；已补全的跳过，便于断点续跑
-    pending, complete = [], []
-    for target in targets:
-        row = target["target"]
-        missing = [field for field in DETAIL_FIELDS
-                   if not str(row.get(field) or "").strip()]
-        if not missing:
-            complete.append(target)
-            continue
-        target["missing_fields"] = missing
-        pending.append(target)
+    selection = select_targets(
+        target_rows, mapping, mode=args.mode, ids=ids, days=args.days,
+    )
+    pending = selection["targets"]
     if args.limit > 0:
         pending = pending[:args.limit]
 
+    mode_label = ("backfill（存量）" if args.mode == "backfill"
+                  else "daily-update（最近 %d 天新入库）" % args.days)
+    log("[模式] %s%s" % (mode_label, "｜dry-run" if not args.apply else "｜apply"))
     log("[目标库] %s" % target_db)
-    log("[源库]   %s（只读）" % source_db)
-    log("[映射] 源库 %d 条 / 可定位 %d 条 / 无映射 %d 条 / 已补全跳过 %d 条"
-        % (len(source_rows), len(targets), len(no_mapping), len(complete)))
+    log("[映射] 目标库 %d 条 / 可定位 %d 条 / 无映射 %d 条 / 已补全 %d 条 / 窗口外 %d 条"
+        % (len(target_rows), len(pending), len(selection["no_mapping"]),
+           selection["complete"], selection["outside_window"]))
     log("[计划] 本次处理 %d 条赛事（只写空字段）" % len(pending))
 
     # 同一 contest_id 只请求一次，父/子赛事复用同一份详情
@@ -721,23 +1054,63 @@ def main(argv=None) -> int:
             log("[限速] 等待 %.1f 秒" % wait)
             time.sleep(wait)
 
-    preview, stats = [], {
+    # AI 提纯：每个 contest_id 一次；失败/照抄一律保留 NULL，绝不写原文
+    purified = {}
+    ai_calls = ai_failed = 0
+    usage_before = llm.get_usage()
+    if args.no_llm:
+        log("[AI] --no-llm：跳过提纯，仅预览规则抽取结果（不会写库）")
+    else:
+        for contest_id in sorted(by_contest):
+            fields = extracted.get(contest_id) or {}
+            wanted = set()
+            for target in by_contest[contest_id]:
+                wanted.update(target["missing_fields"])
+            needed = {field: fields[field] for field in DETAIL_FIELDS
+                      if field in wanted and field in fields}
+            if not needed:
+                continue
+            name = by_contest[contest_id][0]["name"]
+            try:
+                result = purify_fields(name, needed, max_chars=MAX_FIELD_LEN)
+                purified[contest_id] = result
+                ai_calls += 1
+                log("[AI] contest_id=%s -> 提纯 %d/%d 字段%s"
+                    % (contest_id, len(result), len(needed),
+                       "" if result else "（⚠ 无可用短句，保留 NULL）"))
+            except Exception as exc:  # noqa: BLE001 - 单条 AI 失败不阻断批量
+                ai_failed += 1
+                purified[contest_id] = {}
+                log("[AI] ✗ contest_id=%s：%s（保留 NULL，不写原文）"
+                    % (contest_id, exc))
+    usage_after = llm.get_usage()
+    ai_tokens = usage_after.get("total_tokens", 0) - usage_before.get("total_tokens", 0)
+
+    stats = {
+        "mode": args.mode,
+        "days": args.days,
         "considered": len(pending),
         "fetch_ok": fetch_ok,
         "fetch_failed": fetch_failed,
         "stale_skipped": 0,
+        "ai_calls": ai_calls,
+        "ai_failed": ai_failed,
+        "ai_tokens": ai_tokens,
+        "ai_fields": sum(len(value) for value in purified.values()),
         "updated_competitions": 0,
         "field_written": {field: 0 for field in DETAIL_FIELDS},
         "field_extracted": {field: 0 for field in DETAIL_FIELDS},
     }
 
     # 写库前统一备份（测试库也备份，成本可忽略；生产库另有 --allow-production 闸门）
-    if args.apply:
+    if args.apply and pending:
         log("[备份] %s" % common.backup_db(target_db))
 
+    preview = []
     for target in pending:
         contest_id = target["contest_id"]
-        fields = extracted.get(contest_id) or {}
+        raw_fields = extracted.get(contest_id) or {}
+        ai_fields = purified.get(contest_id) or {}
         stale = stale_map.get(contest_id) or ""
         entry = {
             "competition_id": target["competition_id"],
@@ -746,6 +1119,7 @@ def main(argv=None) -> int:
             "match": target["match"],
             "missing_fields": target["missing_fields"],
             "stale": stale,
+            "ai": "skipped" if args.no_llm else "purified",
             "fields": {},
         }
         if stale and not args.allow_stale:
@@ -753,27 +1127,32 @@ def main(argv=None) -> int:
             stats["stale_skipped"] += 1
             preview.append(entry)
             continue
-        for field in DETAIL_FIELDS:
-            value = fields.get(field)
-            if value:
+
+        payload = {}
+        for field in target["missing_fields"]:
+            raw_value = raw_fields.get(field)
+            if raw_value:
                 stats["field_extracted"][field] += 1
-            if field not in target["missing_fields"] or not value:
+            value = raw_value if args.no_llm else ai_fields.get(field)
+            if not value:
                 continue
+            payload[field] = value["text"]
             entry["fields"][field] = {
-                "source": value["source"],
+                "source": value.get("source") or "",
                 "length": len(value["text"]),
                 "text": value["text"],
+                "raw_chars": value.get("raw_chars"),
             }
-            if args.apply:
-                written = db.fill_competition_detail_text(
-                    target["target_id"],
-                    **{field: value["text"]},
-                    only_empty=True,
-                    db_path=target_db,
-                )
-                if field in written:
-                    stats["field_written"][field] += 1
-                    entry["fields"][field]["written"] = True
+        if args.apply and payload:
+            written = db.fill_competition_detail_text(
+                target["target_id"],
+                only_empty=True,
+                db_path=target_db,
+                **payload,
+            )
+            for field in written:
+                stats["field_written"][field] += 1
+                entry["fields"][field]["written"] = True
         if entry["fields"] and any(
                 info.get("written") for info in entry["fields"].values()):
             stats["updated_competitions"] += 1
@@ -781,13 +1160,14 @@ def main(argv=None) -> int:
 
     payload = {
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
-        "mode": "apply" if args.apply else "dry-run",
+        "mode": args.mode,
+        "apply": bool(args.apply),
+        "ai_prompt_ver": AI_PROMPT_VER,
         "target_db": target_db,
-        "source_db": source_db,
         "stats": stats,
         "no_mapping": [
             {"competition_id": comp_id, "name": name, "reason": reason}
-            for comp_id, name, reason in no_mapping
+            for comp_id, name, reason in selection["no_mapping"]
         ],
         "items": preview,
     }
@@ -799,6 +1179,9 @@ def main(argv=None) -> int:
     log("[抽取] " + " / ".join(
         "%s %d 条" % (FIELD_LABELS[field], stats["field_extracted"][field])
         for field in DETAIL_FIELDS))
+    log("[AI] 调用 %d 次 / 产出 %d 个字段 / 失败 %d 次 / tokens %d"
+        % (stats["ai_calls"], stats["ai_fields"], stats["ai_failed"],
+           stats["ai_tokens"]))
     if args.apply:
         log("[写入] 更新比赛 %d 条｜" % stats["updated_competitions"] + " / ".join(
             "%s %d 个" % (FIELD_LABELS[field], stats["field_written"][field])
@@ -808,13 +1191,16 @@ def main(argv=None) -> int:
     if stats["stale_skipped"]:
         log("[跳过] 往年届次 %d 条（可用 --allow-stale 强制写入）"
             % stats["stale_skipped"])
-    if no_mapping:
+    if args.mode == "daily" and selection["outside_window"]:
+        log("[窗口] 入库超过 %d 天的 %d 条未处理（--backfill 可全量）"
+            % (args.days, selection["outside_window"]))
+    if selection["no_mapping"]:
         log("[无映射] %d 条：%s" % (
-            len(no_mapping),
+            len(selection["no_mapping"]),
             "、".join("%s(%s)" % (name[:18], reason)
-                     for _, name, reason in no_mapping[:6]),
+                     for _, name, reason in selection["no_mapping"][:6]),
         ))
-    return 0 if not fetch_failed else 1
+    return 0 if not fetch_failed and not ai_failed else 1
 
 
 if __name__ == "__main__":

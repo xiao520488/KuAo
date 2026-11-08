@@ -1,27 +1,23 @@
 # CRAWLER_HANDOVER.md
 
 > 交接范围：`backend/` 下高校新闻获奖采集、赛事基础数据采集、**生产库赛事批量补全**、**赛氪网数据源预检**、**候选表与审核 CLI**、**AI 攻略/灵感生成链路**、**云端定时任务链**、测试库联调与数据库迁移。
-> 生成时间：2026-11-07（Asia/Shanghai）｜最后更新：2026-11-08 19:35（交接：当前 TODO 切换为赛氪详情补充器）
+> 生成时间：2026-11-07（Asia/Shanghai）｜最后更新：2026-11-08 20:05（交接：赛氪详情补充器 AI 提纯 + 双模式 + 审核联动已完成）
 > 原则：后续接手请先读本文件，再按需读代码。
 
 ---
 
 ## 零、接手必读（30 秒版）
 
-**当前阶段：爬虫闭环 + AI 内容生成闭环已完成；2026-11-08 已完成阿里云部署（原地升级 `/root/KuAo` + systemd + crontab，见 12.5），下一步 = 开发赛氪详情补充器（`enrich_saikr_details.py`）+ 80 条候选审核 + 新闻 `LIST_URL` 确定后补挂 cron。**
+**当前阶段：爬虫闭环 + AI 内容生成闭环已完成；赛氪详情补充器已完成 AI 提纯 + `--backfill`/`--daily-update` 双模式 + 审核联动（本地测试库验证通过）。下一步 = 生产库迁移/回填/上云同步 + 80 条候选审核 + 新闻 `LIST_URL` 确定后补挂 cron。**
 
-**详情页卡片版已构建完成；云端前端发布目录问题已定位（实际 root = `/var/www/html`），下一步核心任务见下方【当前紧急 TODO】。**
+**详情页卡片版已构建完成；云端前端发布目录问题已定位（实际 root = `/var/www/html`），下一步核心任务见下方【当前任务】。**
 
-> **【当前紧急 TODO｜2026-11-08 19:35】开发赛氪详情补充器（`enrich_saikr_details.py`）**
+> **【当前任务｜2026-11-08 20:05】赛氪详情补充器已完成代码重构，等待生产库同步**
 >
-> **核心任务：** 新建 `backend/enrich_saikr_details.py`，利用赛氪详情 API 补全现有比赛的 `participants`、`content_scope`、`exam_schedule` 字段。
+> **已完成：** `enrich_saikr_details.py` 支持 `--backfill` / `--daily-update`；抓取后必须先调一次 `llm.chat_json` 提炼为「1. 短句」列表（每条 ≤50 字），AI 失败/疑似照抄保留 NULL；`review_candidates.py --approve` 成功后自动补详情。
 >
-> - 默认 dry-run；只补 NULL，不覆盖已有值；生产库必须 `--allow-production`，写前自动备份（复用 `discover_common.py` / `backup_db.py` 的库保护逻辑）。
-> - 先确认三列是否已存在（`db.py` / `schema_v2.sql` / `models/schemas.py`）；缺失则先补迁移与 API 模型，否则写入会直接报错。
-> - 赛氪详情 API：`GET https://apiv4buffer.saikr.com/api/pc/contest/info?contest_id=<id>`；沿用 `saikr_map.json` 映射，3–5 秒限速。
-> - 先用 3–5 条赛事验证字段映射，再批量；无法映射时保留 NULL，不编造。
->
-> **已完成（2026-11-08 20:00，仅本地 `test_crawl.db`，未上云）**：`competitions` 新增 `participants` / `content_scope` / `exam_schedule` 三列（`db._MIGRATION_COLUMNS` + `schema_v2.sql` + `migrate_production.py` 目标列 + 详情 API 模型）；新建 `enrich_saikr_details.py`，实跑补全 **23 条 / 58 个字段**（参赛对象 21 / 内容范围 20 / 考试安排 17）；往年届次跳过 5 条、无映射 3 条。生产库**未迁移、未写入**，等数据质量验收；**尚未引入大模型防侵权改写，也未接入自动化流水线**。详见 12.6。
+> **下一步（按顺序）：** 本地生产库 `migrate_production.py --apply` 加三列 → `enrich_saikr_details.py --backfill --apply --allow-production` 回填 33 条 → `backup_db.py` 快照 → 停云端 `kuao-backend` → 覆盖云端库 → 校验/重启。生产库**仍未迁移、未写入**。
+
 >
 > ~~**已解决（2026-11-08 19:10）：云端 Nginx 目录问题**：线上旧版根因是前端发布目录错误——实际 root 是 `/var/www/html`，上传到 `/root/KuAo/frontend/dist` / `/opt/kuao/frontend/dist` 都不会生效；线上无强缓存，正确覆盖命令已记录在 18:30 小节。~~
 >
@@ -176,6 +172,7 @@
 | `AI_AUTOMATION_PLAN.md` | 新增（2026-11-08）：AI 生成与自动化方案评审稿（调研 + 设计 + crontab 链） |
 | `backup_db.py` | 新增（2026-11-08）：SQLite 在线备份（backup API，WAL 安全，单文件 DELETE 模式，integrity + 行数校验，按天/份数保留）；供 crontab 02:30 调用 |
 | `test_crawler_boundaries.py` | 新增（2026-11-08）：上云边界测试 20 例——Timeout/ConnectionError 不中断批量、残缺 JSON `safe_json` 兜底、空网页 `extract_page` 抛可预期 `CrawlError` 且批量继续 |
+| `test_enrich_saikr.py` | 新增（2026-11-08）：详情补充器 11 例——AI 输出规范化/50 字上限、40 字照抄拦截、一次调用提纯、backfill/daily 选片、只补空字段、approve 自动补全 |
 | `CLOUD_DEPLOYMENT_GUIDE.md` | 新增（2026-11-08）：《云端部署手册》——阿里云 Ubuntu 依赖、代码拉取、`.env`、DB 快照/WAL、systemd、Nginx、crontab 链、验收与回滚 |
 | `CRAWLER_HANDOVER.md` | 本交接文档 |
 
@@ -587,6 +584,7 @@ Copy-Item .\competitions.db .\test_crawl.db -Force
 ```
 
 - `--approve` 行为：候选必须 `pending`；主表已有同名/高相似 -> 拒绝；封面不合格 -> 仍入库但 `image_url=NULL`；新赛事固定 `sort_order=9999`，首页不曝光。
+- **`--approve` 成功后自动补详情（2026-11-08 20:05）**：抓赛氪详情 → AI 提纯 `participants/content_scope/exam_schedule` → 只写空字段；失败只告警，不影响已入库。离线/应急可加 `--skip-enrich`。
 - `--reject` 行为：候选必须 `pending`；只写 `status='rejected'`、`reviewed_at`，不碰主表。
 - 已在 `workspace/review_test.db` 副本实测：approve -> competitions id=36、候选标记 approved；reject -> 候选标记 rejected；重复 approve 被拒。
 - **注意（2026-11-08 13:00 核对）**：生产库实际已有 `id=36`（候选 82 approve）+ 1 条 reject，候选状态为 `80 pending / 1 approved / 1 rejected`；交接文档此前记录「主表未动」已过期。
@@ -853,6 +851,8 @@ MAILTO=""
 入口页覆盖映射：    url-map.json
 赛氪映射：          saikr_map.json（32 条；含 match_type / needs_review）
 赛氪统一预检：      pipeline_update.py（默认只读；--apply / --from-report）
+赛氪详情补充：      enrich_saikr_details.py（--backfill / --daily-update；AI 提纯；enrich_competition）
+详情补充测试：      test_enrich_saikr.py（11 例：规范化/防照抄/一次调用/双模式/审核联动）
 预检报告：          workspace/pipeline_report.md / pipeline_report_prod.json
 写库记录：          workspace/pipeline_apply_20261108-120553.json
 赛氪目录缓存：      workspace/saikr_catalog.json（5172 条）
@@ -1242,7 +1242,150 @@ cd ..\frontend; npm.cmd run build   # 7.36s / 115 modules
 
 ## 十三、赛氪详情补充器（2026-11-08，本地测试库已跑通）
 
-> **当前进展（2026-11-08 20:05）**：详情页字段结构已建好，本地测试跑通 23 个比赛，但尚未引入大模型防侵权改写，且未接入自动化流水线。
+> **当前进展（2026-11-08 20:05 重构后）**：已引入 AI 提纯（防版权）、`--backfill` / `--daily-update` 双模式，并接到 `review_candidates.approve`；本地测试库真机验证通过（1 条 / 483–540 tokens）。
+
+**核心原则（2026-11-08 20:05 定，勿推翻）**
+
+- 赛氪原始文本**绝不写库**：每次抓取后必须调用一次 `llm.chat_json`，把需要补的字段一起改写为「1. 短句」列表（每条 ≤50 字、≤8 条）。
+- AI 失败、输出为空、或与原文连续重合 ≥40 字 → 该字段保留 NULL；**不得回落写原文、不得编造**。
+- `--no-llm` 只允许 dry-run；`--apply --no-llm` 直接拒绝。
+- 仍只补 NULL/空串；已有值一律保留；生产库仍 `--apply --allow-production` + 写前自动备份。
+
+**双模式**
+
+| 模式 | 选片口径 |
+|---|---|
+| `--backfill`（默认） | 目标库所有三字段有空值的赛事（存量 33 条） |
+| `--daily-update` | 仅 `created_at` 在最近 `--days`（默认 7）天内、且有空字段的赛事 |
+
+**review_candidates.approve 自动补全**
+
+- `promote_candidate()` 成功后自动调用 `enrich_saikr_details.enrich_competition()`：
+  - saikr 候选直接取 `source_key = saikr:<contest_id>`；
+  - 其它来源按 `saikr_map.json` / 名称相似度兜底；
+  - 只写空字段；失败只告警，不回滚已入库赛事；`--skip-enrich` 可离线跳过。
+
+**实测（`test_crawl.db`，2026-11-08 20:02）**
+
+| 项 | 结果 |
+|---|---|
+| id=1 真机 | 赛氪 contest_id=59836 → AI 提纯 `content_scope` 为 3 条短句（82 字 / 540 tokens；首次 7 条 / 483 tokens）→ 写库成功 |
+| 备份 | `test_crawl.db.bak-20261108-200526`（最新一次真机） |
+| 测试 | `pytest test_enrich_saikr.py -q` → 11 passed；全量 `pytest -q` → 138 passed / 2 skipped |
+| 预览 | `workspace/saikr_enrich_ai_test3.json` |
+| 每日模式冒烟 | 33 条中仅 1 条在 7 天内、17 条窗口外、2 条无映射，符合预期 |
+
+**生产同步（2026-11-08 定稿；按顺序执行，生产库当前仍未迁移/未写入）**
+
+> 前置：`cd D:\agent-lab\KuAo-Platform\backend`；停掉本地 uvicorn，避免 SQLite 写锁竞争。云端覆盖是单向操作，4.0 行数对比异常时立即停止。
+
+**① 本地生产库迁移（补三列）**
+
+```powershell
+.\venv\Scripts\python.exe migrate_production.py --db-path .\competitions.db
+.\venv\Scripts\python.exe migrate_production.py --db-path .\competitions.db --apply
+
+.\venv\Scripts\python.exe -c "import sqlite3; c=sqlite3.connect('competitions.db'); print('cols=', [r[1] for r in c.execute('PRAGMA table_info(competitions)') if r[1] in ('participants','content_scope','exam_schedule')]); print('integrity=', c.execute('PRAGMA integrity_check').fetchone()[0]); print('competitions=', c.execute('SELECT COUNT(*) FROM competitions').fetchone()[0]); c.close()"
+```
+
+预期：三列齐全、`integrity=ok`、`competitions=33`；备份为 `competitions.db.bak`（已有则自动轮转）。
+
+**② 本地生产库存量回填**
+
+```powershell
+.\venv\Scripts\python.exe enrich_saikr_details.py --backfill --apply --allow-production --db-path .\competitions.db --preview saikr_enrich_prod_backfill.json
+
+.\venv\Scripts\python.exe -c "import sqlite3; c=sqlite3.connect('competitions.db'); print('filled=', c.execute('SELECT SUM(length(participants)>0), SUM(length(content_scope)>0), SUM(length(exam_schedule)>0) FROM competitions').fetchone()); c.close()"
+```
+
+- 约 25 次 LLM、5–10 分钟；写前自动备份 `competitions.db.bak-<时间戳>`。
+- 3 条无映射 / 5 条往年届次 / 页面无对应章节的会保留 NULL，属设计行为。
+- 退出码 1 表示有条目失败：**原命令重跑**即可，已填字段自动跳过。
+
+**③ 生成本地快照并上传**
+
+```powershell
+.\venv\Scripts\python.exe backup_db.py --db .\competitions.db --backup-dir .\backups --label pre-cloud-sync --keep-days 30
+
+$snap = (Get-ChildItem .\backups\competitions.db.bak-*-pre-cloud-sync | Sort-Object LastWriteTime -Descending | Select-Object -First 1).FullName
+if (-not $snap) { throw "未找到快照" }
+Write-Output "SNAPSHOT=$snap"
+Write-Output ("SHA256=" + (Get-FileHash $snap -Algorithm SHA256).Hash.ToLower())
+scp $snap root@112.126.90.252:/tmp/competitions.db.sync
+```
+
+**④ 云端覆盖（必须先停后端）**
+
+```bash
+ssh root@112.126.90.252
+```
+
+```bash
+set -euo pipefail
+cd /root/KuAo/backend
+TS=$(date +%Y%m%d-%H%M%S)
+
+# 4.0 覆盖前先对比云端行数；与本地快照不一致就停下
+./venv/bin/python - <<'PY'
+import sqlite3
+c = sqlite3.connect('competitions.db')
+for t in ('competitions', 'awards', 'competition_candidates', 'ai_jobs'):
+    print(t, c.execute('SELECT COUNT(*) FROM %s' % t).fetchone()[0])
+c.close()
+PY
+
+# 4.1 停服务
+systemctl stop kuao-backend
+
+# 4.2 云端当前库备份（WAL 安全 + integrity_check）
+./venv/bin/python backup_db.py --db competitions.db --backup-dir backups --label pre-db-sync --keep-days 30
+
+# 4.3 校验上传文件并覆盖；覆盖后必须删旧 -wal/-shm
+sha256sum /tmp/competitions.db.sync
+install -m 644 /tmp/competitions.db.sync competitions.db
+rm -f competitions.db-wal competitions.db-shm
+
+# 4.4 校验
+./venv/bin/python - <<'PY'
+import sqlite3
+c = sqlite3.connect('competitions.db')
+print('integrity=', c.execute('PRAGMA integrity_check').fetchone()[0])
+for t in ('competitions', 'awards', 'competition_candidates', 'ai_jobs'):
+    print(t, c.execute('SELECT COUNT(*) FROM %s' % t).fetchone()[0])
+print('detail_filled=', c.execute(
+    'SELECT SUM(length(participants)>0), SUM(length(content_scope)>0), '
+    'SUM(length(exam_schedule)>0) FROM competitions').fetchone())
+c.close()
+PY
+
+# 4.5 重启 + 验收
+systemctl start kuao-backend
+sleep 2
+systemctl is-active kuao-backend
+curl -fsS http://127.0.0.1:8000/api/health; echo
+curl -fsS http://127.0.0.1:8000/api/competitions/1 | head -c 400; echo
+```
+
+- 预期行数：`competitions=33 / awards=87 / competition_candidates=82 / ai_jobs=0`。
+- 避开凌晨 `02:30–05:50` cron 写库窗口；若必须在该时段操作，先 `crontab -e` 注释写库任务。
+- 回滚：
+
+```bash
+systemctl stop kuao-backend
+CLOUD_BAK=$(ls -1t backups/competitions.db.bak-*-pre-db-sync | head -n 1)
+echo "$CLOUD_BAK"
+cp "$CLOUD_BAK" competitions.db
+rm -f competitions.db-wal competitions.db-shm
+systemctl start kuao-backend
+```
+
+**每日巡检 cron（可选，放在现有 05:10 周度补全之后）**
+
+```cron
+50 5 * * * cd /root/KuAo/backend && flock -n /var/lock/kuao_enrich.lock ./venv/bin/python enrich_saikr_details.py --daily-update --apply --allow-production --db-path competitions.db >> logs/enrich-$(date +\%F).log 2>&1
+```
+
+- 只处理最近 7 天新入库且三字段有空的赛事，通常每天 0–2 条，成本很低；失败退出码 1，次日会重试未补齐的字段。
 
 **目标**：详情页「参赛对象 / 内容范围 / 考试安排」三张卡片此前恒为空，因为库里没有对应列和数据；赛氪详情 API 的 `content`（HTML 通知正文）里有这些章节。
 
@@ -1257,11 +1400,13 @@ cd ..\frontend; npm.cmd run build   # 7.36s / 115 modules
 
 **`enrich_saikr_details.py`**
 
-- 赛事清单：默认读生产库（只读）`competitions.db`，写目标库默认 `test_crawl.db`；写生产库必须 `--apply --allow-production`，写前自动备份。
+- 赛事清单：**直接读目标库**（`--db-path`，默认 `test_crawl.db`），按 `--backfill` / `--daily-update` 选片；`--source-db` 仅为旧命令兼容，已弃用。
 - contest_id：沿用 `saikr_map.json`；无映射时按名称相似度（≥0.93）兜底；同一 contest_id 只请求一次，父/子赛事复用。
 - 抓取：`GET https://apiv4buffer.saikr.com/api/pc/contest/info?contest_id=<id>`，3–5 秒随机限速、2 次重试。
 - 抽取：HTML → 叶子块 → 标题层级（一、/（一）/1./短标题）→ 按关键词选章节（参赛对象/赛项/赛程）；`participation_detail`、`contest_stage` 作为结构化兜底；带正文质量闸门（参赛对象须含学生/团队等，考试安排须含日期/赛段等）；奖项标题不当作内容范围；去官网/联系方式/页码噪声；单字段 1200 字截断。
-- 护栏：沿用「报名结束超 400 天 = 往年届次」，整条跳过（`--allow-stale` 可强制）；只写 NULL/空串，不覆盖已有值；抽不到保持 NULL。
+- **AI 提纯**：`purify_fields()` 每个 contest_id 只调一次 `llm.chat_json`；输出「1. 短句」列表（每条 ≤50 字、≤8 条），`_looks_copied()` 拦截与原文连续 ≥40 字的重合；AI 失败/空/疑似照抄一律不写，保留 NULL。`--no-llm` 仅限 dry-run。
+- 护栏：沿用「报名结束超 400 天 = 往年届次」，整条跳过（`--allow-stale` 可强制）；只写 NULL/空串，不覆盖已有值。
+- `review_candidates.py --approve` 在 `promote_candidate()` 成功后自动调用 `enrich_competition()` 补详情；失败只告警，不回滚。
 
 **实跑结果（`test_crawl.db`，2026-11-08 19:51，备份 `test_crawl.db.bak-20261108-195140`）**
 
@@ -1277,4 +1422,4 @@ cd ..\frontend; npm.cmd run build   # 7.36s / 115 modules
 
 **已知质量待评审点**：id=1 的「参赛要求」章节偏项目要求（含年龄/学籍条款）；id=18 参赛对象为平台结构化短句；id=15 内容范围取自「竞赛规则」；id=2/30 等旧届数据被护栏挡掉。预览文件：`workspace/saikr_enrich_applied.json`。
 
-**上云前还需（按用户要求，等质量验收后再做）**：生产库执行 `migrate_production.py --apply` 补三列 → `enrich_saikr_details.py --apply --allow-production --db-path competitions.db --source-db competitions.db` → 备份云端库后同步；前端卡片如需保留换行，考虑给 `<p>` 加 `whitespace-pre-line`。
+**说明**：上面的 19:51 实跑是**未接 AI 提纯**的旧版本结果，仅用于评估章节抽取质量；重构后的真机结果见本节开头表格。前端卡片如需保留换行，给 `<p>` 加 `whitespace-pre-line`（尚未改；AI 输出为多行编号列表）。
