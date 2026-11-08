@@ -1,0 +1,234 @@
+# -*- coding: utf-8 -*-
+"""review_candidates.py —— 候选赛事审核 CLI（list / approve / reject）
+
+流程：
+  * `--list`            列出 pending 候选（ID / 名称 / 级别 / 来源）；
+  * `--approve <id>`    候选 -> competitions（图片重新过 check_image 闸门），
+                        同一事务内把候选标记 approved 并回填 competition_id；
+  * `--reject <id>`     标记 rejected，不动主表。
+
+安全红线（CRAWLER_HANDOVER.md 第四/九节）：
+  * 默认目标库 test_crawl.db；写生产库必须显式 --allow-production；
+  * 写生产库前自动 SQLite backup + integrity_check；
+  * 只允许提拔 status='pending' 的候选；主表已有同名/高相似赛事则拒绝；
+  * 封面不合格时宁可不写 image_url（仍可入库），绝不放宽宽高比；
+  * 新入库赛事 sort_order=9999，首页不曝光。
+
+用法（backend 目录）：
+  .\\venv\\Scripts\\python.exe review_candidates.py --list
+  .\\venv\\Scripts\\python.exe review_candidates.py --approve 1
+  .\\venv\\Scripts\\python.exe review_candidates.py --reject 2
+
+生产库：
+  .\\venv\\Scripts\\python.exe review_candidates.py --list --db-path .\\competitions.db
+  .\\venv\\Scripts\\python.exe review_candidates.py --approve 1 `
+    --db-path .\\competitions.db --allow-production
+"""
+import argparse
+import re
+import sys
+import unicodedata
+from datetime import datetime
+
+import db
+import discover_common as common
+from batch_update_competitions import check_image
+
+DEFAULT_DB_PATH = common.DEFAULT_DB_PATH
+DEFAULT_SORT_ORDER = 9999
+
+
+def log(message: str) -> None:
+    print(message, flush=True)
+
+
+def clean_name_for_main(raw_name: str) -> str:
+    """候选名 -> 主表展示名：去营销标签/年份/届次，保留官方全称。"""
+    text = unicodedata.normalize("NFKC", str(raw_name or "")).strip()
+    text = re.sub(r"^(?:【[^】]*】|\[[^\]]*\])\s*", "", text)
+    text = re.sub(r"\s*(?:【[^】]*】|\[[^\]]*\])\s*$", "", text)
+    text = re.sub(r"^(?:19|20)\d{2}\s*年?\s*", "", text)
+    text = re.sub(r"^第[一二三四五六七八九十百零\d]+届\s*", "", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
+def infer_level(candidate: dict) -> tuple:
+    """返回 (level, level_label)；现有枚举只有 national / provincial。"""
+    label = str(candidate.get("level_label") or "").strip()
+    text = label + " " + str(candidate.get("raw_name") or "")
+    provincial_words = (
+        "省级", "省赛", "区域级", "区域赛", "赛区", "分赛区",
+        "华南", "华东", "华北", "华中", "西南", "西北", "东北",
+    )
+    if any(word in text for word in provincial_words):
+        return "provincial", label or "省级"
+    return "national", label or "国家级"
+
+
+def build_competition_data(candidate: dict, image_url) -> dict:
+    level, level_label = infer_level(candidate)
+    source = str(candidate.get("source") or "").strip()
+    if source == "saikr":
+        discover_source = "saikr:list"
+    elif source == "edu-roster":
+        discover_source = "edu:roster"
+    else:
+        discover_source = source or None
+    return {
+        "name": clean_name_for_main(candidate.get("raw_name")),
+        "category": candidate.get("category_hint") or "待确认",
+        "reg_start_month": candidate.get("reg_start_month"),
+        "reg_end_month": candidate.get("reg_end_month"),
+        "reg_cross_year": candidate.get("reg_cross_year") or 0,
+        "official_url": candidate.get("official_url"),
+        "image_url": image_url,
+        "contest_start_month": candidate.get("contest_start_month"),
+        "contest_end_month": candidate.get("contest_end_month"),
+        "discover_source": discover_source,
+        "last_checked_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "is_active": 1,
+        "level": level,
+        "level_label": level_label,
+        "sort_order": DEFAULT_SORT_ORDER,
+        "tech_stack": "[]",
+    }
+
+
+def verify_cover(candidate: dict):
+    """封面重新过闸门；返回 (可用 URL 或 None, 说明)。"""
+    url = (candidate.get("image_url") or "").strip()
+    if not url:
+        return None, "无封面，按方案 C 走前端兜底"
+    ok, reason, info = check_image(url)
+    if ok:
+        size = "%sx%s" % (info.get("width"), info.get("height"))
+        return url, "封面通过（%s）" % size
+    return None, "封面拒收：%s" % (reason or "未通过")
+
+
+def require_production_permission(db_path: str, allow_production: bool) -> None:
+    if common.is_production_db(db_path) and not allow_production:
+        raise SystemExit("拒绝写生产库：必须同时传 --allow-production")
+
+
+def write_backup_if_production(db_path: str) -> None:
+    if common.is_production_db(db_path):
+        log("[备份] %s" % common.backup_db(db_path))
+
+
+def cmd_list(args) -> int:
+    log("[目标库] %s" % args.db_path)
+    total = db.count_candidates(status="pending", db_path=args.db_path)
+    rows = db.query_candidates(
+        status="pending", limit=args.limit, db_path=args.db_path
+    )
+    log("[待审] %d 条（显示 %d 条）" % (total, len(rows)))
+    if not rows:
+        return 0
+    print("ID    来源        级别        名称")
+    print("----  ----------  ----------  ----------------------------------------")
+    for row in rows:
+        name = row["raw_name"] or ""
+        if len(name) > 60:
+            name = name[:57] + "..."
+        print("%-4s  %-10s  %-10s  %s" % (
+            row["id"], row["source"], row["level_label"] or "-", name,
+        ))
+    if total > len(rows):
+        log("（其余 %d 条请加 --limit 或按 ID 审核）" % (total - len(rows)))
+    return 0
+
+
+def cmd_approve(args) -> int:
+    log("[目标库] %s" % args.db_path)
+    require_production_permission(args.db_path, args.allow_production)
+
+    candidate = db.get_candidate(args.approve, db_path=args.db_path)
+    if not candidate:
+        raise SystemExit("候选不存在：%s" % args.approve)
+    if candidate["status"] != "pending":
+        raise SystemExit("候选 %s 当前状态为 %s，只有 pending 可以提拔" % (
+            args.approve, candidate["status"]))
+
+    duplicate = db.find_duplicate_candidate(
+        candidate["norm_name"],
+        official_url=candidate.get("official_url"),
+        db_path=args.db_path,
+        include_candidates=False,
+    )
+    if duplicate:
+        raise SystemExit("主表已有同名/高相似赛事：id=%s《%s》（%s），拒绝入库" % (
+            duplicate["id"], duplicate["name"], duplicate["reason"]))
+
+    image_url, image_note = verify_cover(candidate)
+    log("[封面] %s" % image_note)
+
+    write_backup_if_production(args.db_path)
+    competition_id = db.promote_candidate(
+        args.approve, build_competition_data(candidate, image_url),
+        db_path=args.db_path,
+    )
+    log("[通过] 候选 %s -> competitions id=%s（sort_order=%s，首页不曝光）" % (
+        args.approve, competition_id, DEFAULT_SORT_ORDER))
+    return 0
+
+
+def cmd_reject(args) -> int:
+    log("[目标库] %s" % args.db_path)
+    require_production_permission(args.db_path, args.allow_production)
+
+    candidate = db.get_candidate(args.reject, db_path=args.db_path)
+    if not candidate:
+        raise SystemExit("候选不存在：%s" % args.reject)
+    if candidate["status"] != "pending":
+        raise SystemExit("候选 %s 当前状态为 %s，只有 pending 可以拒绝" % (
+            args.reject, candidate["status"]))
+
+    write_backup_if_production(args.db_path)
+    db.update_candidate_status(
+        args.reject, "rejected", db_path=args.db_path
+    )
+    log("[拒绝] 候选 %s 已标记 rejected（主表未动）" % args.reject)
+    return 0
+
+
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(
+        description="候选赛事审核 CLI（默认目标库 test_crawl.db）"
+    )
+    action = parser.add_mutually_exclusive_group()
+    action.add_argument("--list", action="store_true", help="列出 pending 候选")
+    action.add_argument("--approve", type=int, metavar="ID",
+                        help="通过候选并插入 competitions")
+    action.add_argument("--reject", type=int, metavar="ID",
+                        help="拒绝候选（仅改状态）")
+    parser.add_argument("--db-path", default=DEFAULT_DB_PATH,
+                        help="目标库（默认 test_crawl.db）")
+    parser.add_argument("--allow-production", action="store_true",
+                        help="允许写生产库（写前自动备份）")
+    parser.add_argument("--limit", type=int, default=100,
+                        help="--list 最多显示条数（默认 100）")
+    args = parser.parse_args(argv)
+    if not (args.list or args.approve or args.reject):
+        parser.print_help()
+        raise SystemExit(2)
+    if args.limit < 1:
+        raise SystemExit("--limit 必须大于 0")
+    return args
+
+
+def main(argv=None) -> int:
+    args = parse_args(argv)
+    if args.list:
+        return cmd_list(args)
+    if args.approve:
+        return cmd_approve(args)
+    return cmd_reject(args)
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        sys.exit(130)

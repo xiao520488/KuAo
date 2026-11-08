@@ -1,0 +1,347 @@
+{
+  "generated_at": "2026-11-08T00:03:42",
+  "source": "saikr",
+  "policy": {
+    "scope": "仅存量 32 条；新赛事发现另立方案",
+    "writes": [
+      "image_url（仅补空，必须过 check_image）",
+      "reg_start_month / reg_end_month / reg_cross_year（仅填 NULL，禁止覆盖已有值，2026-11-08 决策）"
+    ],
+    "never_writes": [
+      "contest_start_month",
+      "contest_end_month",
+      "name"
+    ],
+    "image_gate": "复用 batch_update_competitions.check_image()，宽高比 > 2.6 一律拒收（方案 C）"
+  },
+  "counts": {
+    "total": 32,
+    "exact": 22,
+    "parent": 7,
+    "approx": 1,
+    "none": 2,
+    "needs_review": 9
+  },
+  "items": [
+    {
+      "competition_id": 1,
+      "saikr_contest_id": 59836,
+      "saikr_name": "中国国际大学生创新大赛（2026）",
+      "saikr_url": "https://www.saikr.com/vse/59836",
+      "saikr_level": "全国性",
+      "match_type": "exact",
+      "needs_review": false,
+      "note": ""
+    },
+    {
+      "competition_id": 2,
+      "saikr_contest_id": 50120,
+      "saikr_name": "第十九届“挑战杯”全国大学生课外学术科技作品竞赛",
+      "saikr_url": "https://www.saikr.com/vse/50120",
+      "saikr_level": "其他",
+      "match_type": "exact",
+      "needs_review": true,
+      "note": "赛氪当前只有 2024 第十九届（报名 2024-06 已结束），2026 届未建页；护栏会跳过"
+    },
+    {
+      "competition_id": 3,
+      "saikr_contest_id": 58008,
+      "saikr_name": "第十五届“挑战杯”中国大学生创业计划竞赛",
+      "saikr_url": "https://www.saikr.com/vse/58008",
+      "saikr_level": "全国性",
+      "match_type": "exact",
+      "needs_review": false,
+      "note": "第十五届，当前届"
+    },
+    {
+      "competition_id": 4,
+      "saikr_contest_id": 37944,
+      "saikr_name": "全国大学生创新创业训练计划年会展示",
+      "saikr_url": "https://www.saikr.com/vse/37944",
+      "saikr_level": "全国性",
+      "match_type": "exact",
+      "needs_review": true,
+      "note": "赛氪页面停留在 2020 年会展示，数据陈旧"
+    },
+    {
+      "competition_id": 5,
+      "saikr_contest_id": 58061,
+      "saikr_name": "第十六届全国大学生电子商务“创新、创意及创业”挑战赛",
+      "saikr_url": "https://www.saikr.com/vse/58061",
+      "saikr_level": "全国性",
+      "match_type": "exact",
+      "needs_review": false,
+      "note": "第十六届，当前届"
+    },
+    {
+      "competition_id": 6,
+      "saikr_contest_id": 57987,
+      "saikr_name": "2026年第二十届iCAN大学生创新创业大赛",
+      "saikr_url": "https://www.saikr.com/vse/ican2026",
+      "saikr_level": "全国性",
+      "match_type": "exact",
+      "needs_review": false,
+      "note": "与 58044 为同届重复页，取列表默认排序靠前者"
+    },
+    {
+      "competition_id": 7,
+      "saikr_contest_id": 58068,
+      "saikr_name": "第十七届中国大学生服务外包创新创业大赛",
+      "saikr_url": "https://www.saikr.com/vse/58068",
+      "saikr_level": "全国性",
+      "match_type": "exact",
+      "needs_review": false,
+      "note": "第十七届，当前届"
+    },
+    {
+      "competition_id": 8,
+      "saikr_contest_id": 58098,
+      "saikr_name": "2026年中美青年创客大赛",
+      "saikr_url": "https://www.saikr.com/vse/58098",
+      "saikr_level": "全国性",
+      "match_type": "exact",
+      "needs_review": false,
+      "note": ""
+    },
+    {
+      "competition_id": 9,
+      "saikr_contest_id": 57986,
+      "saikr_name": "第十三届“学创杯’全国大学生创业综合模拟演训活动",
+      "saikr_url": "https://www.saikr.com/vse/xcbds2026",
+      "saikr_level": "全国性",
+      "match_type": "exact",
+      "needs_review": false,
+      "note": "第十三届（2026）"
+    },
+    {
+      "competition_id": 10,
+      "saikr_contest_id": 58040,
+      "saikr_name": "2026年（第19届）中国大学生计算机设计大赛",
+      "saikr_url": "https://www.saikr.com/vse/58040",
+      "saikr_level": "全国性",
+      "match_type": "exact",
+      "needs_review": false,
+      "note": "第19届（2026）；封面 1875x404 banner 会被拒收，报名 4/1-4/30 可用"
+    },
+    {
+      "competition_id": 11,
+      "saikr_contest_id": 58054,
+      "saikr_name": "第三届（2026）中国高校计算机大赛-AIGC创新赛竞赛",
+      "saikr_url": "https://www.saikr.com/vse/58054",
+      "saikr_level": "全国性",
+      "match_type": "approx",
+      "needs_review": true,
+      "note": "赛氪无主赛页，只有子赛道（AIGC/嵌入式/…），映射到 AIGC 仅作占位，建议不自动写"
+    },
+    {
+      "competition_id": 12,
+      "saikr_contest_id": 58069,
+      "saikr_name": "第十七届蓝桥杯全国大学生软件和 信息技术大赛",
+      "saikr_url": "https://www.saikr.com/vse/58069",
+      "saikr_level": "全国性",
+      "match_type": "exact",
+      "needs_review": false,
+      "note": "第十七届；无封面，报名跨年 10→4"
+    },
+    {
+      "competition_id": 13,
+      "saikr_contest_id": 58042,
+      "saikr_name": "第十五届“中国软件杯”大学生软件设计大赛",
+      "saikr_url": "https://www.saikr.com/vse/58042",
+      "saikr_level": "全国性",
+      "match_type": "exact",
+      "needs_review": false,
+      "note": "第十五届，当前届"
+    },
+    {
+      "competition_id": 14,
+      "saikr_contest_id": 58048,
+      "saikr_name": "2026年全国大学生计算机系统能力大赛",
+      "saikr_url": "https://www.saikr.com/vse/58048",
+      "saikr_level": "全国性",
+      "match_type": "exact",
+      "needs_review": false,
+      "note": "2026 主赛（非先导杯）"
+    },
+    {
+      "competition_id": 15,
+      "saikr_contest_id": 58124,
+      "saikr_name": "2026 年 ACM-ICPC 国际大学生程序设计竞赛",
+      "saikr_url": "https://www.saikr.com/vse/58124",
+      "saikr_level": "全球性",
+      "match_type": "exact",
+      "needs_review": false,
+      "note": "2026 届页面刚建：无封面、报名时间未开放"
+    },
+    {
+      "competition_id": 16,
+      "saikr_contest_id": 59405,
+      "saikr_name": "2026 第二十二届百度之星程序设计大赛 ",
+      "saikr_url": "https://www.saikr.com/vse/59405",
+      "saikr_level": "其他",
+      "match_type": "exact",
+      "needs_review": true,
+      "note": "第二十二届（2026），页面刚建、报名时间未开放"
+    },
+    {
+      "competition_id": 17,
+      "saikr_contest_id": 43798,
+      "saikr_name": "第十四届全国大学生信息安全竞赛 -—创新实践能力赛",
+      "saikr_url": "https://www.saikr.com/vse/43798",
+      "saikr_level": "全国性",
+      "match_type": "exact",
+      "needs_review": true,
+      "note": "赛氪只有 2021 年第十四届，严重陈旧，建议不自动写"
+    },
+    {
+      "competition_id": 18,
+      "saikr_contest_id": 58019,
+      "saikr_name": "ISCC-2026-第23届信息安全与对抗技术竞赛",
+      "saikr_url": "https://www.saikr.com/vse/58019",
+      "saikr_level": "全国性",
+      "match_type": "exact",
+      "needs_review": false,
+      "note": "第23届（2026）"
+    },
+    {
+      "competition_id": 19,
+      "saikr_contest_id": 58052,
+      "saikr_name": "第八届全球校园人工智能算法精英大赛",
+      "saikr_url": "https://www.saikr.com/vse/58052",
+      "saikr_level": "全球性",
+      "match_type": "exact",
+      "needs_review": false,
+      "note": "第八届"
+    },
+    {
+      "competition_id": 20,
+      "saikr_contest_id": 58122,
+      "saikr_name": "第十届华为 ICT 大赛中国实践赛",
+      "saikr_url": "https://www.saikr.com/vse/58122",
+      "saikr_level": "全国性",
+      "match_type": "exact",
+      "needs_review": false,
+      "note": "第十届中国实践赛"
+    },
+    {
+      "competition_id": 21,
+      "saikr_contest_id": 58031,
+      "saikr_name": "第九届2026全国大学生嵌入式芯片与系统设计竞赛",
+      "saikr_url": "https://www.saikr.com/vse/58031",
+      "saikr_level": "全国性",
+      "match_type": "exact",
+      "needs_review": false,
+      "note": "第九届（2026）；封面 168x109 过小会被拒收，仅报名时间可用"
+    },
+    {
+      "competition_id": 22,
+      "saikr_contest_id": 58049,
+      "saikr_name": "2026 年全国大学生物联网设计竞赛",
+      "saikr_url": "https://www.saikr.com/vse/58049",
+      "saikr_level": "全国性",
+      "match_type": "exact",
+      "needs_review": false,
+      "note": "2026 届"
+    },
+    {
+      "competition_id": 23,
+      "saikr_contest_id": 58040,
+      "saikr_name": "2026年（第19届）中国大学生计算机设计大赛",
+      "saikr_url": "https://www.saikr.com/vse/58040",
+      "saikr_level": "全国性",
+      "match_type": "parent",
+      "needs_review": false,
+      "note": "省级赛挂全国主赛（id=10）"
+    },
+    {
+      "competition_id": 24,
+      "saikr_contest_id": 58054,
+      "saikr_name": "第三届（2026）中国高校计算机大赛-AIGC创新赛竞赛",
+      "saikr_url": "https://www.saikr.com/vse/58054",
+      "saikr_level": "全国性",
+      "match_type": "parent",
+      "needs_review": true,
+      "note": "省级选拔赛挂 id=11；id=11 本身待裁决"
+    },
+    {
+      "competition_id": 25,
+      "saikr_contest_id": null,
+      "saikr_name": null,
+      "saikr_url": null,
+      "saikr_level": null,
+      "match_type": "none",
+      "needs_review": true,
+      "note": "赛氪目录无「全国大学生软件测试大赛」"
+    },
+    {
+      "competition_id": 26,
+      "saikr_contest_id": 43798,
+      "saikr_name": "第十四届全国大学生信息安全竞赛 -—创新实践能力赛",
+      "saikr_url": "https://www.saikr.com/vse/43798",
+      "saikr_level": "全国性",
+      "match_type": "parent",
+      "needs_review": true,
+      "note": "省级赛挂 id=17；id=17 数据陈旧"
+    },
+    {
+      "competition_id": 27,
+      "saikr_contest_id": 58049,
+      "saikr_name": "2026 年全国大学生物联网设计竞赛",
+      "saikr_url": "https://www.saikr.com/vse/58049",
+      "saikr_level": "全国性",
+      "match_type": "parent",
+      "needs_review": false,
+      "note": "华东赛区挂全国主赛（id=22）"
+    },
+    {
+      "competition_id": 28,
+      "saikr_contest_id": 58069,
+      "saikr_name": "第十七届蓝桥杯全国大学生软件和 信息技术大赛",
+      "saikr_url": "https://www.saikr.com/vse/58069",
+      "saikr_level": "全国性",
+      "match_type": "parent",
+      "needs_review": false,
+      "note": "省赛挂全国主赛（id=12）"
+    },
+    {
+      "competition_id": 29,
+      "saikr_contest_id": 58068,
+      "saikr_name": "第十七届中国大学生服务外包创新创业大赛",
+      "saikr_url": "https://www.saikr.com/vse/58068",
+      "saikr_level": "全国性",
+      "match_type": "parent",
+      "needs_review": false,
+      "note": "省赛挂全国主赛（id=7）"
+    },
+    {
+      "competition_id": 30,
+      "saikr_contest_id": 50120,
+      "saikr_name": "第十九届“挑战杯”全国大学生课外学术科技作品竞赛",
+      "saikr_url": "https://www.saikr.com/vse/50120",
+      "saikr_level": "其他",
+      "match_type": "parent",
+      "needs_review": false,
+      "note": "省级赛挂全国主赛（id=2）"
+    },
+    {
+      "competition_id": 34,
+      "saikr_contest_id": 58028,
+      "saikr_name": "2026中国机器人大赛暨RoboCup机器人世界杯中国赛",
+      "saikr_url": "https://www.saikr.com/vse/58028",
+      "saikr_level": "全球性",
+      "match_type": "exact",
+      "needs_review": false,
+      "note": "2026 届"
+    },
+    {
+      "competition_id": 35,
+      "saikr_contest_id": null,
+      "saikr_name": null,
+      "saikr_url": null,
+      "saikr_level": null,
+      "match_type": "none",
+      "needs_review": true,
+      "note": "赛氪目录无「中国教育机器人大赛」"
+    }
+  ]
+}

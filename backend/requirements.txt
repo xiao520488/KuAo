@@ -23,3 +23,19 @@ chromadb==1.5.9
 
 # --- HTTP 客户端（TestClient / 外部接口）---
 httpx==0.28.1
+
+# --- 爬虫脚本（crawler_news.py / crawler_competitions.py 需要，主服务运行不依赖）---
+requests==2.34.2
+beautifulsoup4==4.13.4
+lxml==5.4.0
+
+# --- 开发/测试专用（不是运行时依赖，部署镜像可以不装）---
+# 只用于本地 lint 与单测：
+#   python -m pytest test_crawler_units.py -q
+#   python -m ruff check --select F401,F811,F841 .
+#   python -m pyflakes crawler_news.py crawler_competitions.py db.py
+# 生产镜像若不装这些，可只安装到上面的「爬虫」段，
+# 或后续把这一节拆到独立的 requirements-dev.txt。
+pytest==9.2.0
+ruff==0.17.4
+pyflakes==4.1.0

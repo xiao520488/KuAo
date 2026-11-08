@@ -5,6 +5,7 @@ import { authState } from '../services/auth'
 import { addPreparation, removePreparation } from '../services/api'
 import { openAuthModal } from '../composables/useAuthModal'
 import { categoryTag } from '@/utils/competitionCategory'
+import { coverFallback } from '@/utils/coverFallback'
 
 // 通用竞赛卡片：整卡/详情 -> 详情页，备赛 -> 备赛列表页
 const props = defineProps({
@@ -34,6 +35,23 @@ const router = useRouter()
 
 // 卡片标签统一展示“大类 · 细分”，原始长分类作为 title 提示
 const categoryLabel = computed(() => categoryTag(props.category))
+
+// 封面兜底：无图 / 图片加载失败时，用名称哈希色相 + 首字占位（布局尺寸不变）
+const imageFailed = ref(false)
+const showImage = computed(() => Boolean(props.image) && !imageFailed.value)
+const fallback = computed(() => coverFallback(props.title))
+
+function onImageError() {
+  imageFailed.value = true
+}
+
+// 父组件换了图片地址（如分页/刷新）时重新尝试加载
+watch(
+  () => props.image,
+  () => {
+    imageFailed.value = false
+  }
+)
 
 // 整卡点击 -> 竞赛详情
 function goDetail() {
@@ -122,22 +140,20 @@ async function removeOnly() {
     <div class="relative w-52 shrink-0">
       <div class="aspect-[4/3] w-full overflow-hidden rounded-xl bg-slate-100 dark:bg-slate-700/60">
         <img
-          v-if="image"
+          v-if="showImage"
           :src="image"
           alt=""
           class="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
+          @error="onImageError"
         />
-        <!-- 无图时的占位 -->
+        <!-- 无图 / 加载失败：按名称哈希生成淡彩渐变 + 赛事首字 -->
         <div
           v-else
-          class="flex h-full w-full items-center justify-center
-                 bg-gradient-to-br from-slate-100 to-slate-200"
+          class="cover-fallback"
+          :style="{ '--cover-hue': fallback.hue }"
+          aria-hidden="true"
         >
-          <svg class="h-8 w-8 text-slate-300" fill="none" viewBox="0 0 24 24"
-               stroke="currentColor" stroke-width="1.5" aria-hidden="true">
-            <path stroke-linecap="round" stroke-linejoin="round"
-                  d="M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 2.25 0 013.182 0l2.909 2.909M18 6.75h.008v.008H18V6.75z" />
-          </svg>
+          <span class="cover-fallback__glyph">{{ fallback.glyph }}</span>
         </div>
       </div>
     </div>

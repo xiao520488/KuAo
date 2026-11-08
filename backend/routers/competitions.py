@@ -3,18 +3,26 @@
 数据来源：db 层（SQLite 真实数据）。
 
 提供：
-  * GET /api/competitions        竞赛列表（支持筛选）
-  * GET /api/competitions/{id}   竞赛详情
-  * GET /api/categories          分类列表
+  * GET  /api/competitions                       竞赛列表（支持筛选）
+  * GET  /api/competitions/{id}                  竞赛详情（含攻略全文）
+  * GET  /api/competitions/{id}/awards           获奖作品
+  * POST /api/competitions/{id}/generate_guide   按需生成攻略（登录 + 异步）
+  * GET  /api/competitions/{id}/generate_guide   查询攻略生成状态
+  * GET  /api/categories                         分类列表
+
+注意（2026-11-08）：full_process_guide 只在详情接口返回，列表接口不再带长文。
 """
 
 import json
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException, Path, Query
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Response
+from pydantic import BaseModel, Field
 
+import ai_jobs_runner
 from db import get_categories as db_get_categories
 from db import get_competition as db_get_competition
+from db import get_guide_state as db_get_guide_state
 from db import list_awards_by_competition as db_list_awards_by_competition
 from db import list_competitions as db_list_competitions
 from models.schemas import (
@@ -24,6 +32,7 @@ from models.schemas import (
     Competition,
     CompetitionDetail,
 )
+from security import get_current_user
 
 router = APIRouter(tags=["competitions"])
 
@@ -54,8 +63,11 @@ def _row_to_competition(row: Dict[str, Any]) -> Competition:
     """把 db 返回的一行 dict 转换为 Competition 模型（列表项）。
 
     使用显式字段映射，忽略数据库中的额外字段
-    （如 discover_source / last_checked_at / is_active），
+    （如 discover_source / last_checked_at / is_active / full_process_guide），
     避免未来 DB 加列时污染响应结构。
+
+    2026-11-08：full_process_guide 已从列表模型移除（改由详情返回），
+    否则 30+ 条攻略会让列表响应多出上百 KB。
     """
     return Competition(
         id=row["id"],
@@ -66,11 +78,13 @@ def _row_to_competition(row: Dict[str, Any]) -> Competition:
         reg_start_month=row.get("reg_start_month"),
         reg_end_month=row.get("reg_end_month"),
         reg_cross_year=bool(row.get("reg_cross_year")),
+        contest_start_month=row.get("contest_start_month"),
+        contest_end_month=row.get("contest_end_month"),
         official_url=row.get("official_url"),
+        image=row.get("image_url") or row.get("image"),
         intro=row.get("intro"),
         summary=row.get("summary"),
         tech_stack=_parse_tech_stack(row.get("tech_stack")),
-        full_process_guide=row.get("full_process_guide") or "",
         sort_order=row.get("sort_order"),
         created_at=row.get("created_at"),
     )
@@ -79,10 +93,19 @@ def _row_to_competition(row: Dict[str, Any]) -> Competition:
 def _row_to_detail(row: Dict[str, Any]) -> CompetitionDetail:
     """把 db 返回的一行 dict 转换为 CompetitionDetail 模型（详情）。
 
-    详情继承列表全部字段（含 summary），字段映射与列表保持一致。
+    详情在列表字段基础上补三样：
+      * full_process_guide：攻略 Markdown 全文；
+      * guide_status：idle/queued/running/ready/failed（前端按钮与轮询用）；
+      * guide_generated_at：生成时间，便于提示“最近更新”。
     """
     base = _row_to_competition(row)
-    return CompetitionDetail(**base.model_dump())
+    state = db_get_guide_state(row["id"]) or {}
+    return CompetitionDetail(
+        **base.model_dump(),
+        full_process_guide=row.get("full_process_guide") or "",
+        guide_status=state.get("status", "idle"),
+        guide_generated_at=row.get("guide_generated_at"),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -126,6 +149,102 @@ def get_competition(
     if row is None:
         raise HTTPException(status_code=404, detail=f"竞赛 ID={id} 不存在")
     return _row_to_detail(row)
+
+
+# ---------------------------------------------------------------------------
+# 按需生成攻略（2026-11-08）
+# ---------------------------------------------------------------------------
+class GuideStatusResponse(BaseModel):
+    """攻略生成状态查询的响应体。"""
+
+    competition_id: int = Field(..., description="竞赛 ID")
+    status: str = Field(
+        ..., description="idle / queued / running / ready / failed"
+    )
+    job_id: Optional[int] = Field(None, description="最近一次 ai_jobs.id")
+    attempts: int = Field(0, description="该任务已尝试次数")
+    guide_length: int = Field(0, description="已落库攻略的字符数（未生成为 0）")
+    generated_at: Optional[str] = Field(None, description="攻略生成时间")
+
+
+class GuideRequestResponse(BaseModel):
+    """POST 生成攻略的响应体（状态码随场景变化）。"""
+
+    competition_id: int = Field(..., description="竞赛 ID")
+    status: str = Field(
+        ...,
+        description=(
+            "ready=已有攻略；queued=已入队；running=已在执行；"
+            "throttled=被预算/队列限流"
+        ),
+    )
+    job_id: Optional[int] = Field(None, description="入队后的任务 id，用于轮询")
+    guide_length: Optional[int] = Field(None, description="已有攻略的字符数")
+    reason: Optional[str] = Field(
+        None, description="限流原因：daily_budget / queue_full / cooldown"
+    )
+    poll_after_ms: int = Field(
+        0, description="建议前端轮询间隔（毫秒）；0 表示无需轮询"
+    )
+
+
+@router.post(
+    "/api/competitions/{id}/generate_guide",
+    response_model=GuideRequestResponse,
+    status_code=202,
+    summary="按需生成参赛攻略（登录 + 异步）",
+    description=(
+        "登录用户触发。已有攻略直接返回 200；否则写入 ai_jobs 后立即返回 202，"
+        "由后台线程池串行生成（单条 20–60s）。前端用 GET 同路径轮询状态。\n\n"
+        "幂等：同一赛事已有 queued/running 任务时返回同一个 job_id，不会重复生成。\n"
+        "限流：全站每日任务上限 / 队列上限 / 失败冷却，命中时返回 429 或 409。"
+    ),
+    responses={
+        401: {"description": "未登录或 Token 失效"},
+        404: {"description": "竞赛不存在"},
+        409: {"description": "该赛事刚失败过，冷却中"},
+        429: {"description": "超出每日预算或队列已满"},
+    },
+)
+def generate_guide(
+    response: Response,
+    id: int = Path(..., description="竞赛 ID"),
+    user: dict = Depends(get_current_user),
+) -> GuideRequestResponse:
+    """触发一次攻略生成（幂等、异步）。"""
+    try:
+        result = ai_jobs_runner.request_guide(
+            id,
+            user_id=int(user["id"]),
+            request_ip=None,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    payload = dict(result["payload"])
+    payload.setdefault("poll_after_ms", result.get("poll_after_ms", 0))
+    response.status_code = int(result["http"])
+    retry_after = result.get("retry_after_sec")
+    if retry_after:
+        response.headers["Retry-After"] = str(int(retry_after))
+    return GuideRequestResponse(**payload)
+
+
+@router.get(
+    "/api/competitions/{id}/generate_guide",
+    response_model=GuideStatusResponse,
+    summary="查询攻略生成状态（登录）",
+    description="前端轮询用；只读，不触发任何生成，也不消耗配额。",
+    responses={401: {"description": "未登录或 Token 失效"}, 404: {"description": "竞赛不存在"}},
+)
+def get_generate_guide_status(
+    id: int = Path(..., description="竞赛 ID"),
+    _user: dict = Depends(get_current_user),
+) -> GuideStatusResponse:
+    """返回攻略生成状态（与详情接口的 guide_status 同源）。"""
+    if db_get_competition(id) is None:
+        raise HTTPException(status_code=404, detail=f"竞赛 ID={id} 不存在")
+    return GuideStatusResponse(**ai_jobs_runner.get_guide_status(id))
 
 
 # ---------------------------------------------------------------------------

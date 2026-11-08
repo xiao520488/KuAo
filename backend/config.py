@@ -132,3 +132,14 @@ JWT_EXPIRE_MINUTES = _get_int("JWT_EXPIRE_MINUTES", 60 * 24)
 # ------------------------------------------------------------
 # Max AI calls per user per day. Set to 0 for unlimited (dev only).
 AI_DAILY_QUOTA = _get_int("AI_DAILY_QUOTA", 30)
+
+# ------------------------------------------------------------
+# 攻略按需生成（2026-11-08 新增，见 AI_AUTOMATION_PLAN.md 2.3）
+# ------------------------------------------------------------
+# 全站每天最多新建多少个攻略任务（含失败）。这是防刷的硬上限：
+# 全库待生成赛事有限（当前 17 条符合口径），最坏情况也烧不穿。
+AI_GUIDE_DAILY_LIMIT = _get_int("AI_GUIDE_DAILY_LIMIT", 8)
+# queued + running 的任务上限，超过直接 429（保护线程池与 token 预算）
+AI_GUIDE_QUEUE_MAX = _get_int("AI_GUIDE_QUEUE_MAX", 5)
+# 同一赛事失败后的按需冷却（分钟）；定时任务另有 3 天冷却
+AI_GUIDE_FAIL_COOLDOWN_MIN = _get_int("AI_GUIDE_FAIL_COOLDOWN_MIN", 30)

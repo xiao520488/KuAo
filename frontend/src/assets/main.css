@@ -7,3 +7,62 @@ body,
 #app {
   height: 100%;
 }
+
+/* ------------------------------------------------------------------
+   无封面兜底：按赛事名色相生成的淡彩渐变 + 赛事首字
+   卡片（4:3）与详情页（16:9 大图位）共用，避免灰白破图/空洞占位。
+   色相由 src/utils/coverFallback.js 计算后通过 --cover-hue 传入。
+   ------------------------------------------------------------------ */
+.cover-fallback {
+  position: relative;
+  display: flex;
+  height: 100%;
+  width: 100%;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  background:
+    radial-gradient(120% 120% at 16% 10%, hsl(var(--cover-hue, 210) 88% 98% / 0.95), transparent 58%),
+    linear-gradient(135deg,
+      hsl(var(--cover-hue, 210) 68% 94%),
+      hsl(calc(var(--cover-hue, 210) + 42) 62% 86%));
+}
+
+/* 右下角一层柔光，避免大色块太平 */
+.cover-fallback::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(85% 85% at 82% 92%, rgb(255 255 255 / 0.55), transparent 62%);
+  pointer-events: none;
+}
+
+.cover-fallback__glyph {
+  position: relative;
+  z-index: 1;
+  font-size: clamp(2.5rem, 6vw, 3.4rem);
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: -0.02em;
+  color: hsl(var(--cover-hue, 210) 42% 30% / 0.9);
+  text-shadow: 0 1px 0 rgb(255 255 255 / 0.55);
+}
+
+/* 详情页大图位：字号更大、略降不透明度 */
+.cover-fallback--hero .cover-fallback__glyph {
+  font-size: clamp(4rem, 12vw, 6rem);
+}
+
+/* 暗色模式：同色相压暗，保证与卡片底色协调 */
+.dark .cover-fallback {
+  background:
+    radial-gradient(120% 120% at 16% 10%, hsl(var(--cover-hue, 210) 36% 30% / 0.9), transparent 58%),
+    linear-gradient(135deg,
+      hsl(var(--cover-hue, 210) 32% 22%),
+      hsl(calc(var(--cover-hue, 210) + 42) 28% 16%));
+}
+
+.dark .cover-fallback__glyph {
+  color: hsl(var(--cover-hue, 210) 60% 80% / 0.92);
+  text-shadow: 0 1px 0 rgb(0 0 0 / 0.35);
+}

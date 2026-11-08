@@ -43,6 +43,15 @@ CREATE TABLE IF NOT EXISTS competitions (
     reg_end_month   INTEGER CHECK (reg_end_month   IS NULL OR reg_end_month   BETWEEN 1 AND 12),
     reg_cross_year  INTEGER NOT NULL DEFAULT 0 CHECK (reg_cross_year IN (0, 1)),
     official_url    TEXT,
+    -- 封面图（只存 URL，不下载图片）
+    image_url       TEXT,
+    -- 比赛时间（月份 1-12；与报名时间字段保持同一粒度）
+    contest_start_month INTEGER CHECK (contest_start_month IS NULL OR contest_start_month BETWEEN 1 AND 12),
+    contest_end_month   INTEGER CHECK (contest_end_month   IS NULL OR contest_end_month   BETWEEN 1 AND 12),
+    -- 采集溯源（占位赛事后续由人工/采集器补全）
+    discover_source TEXT,
+    last_checked_at TEXT,
+    is_active       INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
     level           TEXT    NOT NULL DEFAULT 'national'
                             CHECK (level IN ('national', 'provincial')),
     level_label     TEXT,

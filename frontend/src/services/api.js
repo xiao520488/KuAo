@@ -104,8 +104,10 @@ api.interceptors.response.use(
       }
 
       // AI 每日配额用尽：派发全局事件，由 App.vue 里的 Toast 监听并提示
-      // 后端此时返回 { detail: "..." }，文案直接用 detail，不在前端硬编码
-      if (status === 429) {
+      // 后端此时返回 { detail: "..." }，文案直接用 detail，不在前端硬编码。
+      // 攻略生成接口的 429 带的是 { status, reason } 而不是 detail（限流原因
+      // 由详情页按钮就地提示），这里用 detail 是否存在来区分，避免误弹 Toast。
+      if (status === 429 && normalizeDetail(data?.detail)) {
         if (typeof window !== 'undefined') {
           window.dispatchEvent(
             new CustomEvent('ai:quota-exceeded', {
@@ -116,6 +118,13 @@ api.interceptors.response.use(
       }
 
       message = normalizeDetail(data?.detail) || data?.message || `请求失败（${status}）`
+
+      // 把 HTTP 状态码挂到 Error 上：调用方（如攻略生成按钮）需要区分
+      // 401 / 409 / 429，而拦截器统一抛的是 Error 文案。
+      const err = new Error(message)
+      err.status = status
+      err.data = data
+      return Promise.reject(err)
     } else if (error.code === 'ECONNABORTED') {
       message = '请求超时，请检查后端服务是否已启动'
     } else if (error.request) {
@@ -226,6 +235,50 @@ export function getCompetitionDetail(id) {
     }
     return {}
   })
+}
+
+/**
+ * 按需生成参赛攻略（登录 + 异步）
+ * POST /api/competitions/:id/generate_guide
+ *
+ * 后端语义：
+ *   - 200 { status: 'ready', guide_length }        已有攻略，无需生成
+ *   - 202 { status: 'queued'|'running', job_id }   已入队/已在跑（幂等）
+ *   - 409 { status: 'failed', reason: 'cooldown' } 刚失败过，冷却中
+ *   - 429 { status: 'throttled', reason }          预算/队列限流
+ *   - 401                                           未登录（拦截器会清 token）
+ *
+ * @param {string|number} competitionId
+ * @returns {Promise<{status:string, job_id:number|null, poll_after_ms:number}>}
+ */
+export function requestGuide(competitionId) {
+  const cid = normalizeCompetitionId(competitionId)
+  if (cid === null) return Promise.reject(new Error('竞赛 ID 无效'))
+  return api.post(`/competitions/${cid}/generate_guide`).then((data) => ({
+    status: String(data?.status || 'queued'),
+    job_id: data?.job_id ?? null,
+    guide_length: data?.guide_length ?? 0,
+    reason: data?.reason ?? null,
+    poll_after_ms: Number(data?.poll_after_ms) || 0
+  }))
+}
+
+/**
+ * 查询攻略生成状态（登录，只读）
+ * GET /api/competitions/:id/generate_guide
+ * @param {string|number} competitionId
+ * @returns {Promise<{status:string, job_id:number|null, guide_length:number}>}
+ */
+export function getGuideStatus(competitionId) {
+  const cid = normalizeCompetitionId(competitionId)
+  if (cid === null) return Promise.reject(new Error('竞赛 ID 无效'))
+  return api.get(`/competitions/${cid}/generate_guide`).then((data) => ({
+    status: String(data?.status || 'idle'),
+    job_id: data?.job_id ?? null,
+    attempts: Number(data?.attempts) || 0,
+    guide_length: Number(data?.guide_length) || 0,
+    generated_at: data?.generated_at ?? null
+  }))
 }
 
 /**

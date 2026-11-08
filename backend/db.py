@@ -26,11 +26,15 @@
 
 from typing import Optional
 from contextlib import contextmanager
+import difflib
+import json
 import logging
 import os
 import re
 import sqlite3
+import unicodedata
 from datetime import datetime
+from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
@@ -167,6 +171,74 @@ CREATE INDEX IF NOT EXISTS idx_ideas_comp
     ON ideas (competition_id);
 """
 
+# 新赛事候选表（2026-11-08 定，见 CRAWLER_HANDOVER.md 第九节 9.4）。
+# 所有「新赛事发现」先落本表，人工审核后才 INSERT competitions；
+# 发现脚本默认 dry-run，不允许自动写主表。
+CANDIDATES_DDL = """
+CREATE TABLE IF NOT EXISTS competition_candidates (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    source              TEXT    NOT NULL,       -- saikr | edu-roster | edu-notice
+    source_key          TEXT    NOT NULL,       -- saikr:59755 / edu-roster:<name-hash>
+    source_url          TEXT,
+    raw_name            TEXT    NOT NULL,
+    norm_name           TEXT    NOT NULL,
+    official_url        TEXT,
+    image_url           TEXT,
+    level_label         TEXT,
+    category_hint       TEXT,
+    reg_start_month     INTEGER,
+    reg_end_month       INTEGER,
+    reg_cross_year      INTEGER DEFAULT 0,
+    contest_start_month INTEGER,
+    contest_end_month   INTEGER,
+    raw_json            TEXT,
+    status              TEXT    NOT NULL DEFAULT 'pending',  -- pending/approved/rejected/duplicate
+    competition_id      INTEGER,                -- 审核通过后回填 competitions.id
+    created_at          TEXT    DEFAULT (datetime('now', 'localtime')),
+    reviewed_at         TEXT,
+    UNIQUE (source, source_key)
+);
+CREATE INDEX IF NOT EXISTS idx_candidates_status
+    ON competition_candidates (status, id);
+CREATE INDEX IF NOT EXISTS idx_candidates_norm_name
+    ON competition_candidates (norm_name);
+CREATE INDEX IF NOT EXISTS idx_candidates_source
+    ON competition_candidates (source);
+"""
+
+# AI 生成任务表（2026-11-08 定）。
+# 攻略 / 灵感的异步生成都先落本表：唯一部分索引保证「同一赛事同一类任务同时只有 1 个
+# 活跃任务」（原子抢占），同时充当成本审计与失败冷却的依据。
+AI_JOBS_DDL = """
+CREATE TABLE IF NOT EXISTS ai_jobs (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind           TEXT    NOT NULL CHECK (kind IN ('guide', 'inspiration')),
+    competition_id INTEGER NOT NULL REFERENCES competitions (id) ON DELETE CASCADE,
+    trigger        TEXT    NOT NULL DEFAULT 'manual'
+                           CHECK (trigger IN ('on_demand', 'daily', 'manual')),
+    status         TEXT    NOT NULL DEFAULT 'queued'
+                           CHECK (status IN ('queued', 'running', 'done', 'failed', 'skipped')),
+    attempts       INTEGER NOT NULL DEFAULT 0,
+    tokens         INTEGER,
+    requested_by   INTEGER,                 -- 触发用户 id（匿名/定时为空）
+    request_ip     TEXT,                    -- 匿名防刷预留（当前接口强制登录）
+    error          TEXT,                    -- 失败原因（截断 500 字，不回传前端）
+    created_at     TEXT    NOT NULL DEFAULT (datetime('now', 'localtime')),
+    started_at     TEXT,
+    finished_at    TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_ai_jobs_active
+    ON ai_jobs (kind, competition_id) WHERE status IN ('queued', 'running');
+CREATE INDEX IF NOT EXISTS idx_ai_jobs_created
+    ON ai_jobs (kind, created_at);
+CREATE INDEX IF NOT EXISTS idx_ai_jobs_comp
+    ON ai_jobs (competition_id, kind, id);
+"""
+
+# ai_jobs.kind 白名单
+AI_JOB_KINDS = ("guide", "inspiration")
+AI_JOB_ACTIVE_STATUSES = ("queued", "running")
+
 SUMMARY_MAX_LEN = 60
 
 # 迁移新增列：列名 -> DDL 片段（ALTER TABLE ADD COLUMN 用）
@@ -179,6 +251,20 @@ _MIGRATION_COLUMNS = {
     "tech_stack": "TEXT NOT NULL DEFAULT '[]'",
     # 参赛全过程攻略（Markdown），由 generate_guides.py 离线生成回写
     "full_process_guide": "TEXT",
+    # 赛事封面图 URL（只存链接，不落本地图片）
+    "image_url": "TEXT",
+    # 比赛时间月份（与报名月份同粒度）
+    "contest_start_month": "INTEGER",
+    "contest_end_month": "INTEGER",
+    # 采集溯源 / 上下架
+    "discover_source": "TEXT",
+    "last_checked_at": "TEXT",
+    "is_active": "INTEGER NOT NULL DEFAULT 1",
+    # 攻略生成溯源（2026-11-08）：用于前端状态、失效判定与批量重刷
+    "guide_generated_at": "TEXT",
+    "guide_model": "TEXT",
+    "guide_prompt_ver": "TEXT",
+    "guide_input_hash": "TEXT",
 }
 
 # awards 表补列：列名 -> DDL 片段（ALTER TABLE ADD COLUMN 用）
@@ -315,16 +401,21 @@ def _backfill_detail_fields(conn: sqlite3.Connection) -> None:
         pass
 
 
-def init_db() -> None:
+def init_db(db_path: Optional[str] = None) -> None:
     """
     初始化数据库：执行 schema_v2.sql 建表（IF NOT EXISTS，可重复调用），
-    再做补列迁移（competitions + awards）、回填与索引创建。
+    再做补列迁移（competitions + awards）、候选表建表、回填与索引创建。
     不会插入任何业务数据。
+
+    参数:
+        db_path: 可选目标库路径，默认生产库 DB_PATH；测试脚本可传 test_crawl.db。
     """
     with open(SCHEMA_PATH, encoding="utf-8") as f:
         schema_sql = f.read()
-    with get_conn() as conn:
+    with get_conn(db_path) as conn:
         conn.executescript(schema_sql)
+        conn.executescript(CANDIDATES_DDL)
+        conn.executescript(AI_JOBS_DDL)
         _migrate_columns(conn)
         _migrate_award_columns(conn)
         _migrate_insight_columns(conn)
@@ -384,7 +475,9 @@ def update_competition(cid: int, data: dict) -> None:
     allowed = ("name", "category", "reg_start_month", "reg_end_month",
                "reg_cross_year", "official_url", "level", "level_label",
                "sort_order", "intro", "summary", "tech_stack",
-               "full_process_guide")
+               "full_process_guide", "image_url", "contest_start_month",
+               "contest_end_month", "discover_source", "last_checked_at",
+               "is_active")
     fields, values = [], []
     for key in allowed:
         if key in data:
@@ -411,6 +504,30 @@ def update_full_process_guide(cid: int, guide: str) -> None:
             "UPDATE competitions SET full_process_guide = ? WHERE id = ?",
             (guide, cid),
         )
+
+
+def save_generated_guide(cid: int, guide: str, *, model: Optional[str] = None,
+                         prompt_ver: Optional[str] = None,
+                         input_hash: Optional[str] = None,
+                         db_path: Optional[str] = None) -> None:
+    """写入 AI 生成的攻略，并同步更新溯源字段（guide_generated_at 等）。
+
+    只有 `ai_content.generate_guide_for()` 与运维脚本会调用；写之前由调用方
+    负责「已有攻略不覆盖」的判断，本函数只做单条 UPDATE。
+    """
+    cid = int(cid)
+    if not (guide or "").strip():
+        raise ValueError("攻略内容为空，拒绝写入")
+    with get_conn(db_path) as conn:
+        cur = conn.execute(
+            "UPDATE competitions SET full_process_guide = ?, "
+            "guide_generated_at = datetime('now', 'localtime'), "
+            "guide_model = ?, guide_prompt_ver = ?, guide_input_hash = ? "
+            "WHERE id = ?",
+            (guide, model, prompt_ver, input_hash, cid),
+        )
+        if cur.rowcount != 1:
+            raise ValueError("竞赛 ID=%s 不存在，攻略未写入" % cid)
 
 
 def delete_competition(cid: int) -> None:
@@ -638,7 +755,8 @@ def list_competitions_for_guide(only_missing: bool = False) -> list:
                       便于脚本断点续跑、避免重复消耗大模型额度。
     """
     sql = ("SELECT id, name, category, level, level_label, official_url, "
-           "intro, summary, full_process_guide FROM competitions")
+           "intro, summary, full_process_guide, guide_generated_at, "
+           "guide_model, guide_prompt_ver FROM competitions")
     if only_missing:
         sql += (" WHERE full_process_guide IS NULL "
                 "OR TRIM(full_process_guide) = ''")
@@ -874,17 +992,43 @@ def remove_preparation(user_id: int, competition_id: int) -> bool:
         return cur.rowcount > 0
 
 
+# 备赛清单需要、但属于「后续迁移新增」的 competitions 列。
+# 老库缺列时用 NULL 占位，保证 JOIN 查询不整体失败。
+_PREP_EXTRA_COLUMNS = (
+    ("contest_start_month", "c.contest_start_month"),
+    ("contest_end_month", "c.contest_end_month"),
+    ("image_url", "c.image_url"),
+)
+
+
 def list_preparations(user_id: int) -> list:
     """列出用户备赛清单（JOIN 竞赛信息），最新加入的在前。
 
     返回 list[dict]，键：prep_id / competition_id / added_at /
     name / category / level / level_label / reg_start_month / reg_end_month /
-    reg_cross_year / official_url / summary。
+    reg_cross_year / contest_start_month / contest_end_month / image_url /
+    official_url / summary。
+
+    注意：image_url / contest_*_month 供前端卡片封面与「比赛时间」使用，
+    只读查询，不涉及任何写操作。老库尚未迁移这些列时自动降级为 NULL，
+    避免因缺列把备赛清单静默清空。
     """
     with get_conn() as conn:
         try:
+            existing = {row[1] for row in conn.execute("PRAGMA table_info(competitions)")}
+        except sqlite3.OperationalError:
+            return []
+
+        extra = "".join(
+            ", {expr} AS {name}".format(
+                expr=expr if name in existing else "NULL", name=name
+            )
+            for name, expr in _PREP_EXTRA_COLUMNS
+        )
+
+        try:
             rows = conn.execute(
-                """
+                f"""
                 SELECT p.id              AS prep_id,
                        p.competition_id  AS competition_id,
                        p.created_at      AS added_at,
@@ -894,7 +1038,7 @@ def list_preparations(user_id: int) -> list:
                        c.level_label     AS level_label,
                        c.reg_start_month AS reg_start_month,
                        c.reg_end_month   AS reg_end_month,
-                       c.reg_cross_year  AS reg_cross_year,
+                       c.reg_cross_year  AS reg_cross_year{extra},
                        c.official_url    AS official_url,
                        c.summary         AS summary
                 FROM user_preparations p
@@ -969,17 +1113,21 @@ def list_users(limit: int = 100, offset: int = 0) -> list:
 # 这里补齐增、改、删。写入后置 embedding_state='stale'，作为
 # 「SQLite 已更新、待同步 Chroma」的脏标记（与 schema 设计一致）。
 
+# competition_raw / award_grade 是抓取落库需要的字段：
+#   - competition_raw 保存未归并到 competitions 的原始赛事名；
+#   - award_grade 是前端 Award 模型与检索读取的获奖等级，抓取时与 award_level 双写。
 _AWARD_WRITABLE_FIELDS = (
-    "competition_id", "year", "category", "title", "team", "advisor",
-    "award_level", "summary", "tech_stack", "highlights", "detail_md",
-    "source_url", "source_type", "raw_html_path", "confidence",
-    "review_status", "embedding_state", "content_hash",
+    "competition_id", "competition_raw", "year", "category", "title", "team",
+    "advisor", "award_level", "award_grade", "summary", "tech_stack",
+    "highlights", "detail_md", "source_url", "source_type", "raw_html_path",
+    "confidence", "review_status", "embedding_state", "content_hash",
 )
 
 # 这些字段变化会影响向量语义，需要把 embedding_state 标脏
 _AWARD_EMBEDDING_FIELDS = (
     "title", "summary", "highlights", "detail_md", "tech_stack",
-    "category", "award_level", "year", "team", "advisor",
+    "category", "award_level", "award_grade", "competition_raw",
+    "year", "team", "advisor",
 )
 
 
@@ -1474,3 +1622,908 @@ def create_feedback(content: str, user_id: Optional[int] = None) -> int:
             _ensure_feedbacks(conn)
             cur = conn.execute(sql, params)
         return int(cur.lastrowid)
+
+
+# ============================================================
+# 十二、新赛事候选表（competition_candidates）
+# ============================================================
+# 流程：发现脚本 -> competition_candidates(pending) -> 人工审核 ->
+#       审核通过才 INSERT competitions（本模块不自动写主表）。
+# 去重口径见 CRAWLER_HANDOVER.md 9.4：
+#   * 归一化名完全相同 -> 重复；
+#   * 相似度 >= 0.9 且域名相同（或任一方无官网）-> 重复；
+#   * 名称里的地域/赛区标记不同（全国/省/赛区/选拔赛…）-> 不自动合并。
+
+CANDIDATE_STATUSES = ("pending", "approved", "rejected", "duplicate")
+NAME_SIMILARITY_THRESHOLD = 0.90
+
+_CANDIDATE_WRITABLE_FIELDS = (
+    "source", "source_key", "source_url", "raw_name", "norm_name",
+    "official_url", "image_url", "level_label", "category_hint",
+    "reg_start_month", "reg_end_month", "reg_cross_year",
+    "contest_start_month", "contest_end_month", "raw_json",
+    "status", "competition_id",
+)
+
+_MONTH_FIELDS = (
+    "reg_start_month", "reg_end_month",
+    "contest_start_month", "contest_end_month",
+)
+
+# 地域 / 赛区 / 选拔层级标记：这些词不一致时，不因名称相似而合并
+# （避免把「挑战杯」与「挑战杯省赛」、「世界技能大赛」与「…中国选拔赛」合并）。
+_REGION_TOKENS = (
+    "国际", "世界", "全国", "中国", "国家级", "省级", "省赛", "国赛",
+    "区域", "赛区", "华东", "华北", "华南", "华中", "西南", "西北", "东北",
+    "选拔赛", "分赛区", "总决赛",
+)
+
+
+def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
+    row = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)
+    ).fetchone()
+    return row is not None
+
+
+def candidates_table_exists(db_path: Optional[str] = None) -> bool:
+    """候选表是否已建（dry-run 时用于跳过建表，保持只读）。"""
+    with get_conn(db_path) as conn:
+        return _table_exists(conn, "competition_candidates")
+
+
+def ensure_candidates_table(db_path: Optional[str] = None) -> bool:
+    """幂等创建候选表；返回 True 表示本次新建。
+
+    只建候选表，不跑 schema_v2.sql / 补列 / 回填，避免为了候选表
+    在生产库上触发无关写操作。
+    """
+    with get_conn(db_path) as conn:
+        existed = _table_exists(conn, "competition_candidates")
+        if not existed:
+            conn.executescript(CANDIDATES_DDL)
+    return not existed
+
+
+def _month_or_none(value):
+    """1-12 的整数月份；其余（0 / None / '-0001' / 越界）一律 None。"""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        month = int(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+    return month if 1 <= month <= 12 else None
+
+
+def _clean_url(url) -> Optional[str]:
+    """只接受 http(s) 绝对地址；其余返回 None。"""
+    if not isinstance(url, str):
+        return None
+    text = url.strip()
+    if text.startswith("//"):
+        text = "https:" + text
+    if not text:
+        return None
+    parsed = urlparse(text)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        return None
+    return text
+
+
+def normalize_competition_name(name: str) -> str:
+    """赛事名归一化（去序号/年份/届次/标点/空白/大小写），用于去重。
+
+    保留「全国/省赛/赛区/选拔赛」等地域信息，交给 _region_signature 判断，
+    避免把省级赛和全国主赛错误合并。
+    """
+    if not name:
+        return ""
+    text = unicodedata.normalize("NFKC", str(name)).strip()
+    # 去掉营销标签：【最后14天】【5届积累】[推荐] 等（不是赛事正式名称的一部分）
+    text = re.sub(r"【[^】]*】", "", text)
+    text = re.sub(r"\[[^\]]*\]", "", text)
+    text = text.strip()
+    text = re.sub(r"^\s*\d{1,3}\s*[、.．)）]\s*", "", text)
+    text = re.sub(r"^(?:19|20)\d{2}\s*年?\s*", "", text)
+    text = re.sub(r"[（(]\s*(?:19|20)\d{2}\s*年?\s*[）)]", "", text)
+    text = re.sub(
+        r"[（(][^）)]{0,20}第[一二三四五六七八九十百零\d]+届[^）)]{0,20}[）)]",
+        "", text,
+    )
+    text = re.sub(r"第[一二三四五六七八九十百零\d]+届", "", text)
+    text = text.lower()
+    text = re.sub(r"[^0-9a-z\u4e00-\u9fff]+", "", text)
+    return text
+
+
+def _url_host(url: Optional[str]) -> str:
+    if not url:
+        return ""
+    try:
+        host = (urlparse(url).hostname or "").lower()
+    except ValueError:
+        return ""
+    return host[4:] if host.startswith("www.") else host
+
+
+def _same_site(url_a: Optional[str], url_b: Optional[str]) -> bool:
+    """同域或互为子域；任一为空时返回 False（交给调用方决定是否放宽）。"""
+    host_a, host_b = _url_host(url_a), _url_host(url_b)
+    if not host_a or not host_b:
+        return False
+    return (
+        host_a == host_b
+        or host_a.endswith("." + host_b)
+        or host_b.endswith("." + host_a)
+    )
+
+
+def _region_signature(norm_name: str) -> tuple:
+    return tuple(sorted(token for token in _REGION_TOKENS if token in norm_name))
+
+
+def _name_similarity(norm_a: str, norm_b: str) -> float:
+    if not norm_a or not norm_b:
+        return 0.0
+    return difflib.SequenceMatcher(None, norm_a, norm_b).ratio()
+
+
+def find_duplicate_candidate(norm_name: str,
+                             official_url: Optional[str] = None,
+                             db_path: Optional[str] = None,
+                             threshold: float = NAME_SIMILARITY_THRESHOLD,
+                             include_candidates: bool = True,
+                             exclude_candidate_id: Optional[int] = None
+                             ) -> Optional[dict]:
+    """在候选表 + 主表里找同名/高度相似的赛事。
+
+    include_candidates=False 时只查主表（审核入库前用，避免命中候选自身）。
+    返回 None 表示可插入；否则返回:
+        {where: 'competitions'|'candidates', id, name, similarity, reason, source}
+    """
+    if not norm_name:
+        return None
+
+    with get_conn(db_path) as conn:
+        comp_rows = []
+        try:
+            comp_rows = conn.execute(
+                "SELECT id, name, official_url FROM competitions"
+            ).fetchall()
+        except sqlite3.OperationalError:
+            pass
+
+        cand_rows = []
+        if include_candidates and _table_exists(conn, "competition_candidates"):
+            cand_rows = conn.execute(
+                "SELECT id, source, raw_name, norm_name, official_url "
+                "FROM competition_candidates WHERE status <> 'rejected'"
+            ).fetchall()
+
+    pool = []
+    for row in comp_rows:
+        pool.append({
+            "where": "competitions",
+            "id": row["id"],
+            "name": row["name"],
+            "norm": normalize_competition_name(row["name"]),
+            "url": row["official_url"],
+            "source": "competitions",
+        })
+    for row in cand_rows:
+        if (exclude_candidate_id is not None
+                and row["id"] == exclude_candidate_id):
+            continue
+        pool.append({
+            "where": "candidates",
+            "id": row["id"],
+            "name": row["raw_name"],
+            "norm": row["norm_name"] or normalize_competition_name(row["raw_name"]),
+            "url": row["official_url"],
+            "source": row["source"],
+        })
+
+    # 1) 归一化名完全相同：直接判重（主表优先）
+    for item in pool:
+        if item["norm"] and item["norm"] == norm_name:
+            return {
+                "where": item["where"], "id": item["id"], "name": item["name"],
+                "similarity": 1.0, "reason": "归一化名相同",
+                "source": item["source"],
+            }
+
+    # 2) 相似度高 + 地域标记一致 + 官网同域（或任一方无官网）才判重
+    signature = _region_signature(norm_name)
+    best = None
+    for item in pool:
+        item_norm = item["norm"]
+        if not item_norm:
+            continue
+        if _region_signature(item_norm) != signature:
+            continue
+        score = _name_similarity(norm_name, item_norm)
+        if score < threshold:
+            continue
+        if official_url and item["url"] and not _same_site(official_url, item["url"]):
+            continue
+        if best is None or score > best["similarity"]:
+            best = {
+                "where": item["where"], "id": item["id"], "name": item["name"],
+                "similarity": round(score, 4), "reason": "名称高度相似",
+                "source": item["source"],
+            }
+    return best
+
+
+def add_candidate(data: dict, db_path: Optional[str] = None,
+                  check_duplicate: bool = True) -> dict:
+    """插入一条候选赛事（默认先去重）。
+
+    返回:
+        {"status": "inserted", "id": 1, "norm_name": "..."}
+        {"status": "duplicate", "reason": "...", "existing": {...}}
+    """
+    raw_name = str(data.get("raw_name") or data.get("name") or "").strip()
+    if not raw_name:
+        raise ValueError("raw_name 不能为空")
+
+    source = str(data.get("source") or "").strip()
+    source_key = str(data.get("source_key") or "").strip()
+    if not source or not source_key:
+        raise ValueError("source / source_key 必填")
+
+    norm_name = str(data.get("norm_name") or "").strip()
+    if not norm_name:
+        norm_name = normalize_competition_name(raw_name)
+
+    official_url = _clean_url(data.get("official_url"))
+    if check_duplicate:
+        duplicate = find_duplicate_candidate(
+            norm_name, official_url=official_url, db_path=db_path
+        )
+        if duplicate:
+            return {
+                "status": "duplicate",
+                "reason": duplicate["reason"],
+                "existing": duplicate,
+                "norm_name": norm_name,
+            }
+
+    row = {
+        "source": source,
+        "source_key": source_key,
+        "source_url": _clean_url(data.get("source_url")),
+        "raw_name": raw_name,
+        "norm_name": norm_name,
+        "official_url": official_url,
+        "image_url": _clean_url(data.get("image_url")),
+        "level_label": data.get("level_label") or None,
+        "category_hint": data.get("category_hint") or None,
+        "reg_cross_year": 1 if str(data.get("reg_cross_year") or 0).strip() in
+                               ("1", "true", "True") else 0,
+        "raw_json": data.get("raw_json"),
+        "status": str(data.get("status") or "pending").strip(),
+        "competition_id": data.get("competition_id"),
+    }
+    if row["status"] not in CANDIDATE_STATUSES:
+        raise ValueError("非法候选状态：%s" % row["status"])
+    for field in _MONTH_FIELDS:
+        row[field] = _month_or_none(data.get(field))
+
+    if row["raw_json"] is not None and not isinstance(row["raw_json"], str):
+        row["raw_json"] = json.dumps(row["raw_json"], ensure_ascii=False)
+
+    cols = [field for field in _CANDIDATE_WRITABLE_FIELDS if field in row]
+    placeholders = ", ".join("?" for _ in cols)
+    sql = "INSERT INTO competition_candidates (%s) VALUES (%s)" % (
+        ", ".join(cols), placeholders
+    )
+
+    try:
+        with get_conn(db_path) as conn:
+            if not _table_exists(conn, "competition_candidates"):
+                conn.executescript(CANDIDATES_DDL)
+            cur = conn.execute(sql, [row[col] for col in cols])
+            new_id = int(cur.lastrowid)
+    except sqlite3.IntegrityError:
+        return {
+            "status": "duplicate",
+            "reason": "source_key 已存在",
+            "existing": {"where": "candidates", "source": source},
+            "norm_name": norm_name,
+        }
+
+    return {"status": "inserted", "id": new_id, "norm_name": norm_name}
+
+
+_CANDIDATE_SELECT_COLUMNS = (
+    "id, source, source_key, source_url, raw_name, norm_name, official_url, "
+    "image_url, level_label, category_hint, reg_start_month, reg_end_month, "
+    "reg_cross_year, contest_start_month, contest_end_month, status, "
+    "competition_id, created_at, reviewed_at"
+)
+
+
+def query_candidates(status: Optional[str] = None, source: Optional[str] = None,
+                     limit: int = 100, offset: int = 0,
+                     db_path: Optional[str] = None) -> list:
+    """按状态/来源查询候选（不含 raw_json，避免刷屏）。"""
+    if not candidates_table_exists(db_path):
+        return []
+    where, params = [], []
+    if status:
+        where.append("status = ?")
+        params.append(status)
+    if source:
+        where.append("source = ?")
+        params.append(source)
+    clause = (" WHERE " + " AND ".join(where)) if where else ""
+    limit = max(1, min(int(limit or 100), 500))
+    offset = max(0, int(offset or 0))
+    sql = ("SELECT %s FROM competition_candidates%s "
+           "ORDER BY id DESC LIMIT ? OFFSET ?") % (_CANDIDATE_SELECT_COLUMNS, clause)
+    with get_conn(db_path) as conn:
+        rows = conn.execute(sql, params + [limit, offset]).fetchall()
+    return [dict(row) for row in rows]
+
+
+def get_candidate(candidate_id: int,
+                  db_path: Optional[str] = None) -> Optional[dict]:
+    """读取单条候选（含 raw_json），审核/排查用。"""
+    if not candidates_table_exists(db_path):
+        return None
+    with get_conn(db_path) as conn:
+        row = conn.execute(
+            "SELECT * FROM competition_candidates WHERE id = ?", (candidate_id,)
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def count_candidates(status: Optional[str] = None,
+                     db_path: Optional[str] = None) -> int:
+    if not candidates_table_exists(db_path):
+        return 0
+    sql = "SELECT COUNT(*) FROM competition_candidates"
+    params = []
+    if status:
+        sql += " WHERE status = ?"
+        params.append(status)
+    with get_conn(db_path) as conn:
+        return int(conn.execute(sql, params).fetchone()[0])
+
+
+def candidate_stats(db_path: Optional[str] = None) -> dict:
+    """候选表总览：总数 / 待审 / 按状态 / 按来源。"""
+    stats = {
+        "total": 0, "pending": 0,
+        "by_status": {}, "by_source": {}, "pending_by_source": {},
+    }
+    if not candidates_table_exists(db_path):
+        return stats
+    with get_conn(db_path) as conn:
+        rows = conn.execute(
+            "SELECT source, status, COUNT(*) AS n "
+            "FROM competition_candidates GROUP BY source, status"
+        ).fetchall()
+    for row in rows:
+        count = int(row["n"])
+        status, source = row["status"], row["source"]
+        stats["total"] += count
+        stats["by_status"][status] = stats["by_status"].get(status, 0) + count
+        stats["by_source"][source] = stats["by_source"].get(source, 0) + count
+        if status == "pending":
+            stats["pending"] += count
+            stats["pending_by_source"][source] = (
+                stats["pending_by_source"].get(source, 0) + count
+            )
+    return stats
+
+
+def update_candidate_status(candidate_id: int, status: str,
+                            competition_id: Optional[int] = None,
+                            db_path: Optional[str] = None) -> bool:
+    """更新审核状态（approve/reject 入口用）；返回是否命中记录。"""
+    if status not in CANDIDATE_STATUSES:
+        raise ValueError("非法候选状态：%s" % status)
+    if not candidates_table_exists(db_path):
+        return False
+    with get_conn(db_path) as conn:
+        cur = conn.execute(
+            "UPDATE competition_candidates "
+            "SET status = ?, competition_id = COALESCE(?, competition_id), "
+            "reviewed_at = ? WHERE id = ?",
+            (status, competition_id, now_str(), candidate_id),
+        )
+        return cur.rowcount > 0
+
+
+def promote_candidate(candidate_id: int, data: dict,
+                      db_path: Optional[str] = None) -> int:
+    """审核通过：把候选正式插入 competitions，并在同一事务里标记 approved。
+
+    参数 data 由审核 CLI 组装（名称/类别/级别/月份/官网/封面等）；
+    候选状态不是 pending 时拒绝（防止重复提拔）。返回新 competitions.id。
+    """
+    name = str(data.get("name") or "").strip()
+    if not name:
+        raise ValueError("候选名称为空，不能入主表")
+    level = data.get("level") or "national"
+    if level not in ("national", "provincial"):
+        level = "national"
+
+    params = (
+        name,
+        data.get("category") or "待确认",
+        _month_or_none(data.get("reg_start_month")),
+        _month_or_none(data.get("reg_end_month")),
+        1 if data.get("reg_cross_year") else 0,
+        _clean_url(data.get("official_url")),
+        _clean_url(data.get("image_url")),
+        _month_or_none(data.get("contest_start_month")),
+        _month_or_none(data.get("contest_end_month")),
+        data.get("discover_source"),
+        data.get("last_checked_at") or now_str(),
+        1 if data.get("is_active", 1) else 0,
+        level,
+        data.get("level_label"),
+        data.get("sort_order", 9999),
+        data.get("tech_stack") or "[]",
+    )
+
+    with get_conn(db_path) as conn:
+        row = conn.execute(
+            "SELECT id, status FROM competition_candidates WHERE id = ?",
+            (candidate_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError("候选不存在：%s" % candidate_id)
+        if row["status"] != "pending":
+            raise ValueError("候选 %s 状态为 %s，不能重复提拔" % (
+                candidate_id, row["status"]))
+
+        cur = conn.execute(
+            """INSERT INTO competitions
+               (name, category, reg_start_month, reg_end_month, reg_cross_year,
+                official_url, image_url, contest_start_month, contest_end_month,
+                discover_source, last_checked_at, is_active, level, level_label,
+                sort_order, tech_stack)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            params,
+        )
+        competition_id = int(cur.lastrowid)
+
+        updated = conn.execute(
+            "UPDATE competition_candidates "
+            "SET status = 'approved', competition_id = ?, reviewed_at = ? "
+            "WHERE id = ? AND status = 'pending'",
+            (competition_id, now_str(), candidate_id),
+        )
+        if updated.rowcount != 1:
+            # 同一事务内回滚，避免「主表插了、候选没标记」的脏状态
+            raise RuntimeError("候选状态更新失败，已回滚")
+        return competition_id
+
+# ============================================================
+# 十三、ai_jobs：AI 生成任务（攻略 / 灵感）
+# ============================================================
+# 设计见 AI_AUTOMATION_PLAN.md 第 2.2 节：
+#   * 唯一部分索引 ux_ai_jobs_active 负责「同赛事同类任务同时只有 1 个活跃」；
+#   * claim 采用 INSERT OR IGNORE + rowcount 判定，天然并发安全；
+#   * 每次 claim 顺手回收 15 分钟未完成的 running（进程被杀/重启的僵尸）；
+#   * tokens 落库用于成本对账，error 截断 500 字且不回传前端。
+
+_REAP_STALE_AI_JOBS_SQL = """
+UPDATE ai_jobs
+   SET status = 'failed',
+       finished_at = datetime('now', 'localtime'),
+       error = 'stale: 任务超过 15 分钟未完成（进程退出/重启）'
+ WHERE status = 'running'
+   AND (
+        started_at IS NULL
+        OR datetime(started_at) < datetime('now', 'localtime', '-15 minutes')
+   )
+"""
+
+
+def ai_jobs_table_exists(db_path: Optional[str] = None) -> bool:
+    """候选老库可能还没建 ai_jobs；所有读取方都要先能容忍它不存在。"""
+    with get_conn(db_path) as conn:
+        return _table_exists(conn, "ai_jobs")
+
+
+def ensure_ai_jobs_table(db_path: Optional[str] = None) -> bool:
+    """幂等建 ai_jobs；返回 True 表示本次新建。"""
+    with get_conn(db_path) as conn:
+        existed = _table_exists(conn, "ai_jobs")
+        conn.executescript(AI_JOBS_DDL)
+    return not existed
+
+
+def _reap_stale_ai_jobs(conn: sqlite3.Connection) -> int:
+    cur = conn.execute(_REAP_STALE_AI_JOBS_SQL)
+    return int(cur.rowcount or 0)
+
+
+def claim_ai_job(kind: str, competition_id: int, *,
+                 trigger: str = "manual",
+                 requested_by: Optional[int] = None,
+                 request_ip: Optional[str] = None,
+                 cooldown_minutes: int = 0,
+                 allow_existing: bool = False,
+                 db_path: Optional[str] = None) -> dict:
+    """原子抢占一个 AI 任务。
+
+    返回::
+
+        {"claimed": True,  "job_id": 12, "reason": None}
+        {"claimed": False, "job_id": None, "reason": "active"}     # 已有活跃任务
+        {"claimed": False, "job_id": None, "reason": "exists"}     # 攻略已存在
+        {"claimed": False, "job_id": None, "reason": "cooldown",   # 失败冷却中
+         "retry_after_sec": 900}
+
+    `cooldown_minutes` 只对「最近一次任务是 failed」生效；每天定时任务用 3 天，
+    按需接口用短冷却（默认 30 分钟），避免用户狂点。
+
+    为什么用 ``BEGIN IMMEDIATE``：
+        「先读攻略是否为空，再插入任务」如果是普通延迟事务，两条语句之间
+        另一个线程可能刚好写完攻略并提交，于是会多插入一个注定被跳过的任务
+        （实测竞态）。这里先拿写锁，再读再插，保证判断与插入是原子的。
+    """
+    if kind not in AI_JOB_KINDS:
+        raise ValueError("kind 必须是 %s 之一，收到: %r" % (AI_JOB_KINDS, kind))
+    if trigger not in ("on_demand", "daily", "manual"):
+        raise ValueError("trigger 非法: %r" % (trigger,))
+    cid = _check_competition_id(competition_id)
+
+    with get_conn(db_path) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        _reap_stale_ai_jobs(conn)
+
+        if kind == "guide" and not allow_existing:
+            row = conn.execute(
+                "SELECT TRIM(COALESCE(full_process_guide, '')) AS guide "
+                "FROM competitions WHERE id = ?",
+                (cid,),
+            ).fetchone()
+            if row is None:
+                raise ValueError("竞赛 ID=%s 不存在" % cid)
+            if row["guide"]:
+                return {"claimed": False, "job_id": None, "reason": "exists"}
+
+        if cooldown_minutes and cooldown_minutes > 0:
+            last = conn.execute(
+                "SELECT id, status, finished_at FROM ai_jobs "
+                "WHERE kind = ? AND competition_id = ? ORDER BY id DESC LIMIT 1",
+                (kind, cid),
+            ).fetchone()
+            if (last is not None and last["status"] == "failed"
+                    and last["finished_at"]):
+                try:
+                    finished = datetime.strptime(
+                        last["finished_at"], "%Y-%m-%d %H:%M:%S"
+                    )
+                except (TypeError, ValueError):
+                    finished = None
+                if finished is not None:
+                    elapsed = (datetime.now() - finished).total_seconds()
+                    cooldown = cooldown_minutes * 60
+                    if elapsed < cooldown:
+                        return {
+                            "claimed": False,
+                            "job_id": None,
+                            "reason": "cooldown",
+                            "retry_after_sec": int(cooldown - elapsed),
+                        }
+
+        cur = conn.execute(
+            "INSERT OR IGNORE INTO ai_jobs "
+            "(kind, competition_id, trigger, status, requested_by, request_ip) "
+            "VALUES (?, ?, ?, 'queued', ?, ?)",
+            (kind, cid, trigger, requested_by, request_ip),
+        )
+        if cur.rowcount == 1:
+            return {"claimed": True, "job_id": int(cur.lastrowid), "reason": None}
+
+        active = conn.execute(
+            "SELECT id FROM ai_jobs WHERE kind = ? AND competition_id = ? "
+            "AND status IN ('queued', 'running') ORDER BY id ASC LIMIT 1",
+            (kind, cid),
+        ).fetchone()
+
+    return {
+        "claimed": False,
+        "job_id": int(active["id"]) if active else None,
+        "reason": "active",
+    }
+
+
+def start_ai_job(job_id: int, db_path: Optional[str] = None) -> bool:
+    """queued -> running（幂等：只有 queued 能转，返回是否抢到）。"""
+    with get_conn(db_path) as conn:
+        cur = conn.execute(
+            "UPDATE ai_jobs SET status = 'running', "
+            "started_at = datetime('now', 'localtime'), attempts = attempts + 1 "
+            "WHERE id = ? AND status = 'queued'",
+            (int(job_id),),
+        )
+        return cur.rowcount == 1
+
+
+def finish_ai_job(job_id: int, tokens: Optional[int] = None,
+                  db_path: Optional[str] = None) -> None:
+    with get_conn(db_path) as conn:
+        conn.execute(
+            "UPDATE ai_jobs SET status = 'done', "
+            "finished_at = datetime('now', 'localtime'), "
+            "tokens = COALESCE(?, tokens) WHERE id = ?",
+            (tokens, int(job_id)),
+        )
+
+
+def fail_ai_job(job_id: int, error: str, tokens: Optional[int] = None,
+                db_path: Optional[str] = None) -> None:
+    message = (error or "未知错误").strip()
+    if len(message) > 500:
+        message = message[:500] + "…"
+    with get_conn(db_path) as conn:
+        conn.execute(
+            "UPDATE ai_jobs SET status = 'failed', error = ?, "
+            "finished_at = datetime('now', 'localtime'), "
+            "tokens = COALESCE(?, tokens) WHERE id = ?",
+            (message, tokens, int(job_id)),
+        )
+
+
+def skip_ai_job(job_id: int, reason: str = "",
+                db_path: Optional[str] = None) -> None:
+    """任务被判定为无需执行（如攻略已存在）：记 skipped，不消耗预算重试。"""
+    with get_conn(db_path) as conn:
+        conn.execute(
+            "UPDATE ai_jobs SET status = 'skipped', error = ?, "
+            "finished_at = datetime('now', 'localtime') WHERE id = ?",
+            ((reason or "")[:500] or None, int(job_id)),
+        )
+
+
+def get_latest_ai_job(kind: str, competition_id: int,
+                      db_path: Optional[str] = None) -> Optional[dict]:
+    with get_conn(db_path) as conn:
+        if not _table_exists(conn, "ai_jobs"):
+            return None
+        row = conn.execute(
+            "SELECT * FROM ai_jobs WHERE kind = ? AND competition_id = ? "
+            "ORDER BY id DESC LIMIT 1",
+            (kind, int(competition_id)),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def count_ai_jobs_today(kind: Optional[str] = None,
+                        db_path: Optional[str] = None) -> int:
+    """当天已创建的任务数（含失败/跳过），用作全站每日预算。"""
+    with get_conn(db_path) as conn:
+        if not _table_exists(conn, "ai_jobs"):
+            return 0
+        sql = ("SELECT COUNT(*) AS n FROM ai_jobs "
+               "WHERE created_at >= date('now', 'localtime')")
+        params: tuple = ()
+        if kind:
+            sql += " AND kind = ?"
+            params = (kind,)
+        row = conn.execute(sql, params).fetchone()
+    return int(row["n"]) if row else 0
+
+
+def count_active_ai_jobs(kind: Optional[str] = None,
+                         db_path: Optional[str] = None) -> int:
+    with get_conn(db_path) as conn:
+        if not _table_exists(conn, "ai_jobs"):
+            return 0
+        sql = ("SELECT COUNT(*) AS n FROM ai_jobs "
+               "WHERE status IN ('queued', 'running')")
+        params: tuple = ()
+        if kind:
+            sql += " AND kind = ?"
+            params = (kind,)
+        row = conn.execute(sql, params).fetchone()
+    return int(row["n"]) if row else 0
+
+
+def select_guide_candidates(limit: int = 4, *, min_awards: int = 0,
+                            cooldown_days: int = 3,
+                            include_provincial: bool = False,
+                            db_path: Optional[str] = None) -> list:
+    """按「热门」口径挑选待生成攻略的赛事（daily_ai_worker 与 dry-run 共用）。
+
+    口径（2026-11-08 定，见方案 2.4）：
+      1. 上架、攻略为空；
+      2. 国家级 + 有官网（可核验、可导流）；`include_provincial` 时放宽级别；
+      3. 排除活跃任务与 cooldown_days 内失败过的赛事（避免天天撞同一条）；
+      4. 排序：获奖作品数 DESC -> sort_order（NULL 最后）-> id ASC。
+
+    返回行含 `awards_count`，供灵感生成判断是否够料。
+    """
+    limit = max(1, int(limit))
+    cooldown_days = max(0, int(cooldown_days))
+    sql = [
+        "SELECT c.id, c.name, c.category, c.level, c.official_url, c.sort_order, "
+        "(SELECT COUNT(*) FROM awards a WHERE a.competition_id = c.id) AS awards_count "
+        "FROM competitions c "
+        "WHERE c.is_active = 1 "
+        "AND TRIM(COALESCE(c.full_process_guide, '')) = ''"
+    ]
+    params: list = []
+    if not include_provincial:
+        sql.append("AND c.level = 'national'")
+    sql.append("AND TRIM(COALESCE(c.official_url, '')) <> ''")
+
+    with get_conn(db_path) as conn:
+        has_jobs = _table_exists(conn, "ai_jobs")
+        if has_jobs:
+            sql.append(
+                "AND NOT EXISTS (SELECT 1 FROM ai_jobs j "
+                "WHERE j.kind = 'guide' AND j.competition_id = c.id "
+                "AND (j.status IN ('queued', 'running') "
+                "OR (j.status = 'failed' "
+                "AND datetime(j.finished_at) > datetime('now', 'localtime', ?))))"
+            )
+            params.append("-%d days" % cooldown_days)
+        sql.append(
+            "ORDER BY awards_count DESC, "
+            "CASE WHEN c.sort_order IS NULL THEN 1 ELSE 0 END, "
+            "c.sort_order ASC, c.id ASC LIMIT ?"
+        )
+        params.append(limit)
+        rows = conn.execute(" ".join(sql), params).fetchall()
+
+    out = []
+    for r in rows:
+        item = dict(r)
+        if int(item.get("awards_count") or 0) < int(min_awards):
+            continue
+        out.append(item)
+    return out
+
+
+def get_guide_state(competition_id: int) -> Optional[dict]:
+    """返回某赛事攻略的对外状态（详情接口 / 前端按钮共用）。
+
+    status: idle | queued | running | ready | failed
+    """
+    cid = int(competition_id)
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT id, full_process_guide, guide_generated_at "
+            "FROM competitions WHERE id = ?",
+            (cid,),
+        ).fetchone()
+        if row is None:
+            return None
+        job = None
+        if _table_exists(conn, "ai_jobs"):
+            job = conn.execute(
+                "SELECT * FROM ai_jobs WHERE kind = 'guide' AND competition_id = ? "
+                "ORDER BY id DESC LIMIT 1",
+                (cid,),
+            ).fetchone()
+
+    guide = (row["full_process_guide"] or "").strip()
+    if job is not None and job["status"] in AI_JOB_ACTIVE_STATUSES:
+        status = job["status"]
+    elif guide:
+        status = "ready"
+    elif job is not None and job["status"] == "failed":
+        status = "failed"
+    else:
+        status = "idle"
+
+    return {
+        "status": status,
+        "job_id": int(job["id"]) if job is not None else None,
+        "attempts": int(job["attempts"]) if job is not None else 0,
+        "finished_at": job["finished_at"] if job is not None else None,
+        "generated_at": row["guide_generated_at"],
+        "guide_length": len(guide),
+    }
+
+
+def count_orphan_ai_content(db_path: Optional[str] = None) -> dict:
+    """统计 competition_id 为空或指向不存在赛事的 insights / ideas。
+
+    这些是早期脚本在赛事先行删除/未归并时留下的孤儿数据，按赛事隔离的接口
+    永远读不到，只占空间。清理见 cleanup_orphan_ai.py。
+    """
+    with get_conn(db_path) as conn:
+        out = {}
+        for table in ("insights", "ideas"):
+            row = conn.execute(
+                "SELECT COUNT(*) AS n FROM %s WHERE competition_id IS NULL "
+                "OR competition_id NOT IN (SELECT id FROM competitions)" % table
+            ).fetchone()
+            out[table] = int(row["n"]) if row else 0
+    return out
+
+
+def delete_orphan_ai_content(db_path: Optional[str] = None) -> dict:
+    """删除孤儿 insights / ideas，返回各表删除行数（调用方负责备份）。"""
+    with get_conn(db_path) as conn:
+        out = {}
+        for table in ("insights", "ideas"):
+            cur = conn.execute(
+                "DELETE FROM %s WHERE competition_id IS NULL "
+                "OR competition_id NOT IN (SELECT id FROM competitions)" % table
+            )
+            out[table] = int(cur.rowcount or 0)
+    return out
+
+
+def guide_coverage(db_path: Optional[str] = None) -> dict:
+    """攻略覆盖率（报告 / 体检用）。"""
+    with get_conn(db_path) as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) AS total, "
+            "SUM(CASE WHEN TRIM(COALESCE(full_process_guide, '')) <> '' "
+            "THEN 1 ELSE 0 END) AS filled FROM competitions"
+        ).fetchone()
+    total = int(row["total"] or 0)
+    filled = int(row["filled"] or 0)
+    return {"total": total, "filled": filled, "missing": total - filled}
+
+def select_inspiration_candidates(limit: int = 2, *, min_awards: int = 3,
+                                  cooldown_days: int = 3,
+                                  include_provincial: bool = False,
+                                  db_path: Optional[str] = None) -> list:
+    """挑选待生成灵感的赛事（有足够获奖作品且 insights/ideas 未齐）。
+
+    与 select_guide_candidates 同一套「热门」排序，但额外要求：
+      * 该赛事获奖作品数 >= min_awards（否则模型只能空想，analyzer 也会直接退出）；
+      * insights 不足 3 条或 ideas 不足 4 条（未生成完整才值得再花 5 次调用）；
+      * 排除 ai_jobs 中活跃 / 冷却期内的 inspiration 任务。
+
+    返回行含 awards_count / insights_count / ideas_count。
+    """
+    limit = max(1, int(limit))
+    cooldown_days = max(0, int(cooldown_days))
+    sql = [
+        "SELECT c.id, c.name, c.category, c.level, c.official_url, c.sort_order, "
+        "(SELECT COUNT(*) FROM awards a WHERE a.competition_id = c.id) AS awards_count, "
+        "(SELECT COUNT(*) FROM insights s WHERE s.competition_id = c.id) AS insights_count, "
+        "(SELECT COUNT(*) FROM ideas i WHERE i.competition_id = c.id) AS ideas_count "
+        "FROM competitions c "
+        "WHERE c.is_active = 1"
+    ]
+    params: list = []
+    if not include_provincial:
+        sql.append("AND c.level = 'national'")
+    sql.append("AND TRIM(COALESCE(c.official_url, '')) <> ''")
+
+    with get_conn(db_path) as conn:
+        has_jobs = _table_exists(conn, "ai_jobs")
+        if has_jobs:
+            sql.append(
+                "AND NOT EXISTS (SELECT 1 FROM ai_jobs j "
+                "WHERE j.kind = 'inspiration' AND j.competition_id = c.id "
+                "AND (j.status IN ('queued', 'running') "
+                "OR (j.status = 'failed' "
+                "AND datetime(j.finished_at) > datetime('now', 'localtime', ?))))"
+            )
+            params.append("-%d days" % cooldown_days)
+        sql.append(
+            "ORDER BY awards_count DESC, "
+            "CASE WHEN c.sort_order IS NULL THEN 1 ELSE 0 END, "
+            "c.sort_order ASC, c.id ASC"
+        )
+        rows = conn.execute(" ".join(sql), params).fetchall()
+
+    out = []
+    for r in rows:
+        item = dict(r)
+        if int(item.get("awards_count") or 0) < int(min_awards):
+            continue
+        if int(item.get("insights_count") or 0) >= 3 and int(item.get("ideas_count") or 0) >= 4:
+            continue
+        out.append(item)
+        if len(out) >= limit:
+            break
+    return out

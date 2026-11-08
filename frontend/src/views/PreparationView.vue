@@ -50,6 +50,30 @@ function formatSignUp(item) {
   return '待公布'
 }
 
+// 比赛时间：后端只给 contest_start_month / contest_end_month（1-12 的月份）
+// 同月 -> “11 月”；跨月 -> “10 月 - 11 月”；跨年 -> “12 月 - 次年 1 月”
+function formatContest(item) {
+  const start = toMonth(item.contest_start_month)
+  const end = toMonth(item.contest_end_month)
+
+  if (start && end) {
+    if (end < start) return `${start} 月 - 次年 ${end} 月`
+    if (start === end) return `${start} 月`
+    return `${start} 月 - ${end} 月`
+  }
+  if (start) return `${start} 月`
+  if (end) return `${end} 月`
+  return '待定'
+}
+
+// 封面图：后端 API 的 image（由 DB 的 image_url 映射而来）
+// 只接受 http(s) 绝对地址，避免相对路径 / 协议相对地址 / 空串打坏卡片占位图
+function resolveImage(item) {
+  const raw = item.image ?? item.cover ?? item.image_url ?? ''
+  const url = typeof raw === 'string' ? raw.trim() : ''
+  return /^https?:\/\//i.test(url) ? url : ''
+}
+
 const LEVEL_FALLBACK = {
   national: '国家级',
   provincial: '省级',
@@ -66,9 +90,9 @@ function mapToPrepCard(item) {
     title: item.name || '未命名竞赛',
     level: item.level_label || LEVEL_FALLBACK[item.level] || item.level || '',
     category: item.category || '',
-    image: item.image ?? item.cover ?? '',
+    image: resolveImage(item),
     signUpTime: formatSignUp(item),
-    contestTime: '待定'
+    contestTime: formatContest(item)
   }
 }
 

@@ -2,7 +2,18 @@ venv/
 __pycache__/
 *.pyc
 *.db
+# 生产库写前自动备份（competitions.db.bak-<时间戳>），体积大且属本地产物
+*.db.bak
+*.db.bak-*
+*.db-wal
+*.db-shm
 *.log
+
+# 运行期产物 / 一次性脚本 / 截图 / 报告（本地产物，不进版本库）
+workspace/
+.pytest_cache/
+.ruff_cache/
+
 .env
 agent2.py
 node_modules/
