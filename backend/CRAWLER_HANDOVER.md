@@ -12,6 +12,12 @@
 
 **详情页卡片版已构建完成；云端前端发布目录问题已定位（实际 root = `/var/www/html`），下一步核心任务见下方【当前任务】。**
 
+> **【2026-11-08 20:26 现场问题｜云端后端代码未同步】**
+>
+> 本地回填并覆盖云端 DB 后，前端仍不显示详情三字段。已核对 commit 时间线：云端部署的是 `81e7686`（13:32，上云边界测试/部署手册），**早于**详情三列的 `077dce0`（19:56）和 AI 提纯的 `d685432`（20:14）。因此云端 `competitions.db` 虽已有三列，但云端 `routers/competitions.py` / `models/schemas.py` / `db.py` 仍是旧版，详情接口不会返回 `participants/content_scope/exam_schedule`。
+>
+> **修复：** 在服务器 `/root/KuAo` 拉取并切到 `d685432`（或上传 `routers/competitions.py`、`models/schemas.py`、`db.py` 等对应文件），然后 `systemctl restart kuao-backend`；前端 `dist` 无需重建。
+
 > **【当前任务｜2026-11-08 20:05】赛氪详情补充器已完成代码重构，等待生产库同步**
 >
 > **已完成：** `enrich_saikr_details.py` 支持 `--backfill` / `--daily-update`；抓取后必须先调一次 `llm.chat_json` 提炼为「1. 短句」列表（每条 ≤50 字），AI 失败/疑似照抄保留 NULL；`review_candidates.py --approve` 成功后自动补详情。
