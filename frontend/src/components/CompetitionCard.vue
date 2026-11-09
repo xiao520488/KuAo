@@ -13,6 +13,8 @@ const props = defineProps({
   id: { type: [String, Number], default: null },
   title: { type: String, default: '竞赛名称' },
   image: { type: String, default: '' },
+  // AI 提取的 2 字赛事简称：仅在没有真实封面 / 图片加载失败时展示
+  shortName: { type: String, default: '' },
   // 报名时间
   signUpTime: { type: String, default: '待公布' },
   // 比赛时间
@@ -36,10 +38,11 @@ const router = useRouter()
 // 卡片标签统一展示“大类 · 细分”，原始长分类作为 title 提示
 const categoryLabel = computed(() => categoryTag(props.category))
 
-// 封面兜底：无图 / 图片加载失败时，用名称哈希色相 + 首字占位（布局尺寸不变）
+// 封面兜底：无图 / 图片加载失败时，用名称哈希色相 + 2 字简称占位（布局尺寸不变）
+// 真实图片永远优先：只有 image 为空或 @error 后才渲染 fallback。
 const imageFailed = ref(false)
 const showImage = computed(() => Boolean(props.image) && !imageFailed.value)
-const fallback = computed(() => coverFallback(props.title))
+const fallback = computed(() => coverFallback(props.title, props.shortName))
 
 function onImageError() {
   imageFailed.value = true
@@ -146,14 +149,17 @@ async function removeOnly() {
           class="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
           @error="onImageError"
         />
-        <!-- 无图 / 加载失败：按名称哈希生成淡彩渐变 + 赛事首字 -->
+        <!-- 无图 / 加载失败：按名称哈希生成淡彩渐变 + 2 字简称（无简称则首字） -->
         <div
           v-else
           class="cover-fallback"
           :style="{ '--cover-hue': fallback.hue }"
           aria-hidden="true"
         >
-          <span class="cover-fallback__glyph">{{ fallback.glyph }}</span>
+          <span
+            class="cover-fallback__glyph"
+            :class="{ 'cover-fallback__glyph--short': fallback.isShortName }"
+          >{{ fallback.glyph }}</span>
         </div>
       </div>
     </div>

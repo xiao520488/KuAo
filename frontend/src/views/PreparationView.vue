@@ -91,6 +91,7 @@ function mapToPrepCard(item) {
     level: item.level_label || LEVEL_FALLBACK[item.level] || item.level || '',
     category: item.category || '',
     image: resolveImage(item),
+    shortName: item.short_name || '',
     signUpTime: formatSignUp(item),
     contestTime: formatContest(item)
   }

@@ -58,9 +58,24 @@ body,
   text-shadow: 0 1px 0 rgb(255 255 255 / 0.55);
 }
 
+/* 2 字简称：字号略收、拉开字间距，两个字在色块中心视觉居中且不拥挤。
+   margin-right 抵消最后一个字后的字间距，避免整体重心偏左。 */
+.cover-fallback__glyph--short {
+  font-size: clamp(1.8rem, 4.5vw, 2.35rem);
+  letter-spacing: 0.14em;
+  margin-right: -0.14em;
+  white-space: nowrap;
+}
+
 /* 详情页大图位：字号更大、略降不透明度 */
 .cover-fallback--hero .cover-fallback__glyph {
   font-size: clamp(4rem, 12vw, 6rem);
+}
+
+.cover-fallback--hero .cover-fallback__glyph--short {
+  font-size: clamp(3rem, 8vw, 4.5rem);
+  letter-spacing: 0.18em;
+  margin-right: -0.18em;
 }
 
 /* 暗色模式：同色相压暗，保证与卡片底色协调 */

@@ -7,7 +7,8 @@ migrate_production.py —— 生产库体检 + 备份 + 补列迁移（先备份
 把 backend/competitions.db（生产库）迁移到最新表结构：
     1) 自动备份 -> competitions.db.bak（WAL 安全，用 SQLite backup API）；
     2) 校验备份可用（integrity_check + 行数比对）；
-    3) 备份通过后才调用 db.init_db() 幂等补列（image_url / contest_*_month 等）；
+    3) 备份通过后才调用 db.init_db() 幂等补列（image_url / short_name /
+       contest_*_month 等）；
     4) 迁移后复检：新列是否齐全、行数是否保持、SHA-256 变化、备份文件路径。
 
 安全设计（与 CRAWLER_HANDOVER.md 第四节红线对齐）
@@ -54,7 +55,7 @@ DEFAULT_BACKUP_PATH = os.path.join(BASE_DIR, "competitions.db.bak")
 # 2026-11-08 追加：攻略生成溯源 4 列（配合 ai_jobs 表，见 AI_AUTOMATION_PLAN.md）
 # 2026-11-08 追加：赛氪详情补充 3 列（enrich_saikr_details.py 写入）
 TARGET_COLUMNS = (
-    "image_url", "contest_start_month", "contest_end_month",
+    "image_url", "short_name", "contest_start_month", "contest_end_month",
     "guide_generated_at", "guide_model", "guide_prompt_ver", "guide_input_hash",
     "participants", "content_scope", "exam_schedule",
 )

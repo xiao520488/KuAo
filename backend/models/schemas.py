@@ -47,6 +47,13 @@ class Competition(BaseModel):
     image: Optional[str] = Field(
         None, description="竞赛封面图 URL（对应数据库 image_url，只存链接不下载）"
     )
+    short_name: Optional[str] = Field(
+        None,
+        description=(
+            "AI 提取的 2 字赛事简称（如「计设」「数模」）。"
+            "仅用于无封面图 / 图片加载失败时的卡片兜底；真实封面永远优先。"
+        ),
+    )
     intro: Optional[str] = Field(None, description="竞赛简介")
     summary: Optional[str] = Field(None, description="竞赛摘要")
     tech_stack: List[str] = Field(

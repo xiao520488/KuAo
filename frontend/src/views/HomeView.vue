@@ -121,6 +121,7 @@ function mapToCard(item, index) {
     level,
     category: item.category || item.subject || '',
     image: resolveImage(item),
+    shortName: item.short_name || '',
     signUpTime: formatSignUp(item),
     contestTime: formatContest(item)
   }
@@ -705,6 +706,7 @@ watch(
           class="card-in"
           :style="{ animationDelay: index * 100 + 'ms' }"
           :image="item.image"
+          :short-name="item.shortName"
           :title="item.title"
           :level="item.level"
           :category="item.category"

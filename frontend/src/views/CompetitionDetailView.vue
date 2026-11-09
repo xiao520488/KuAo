@@ -17,7 +17,9 @@ const errorMsg = ref('')
 
 // 详情页大图兜底：无图 / 加载失败时用名称哈希渐变 + 首字，尺寸保持不变
 const heroFailed = ref(false)
-const heroFallback = computed(() => coverFallback(detail.value?.title || '竞赛'))
+const heroFallback = computed(() =>
+  coverFallback(detail.value?.title || '竞赛', detail.value?.short_name || '')
+)
 
 function onHeroError() {
   heroFailed.value = true
@@ -415,7 +417,10 @@ const guideReady = computed(() => Boolean(detail.value?.full_process_guide))
               :style="{ '--cover-hue': heroFallback.hue }"
               aria-hidden="true"
             >
-              <span class="cover-fallback__glyph">{{ heroFallback.glyph }}</span>
+              <span
+                class="cover-fallback__glyph"
+                :class="{ 'cover-fallback__glyph--short': heroFallback.isShortName }"
+              >{{ heroFallback.glyph }}</span>
             </div>
           </div>
         </div>

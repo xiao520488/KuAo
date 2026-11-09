@@ -5,7 +5,8 @@
   * `--list`            列出 pending 候选（ID / 名称 / 级别 / 来源）；
   * `--approve <id>`    候选 -> competitions（图片重新过 check_image 闸门），
                         同一事务内把候选标记 approved 并回填 competition_id；
-                        **随后自动抓赛氪详情 + AI 提纯三字段并写库**（失败只告警）；
+                        **随后 AI 提取 2 字简称 + 自动抓赛氪详情并提纯三字段**
+                        （失败只告警，不回滚已入库赛事）；
   * `--reject <id>`     标记 rejected，不动主表。
 
 安全红线（CRAWLER_HANDOVER.md 第四/九节）：
@@ -35,6 +36,7 @@ from datetime import datetime
 import db
 import discover_common as common
 import enrich_saikr_details as enrich
+import short_names
 from batch_update_competitions import check_image
 
 DEFAULT_DB_PATH = common.DEFAULT_DB_PATH
@@ -164,6 +166,27 @@ def enrich_after_approve(args, candidate: dict, competition_id: int) -> dict:
     return result
 
 
+def generate_short_name_after_approve(args, competition_id: int,
+                                      name: str) -> dict:
+    """审核入库后自动提取 2 字简称并写入主表。
+
+    失败只告警，不回滚已入库的赛事：short_name 是视觉兜底字段，
+    为空时前端会回退到名称首字，不影响数据可用性。
+    """
+    if args.skip_enrich:
+        log("[简称] 已按 --skip-enrich 跳过 AI 提取")
+        return {"status": "skipped"}
+    log("[简称] AI 提取 2 字简称…")
+    try:
+        short_name = short_names.extract_short_name(name)
+        db.save_short_name(competition_id, short_name, db_path=args.db_path)
+    except Exception as exc:  # noqa: BLE001 - 简称失败不影响主流程
+        log("[简称] ⚠ 提取失败（short_name 保持 NULL，前端回退首字）：%s" % exc)
+        return {"status": "failed", "error": str(exc)}
+    log("[简称] 已写入：%s" % short_name)
+    return {"status": "updated", "short_name": short_name}
+
+
 def require_production_permission(db_path: str, allow_production: bool) -> None:
     if common.is_production_db(db_path) and not allow_production:
         raise SystemExit("拒绝写生产库：必须同时传 --allow-production")
@@ -222,12 +245,16 @@ def cmd_approve(args) -> int:
     log("[封面] %s" % image_note)
 
     write_backup_if_production(args.db_path)
+    competition_data = build_competition_data(candidate, image_url)
     competition_id = db.promote_candidate(
-        args.approve, build_competition_data(candidate, image_url),
-        db_path=args.db_path,
+        args.approve, competition_data, db_path=args.db_path,
     )
     log("[通过] 候选 %s -> competitions id=%s（sort_order=%s，首页不曝光）" % (
         args.approve, competition_id, DEFAULT_SORT_ORDER))
+    # 新赛事入库即生成 2 字简称，保证无图卡片有 Logo 式兜底
+    generate_short_name_after_approve(
+        args, competition_id, competition_data.get("name") or ""
+    )
     # 2.2：入库后立即补详情（抓赛氪 + AI 提纯），失败不回滚
     enrich_after_approve(args, candidate, competition_id)
     return 0

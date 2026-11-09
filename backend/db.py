@@ -22,6 +22,11 @@
 【v3 新增字段】
 - competitions.full_process_guide (TEXT)：参赛全过程攻略（Markdown），
   由离线脚本 generate_guides.py 调用大模型生成后回写。
+
+【v4 新增字段】
+- competitions.short_name (TEXT)：AI 提取的 2 字赛事简称，仅用于无图卡片
+  / 图片加载失败时的 Logo 式兜底；真实封面图永远优先。
+  由 generate_short_names.py 批量补全，review_candidates.py 审核入库时自动生成。
 """
 
 from typing import Optional
@@ -257,6 +262,8 @@ _MIGRATION_COLUMNS = {
     "full_process_guide": "TEXT",
     # 赛事封面图 URL（只存链接，不落本地图片）
     "image_url": "TEXT",
+    # AI 提取的 2 字赛事简称（无图卡片兜底；真实封面永远优先）
+    "short_name": "TEXT",
     # 比赛时间月份（与报名月份同粒度）
     "contest_start_month": "INTEGER",
     "contest_end_month": "INTEGER",
@@ -486,9 +493,10 @@ def update_competition(cid: int, data: dict) -> None:
     allowed = ("name", "category", "reg_start_month", "reg_end_month",
                "reg_cross_year", "official_url", "level", "level_label",
                "sort_order", "intro", "summary", "tech_stack",
-               "full_process_guide", "image_url", "contest_start_month",
-               "contest_end_month", "discover_source", "last_checked_at",
-               "is_active", "participants", "content_scope", "exam_schedule")
+               "full_process_guide", "image_url", "short_name",
+               "contest_start_month", "contest_end_month", "discover_source",
+               "last_checked_at", "is_active", "participants", "content_scope",
+               "exam_schedule")
     fields, values = [], []
     for key in allowed:
         if key in data:
@@ -515,6 +523,42 @@ def update_full_process_guide(cid: int, guide: str) -> None:
             "UPDATE competitions SET full_process_guide = ? WHERE id = ?",
             (guide, cid),
         )
+
+
+# 2 字赛事简称（纯汉字；不含数字/字母/标点）
+_SHORT_NAME_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]{2}")
+
+
+def save_short_name(cid: int, short_name: Optional[str],
+                    db_path: Optional[str] = None) -> Optional[str]:
+    """写入 AI 提取的 2 字赛事简称（供批量脚本 / 审核入库调用）。
+
+    参数:
+        cid: 比赛 id。
+        short_name: 2 个纯汉字；空值表示清空（回退前端首字兜底）。
+        db_path: 可选目标库，默认生产库；测试脚本可传 test_crawl.db。
+
+    返回:
+        实际写入的简称（清空时为 None）。
+
+    异常:
+        ValueError: 非 2 个纯汉字，或比赛 id 不存在。
+    """
+    value = unicodedata.normalize("NFKC", str(short_name or "")).strip()
+    if value:
+        if not _SHORT_NAME_RE.fullmatch(value):
+            raise ValueError("short_name 必须是 2 个纯汉字：%r" % short_name)
+    else:
+        value = None
+
+    with get_conn(db_path) as conn:
+        cur = conn.execute(
+            "UPDATE competitions SET short_name = ? WHERE id = ?",
+            (value, int(cid)),
+        )
+        if cur.rowcount != 1:
+            raise ValueError("竞赛 ID=%s 不存在，简称未写入" % cid)
+    return value
 
 
 def fill_competition_detail_text(cid: int, *, participants=None,
@@ -818,6 +862,41 @@ def list_competitions_for_guide(only_missing: bool = False) -> list:
     return [_enrich(r) for r in rows]
 
 
+def list_competitions_for_short_names(only_missing: bool = True,
+                                      db_path: Optional[str] = None) -> list:
+    """返回用于 AI 提取 2 字简称的比赛列表（id / name / category / short_name）。
+
+    参数:
+        only_missing: 为 True 时只返回 short_name 为空/未填的比赛，
+                      便于断点续跑、避免重复消耗大模型额度。
+        db_path: 可选目标库；未迁移的老库即使没有 short_name 列也能只读查询
+                 （该列按 NULL 处理），方便 --dry-run 保持零副作用。
+
+    返回:
+        list[dict]，按 id 升序。
+    """
+    with get_conn(db_path) as conn:
+        try:
+            columns = {
+                r["name"] for r in conn.execute(
+                    "PRAGMA table_info(competitions)"
+                ).fetchall()
+            }
+        except sqlite3.OperationalError:
+            return []
+        if not columns:
+            return []
+
+        has_short_name = "short_name" in columns
+        short_expr = "short_name" if has_short_name else "NULL AS short_name"
+        sql = "SELECT id, name, category, %s FROM competitions" % short_expr
+        if only_missing and has_short_name:
+            sql += " WHERE short_name IS NULL OR TRIM(short_name) = ''"
+        sql += " ORDER BY id ASC"
+        rows = conn.execute(sql).fetchall()
+    return [dict(r) for r in rows]
+
+
 def get_full_process_guide(cid: int) -> Optional[str]:
     """读取某场比赛的参赛全过程攻略；比赛不存在返回 None。"""
     with get_conn() as conn:
@@ -1050,6 +1129,7 @@ _PREP_EXTRA_COLUMNS = (
     ("contest_start_month", "c.contest_start_month"),
     ("contest_end_month", "c.contest_end_month"),
     ("image_url", "c.image_url"),
+    ("short_name", "c.short_name"),
 )
 
 
@@ -1059,9 +1139,9 @@ def list_preparations(user_id: int) -> list:
     返回 list[dict]，键：prep_id / competition_id / added_at /
     name / category / level / level_label / reg_start_month / reg_end_month /
     reg_cross_year / contest_start_month / contest_end_month / image_url /
-    official_url / summary。
+    short_name / official_url / summary。
 
-    注意：image_url / contest_*_month 供前端卡片封面与「比赛时间」使用，
+    注意：image_url / short_name / contest_*_month 供前端卡片封面与「比赛时间」使用，
     只读查询，不涉及任何写操作。老库尚未迁移这些列时自动降级为 NULL，
     避免因缺列把备赛清单静默清空。
     """

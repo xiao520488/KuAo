@@ -45,6 +45,8 @@ CREATE TABLE IF NOT EXISTS competitions (
     official_url    TEXT,
     -- 封面图（只存 URL，不下载图片）
     image_url       TEXT,
+    -- AI 提取的 2 字赛事简称（无图卡片的 Logo 兜底；真实封面永远优先）
+    short_name      TEXT,
     -- 比赛时间（月份 1-12；与报名时间字段保持同一粒度）
     contest_start_month INTEGER CHECK (contest_start_month IS NULL OR contest_start_month BETWEEN 1 AND 12),
     contest_end_month   INTEGER CHECK (contest_end_month   IS NULL OR contest_end_month   BETWEEN 1 AND 12),

@@ -82,6 +82,7 @@ def _row_to_competition(row: Dict[str, Any]) -> Competition:
         contest_end_month=row.get("contest_end_month"),
         official_url=row.get("official_url"),
         image=row.get("image_url") or row.get("image"),
+        short_name=row.get("short_name"),
         intro=row.get("intro"),
         summary=row.get("summary"),
         tech_stack=_parse_tech_stack(row.get("tech_stack")),

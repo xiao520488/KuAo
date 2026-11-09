@@ -220,6 +220,7 @@ function mapToCard(item, index) {
     major: mapped.major,
     minor: mapped.minor,
     image: resolveImage(item),
+    shortName: item.short_name || '',
     signUpTime: formatSignUp(item),
     contestTime: formatContest(item)
   }
@@ -477,6 +478,7 @@ onBeforeUnmount(() => {
           :key="item.id"
           :id="item.id"
           :image="item.image"
+          :short-name="item.shortName"
           :title="item.title"
           :level="item.level"
           :category="item.category"

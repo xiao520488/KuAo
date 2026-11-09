@@ -739,6 +739,9 @@ class SearchItem(BaseModel):
     level_label: Optional[str] = Field(None, description="级别中文标签")
     official_url: Optional[str] = Field(None, description="竞赛官网地址")
     summary: Optional[str] = Field(None, description="竞赛摘要")
+    short_name: Optional[str] = Field(
+        None, description="AI 提取的 2 字赛事简称（无图卡片 Logo 兜底）"
+    )
     score: float = Field(0.0, description="相关度得分（越大越相关）")
     matched_awards: int = Field(0, description="命中的获奖作品条数")
 
@@ -919,6 +922,7 @@ def search_competitions(req: SearchRequest) -> SearchResponse:
                     level_label=normalized.level_label,
                     official_url=normalized.official_url,
                     summary=normalized.summary,
+                    short_name=normalized.short_name,
                     score=round(float(score), 4),
                     matched_awards=hit_counts.get(cid, 0),
                 )
@@ -933,6 +937,7 @@ def search_competitions(req: SearchRequest) -> SearchResponse:
                     level_label=comp.get("level_label"),
                     official_url=comp.get("official_url"),
                     summary=comp.get("summary"),
+                    short_name=comp.get("short_name"),
                     score=round(float(score), 4),
                     matched_awards=hit_counts.get(cid, 0),
                 )
