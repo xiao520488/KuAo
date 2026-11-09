@@ -43,6 +43,21 @@ class Competition(BaseModel):
     contest_end_month: Optional[int] = Field(
         None, ge=1, le=12, description="比赛结束月份（1-12）"
     )
+    # ---- 双轨制（2026-11-09）：精确日期轨；与上面的 *_month 并存，只增不删 ----
+    # 格式 'YYYY-MM-DD'（原文有年份）或 'MM-DD'（原文只给月日）；抽不到就是 None，
+    # 前端 None 时自动降级回月份展示。
+    reg_start_date: Optional[str] = Field(
+        None, description="报名开始日期（YYYY-MM-DD 或 MM-DD，可空）"
+    )
+    reg_end_date: Optional[str] = Field(
+        None, description="报名结束日期（YYYY-MM-DD 或 MM-DD，可空）"
+    )
+    contest_start_date: Optional[str] = Field(
+        None, description="比赛开始日期（YYYY-MM-DD 或 MM-DD，可空）"
+    )
+    contest_end_date: Optional[str] = Field(
+        None, description="比赛结束日期（YYYY-MM-DD 或 MM-DD，可空）"
+    )
     official_url: Optional[str] = Field(None, description="竞赛官网地址")
     image: Optional[str] = Field(
         None, description="竞赛封面图 URL（对应数据库 image_url，只存链接不下载）"

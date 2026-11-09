@@ -50,6 +50,13 @@ CREATE TABLE IF NOT EXISTS competitions (
     -- 比赛时间（月份 1-12；与报名时间字段保持同一粒度）
     contest_start_month INTEGER CHECK (contest_start_month IS NULL OR contest_start_month BETWEEN 1 AND 12),
     contest_end_month   INTEGER CHECK (contest_end_month   IS NULL OR contest_end_month   BETWEEN 1 AND 12),
+    -- 精确日期（2026-11-09 双轨制）：'YYYY-MM-DD' 或 'MM-DD'。
+    -- 与上面的 *_month 并存，只增不删；原文只有月份时保持 NULL，
+    -- 前端自动降级回月份展示。老库由 db.py 的 _MIGRATION_COLUMNS 幂等补列。
+    reg_start_date      TEXT,
+    reg_end_date        TEXT,
+    contest_start_date  TEXT,
+    contest_end_date    TEXT,
     -- 采集溯源（占位赛事后续由人工/采集器补全）
     discover_source TEXT,
     last_checked_at TEXT,
@@ -237,7 +244,8 @@ CREATE TABLE IF NOT EXISTS users (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     username      TEXT    NOT NULL,
     password_hash TEXT    NOT NULL,
-    created_at    TEXT    NOT NULL DEFAULT (datetime('now', 'localtime'))
+    created_at    TEXT    NOT NULL DEFAULT (datetime('now', 'localtime')),
+    is_admin      INTEGER NOT NULL DEFAULT 0   -- 1 = 管理后台可见
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS ux_users_username
@@ -309,7 +317,8 @@ CREATE TABLE IF NOT EXISTS feedbacks (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id    INTEGER REFERENCES users (id) ON DELETE SET NULL,
     content    TEXT    NOT NULL,
-    created_at TEXT    NOT NULL DEFAULT (datetime('now', 'localtime'))
+    created_at TEXT    NOT NULL DEFAULT (datetime('now', 'localtime')),
+    is_read    INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_feedbacks_created

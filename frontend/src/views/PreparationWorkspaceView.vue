@@ -22,46 +22,8 @@ const competition = reactive({
 const compLoading = ref(true)
 const compError = ref('')
 
-// 后端详情接口只有 contest_start_month / contest_end_month（1-12 的月份），
-// 没有 contestStart/contestTime 这类完整日期字段，必须在前端拼展示文案。
-function toMonth(value) {
-  if (value === null || value === undefined || value === '') return null
-  const str = String(value).trim()
-
-  if (/^\d{1,2}$/.test(str)) {
-    const n = parseInt(str, 10)
-    return n >= 1 && n <= 12 ? n : null
-  }
-
-  const parts = str.split(/[-/.\sT:]+/).filter(Boolean)
-  if (parts.length >= 2) {
-    if (parts[0].length === 4) {
-      const m = parseInt(parts[1], 10)
-      if (m >= 1 && m <= 12) return m
-    }
-    const m = parseInt(parts[0], 10)
-    if (m >= 1 && m <= 12) return m
-  }
-
-  const d = new Date(str)
-  if (!Number.isNaN(d.getTime())) return d.getMonth() + 1
-  return null
-}
-
-// 同月 -> “11 月”；跨月 -> “10 月 - 11 月”；跨年 -> “12 月 - 次年 1 月”；缺值 -> “待定”
-function formatContest(item) {
-  const start = toMonth(item.contest_start_month)
-  const end = toMonth(item.contest_end_month)
-
-  if (start && end) {
-    if (end < start) return `${start} 月 - 次年 ${end} 月`
-    if (start === end) return `${start} 月`
-    return `${start} 月 - ${end} 月`
-  }
-  if (start) return `${start} 月`
-  if (end) return `${end} 月`
-  return '待定'
-}
+// 比赛时间统一走 utils/timeFormat（日期轨优先，缺失降级月份轨）
+import { formatContest } from '../utils/timeFormat'
 
 // 封面图：只接受 http(s) 绝对地址，其余回落占位图
 function resolveImage(item) {

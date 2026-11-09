@@ -105,9 +105,17 @@ export async function fetchMe() {
  * 应用启动时恢复登录态：
  * 有 token 就调 /api/auth/me 验证一次，失效则清掉。
  * 失败不抛错（静默降级为未登录），避免影响首屏。
+ *
+ * 并发去重：main.js 启动时会调一次，路由守卫进入 /admin 时也可能调一次，
+ * 两边若各发一次请求，后发的那次会因 loading=true 提前返回 null，
+ * 让守卫误判「未登录」把管理员挡在门外。这里用 inflight 共享同一个 Promise，
+ * 所有调用方都等到真实结果。
  */
+let inflightRestore = null
+
 export async function restoreSession() {
-  if (authState.initialized || authState.loading) return authState.user
+  if (authState.initialized || authState.user) return authState.user
+  if (inflightRestore) return inflightRestore
 
   const token = getToken()
   if (!token) {
@@ -116,16 +124,21 @@ export async function restoreSession() {
   }
 
   authState.loading = true
-  try {
-    return await fetchMe()
-  } catch {
-    clearToken()
-    authState.user = null
-    authState.initialized = true
-    return null
-  } finally {
-    authState.loading = false
-  }
+  inflightRestore = (async () => {
+    try {
+      return await fetchMe()
+    } catch {
+      clearToken()
+      authState.user = null
+      authState.initialized = true
+      return null
+    } finally {
+      authState.loading = false
+      inflightRestore = null
+    }
+  })()
+
+  return inflightRestore
 }
 
 /**

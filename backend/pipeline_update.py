@@ -115,6 +115,21 @@ def saikr_stage(item, current, now):
             "end": end.month,
             "cross_year": 1 if end.year > start.year else 0,
             "raw": "%s ~ %s" % (start.date(), end.date()),
+            # 精确日期轨：赛氪结构化字段本身带年月日，直接抄，不经模型
+            "start_date": start.strftime("%Y-%m-%d"),
+            "end_date": end.strftime("%Y-%m-%d"),
+        }
+
+    # 比赛时间：赛氪结构化 contest_*_time 同样精确到日（无效值/占位返回 None）
+    contest_start = parse_dt(data.get("contest_start_time"))
+    contest_end = parse_dt(data.get("contest_end_time"))
+    contest = None
+    if contest_start or contest_end:
+        contest = {
+            "start": contest_start.month if contest_start else None,
+            "end": contest_end.month if contest_end else None,
+            "start_date": contest_start.strftime("%Y-%m-%d") if contest_start else None,
+            "end_date": contest_end.strftime("%Y-%m-%d") if contest_end else None,
         }
 
     pic = (data.get("web_pic_big") or "").strip()
@@ -128,7 +143,7 @@ def saikr_stage(item, current, now):
             "size": "%sx%s" % (info.get("width"), info.get("height")) if info.get("width") else "?",
         }
     return {"status": "ok", "saikr_name": data.get("contest_name"), "reg": reg,
-            "image": image, "note": ""}
+            "contest": contest, "image": image, "note": ""}
 
 
 # ---------------------------------------------------------------------------
@@ -172,8 +187,14 @@ def notice_stage(url, max_chars):
     end = extracted.get("contest_end_month")
     out["confidence"] = extracted.get("confidence")
     if start or end:
-        out.update(status="found", contest={"start": start, "end": end})
-        out["note"] = "模型给出比赛月份"
+        out.update(status="found", contest={
+            "start": start,
+            "end": end,
+            # 2026-11-09：新 Prompt 会尽量给出精确到日的比赛时间；抽不到就保持 None
+            "start_date": extracted.get("contest_start_date"),
+            "end_date": extracted.get("contest_end_date"),
+        })
+        out["note"] = "模型给出比赛时间"
     else:
         out["status"] = "not_found"
         out["note"] = "正文无明确比赛时间（未把截止日当比赛时间）"
@@ -292,6 +313,24 @@ def build_ops(current, proposals):
                 old = row.get(field)
                 if old is None:
                     ops.append((cid, field, old, new, "notice"))
+                elif old != new:
+                    skipped.append((cid, field, "库内已有 %r，保留（来源 %r）" % (old, new)))
+
+        # ---- 精确日期轨（2026-11-09）：同样只补 NULL ----
+        for key, fields, src in (
+            ("reg_dates", ("reg_start_date", "reg_end_date"), "saikr"),
+            ("contest_dates", ("contest_start_date", "contest_end_date"), "notice"),
+        ):
+            dates = prop.get(key)
+            if not dates:
+                continue
+            for i, field in enumerate(fields):
+                new = dates[i] if i < len(dates) else None
+                if not new:
+                    continue
+                old = row.get(field)
+                if old is None:
+                    ops.append((cid, field, old, new, src))
                 elif old != new:
                     skipped.append((cid, field, "库内已有 %r，保留（来源 %r）" % (old, new)))
     return ops, skipped, warnings
@@ -452,7 +491,9 @@ def main(argv=None):
     conn.row_factory = sqlite3.Row
     current = {r["id"]: dict(r) for r in conn.execute(
         "select id,name,category,official_url,image_url,reg_start_month,reg_end_month,"
-        "reg_cross_year,contest_start_month,contest_end_month,discover_source "
+        "reg_cross_year,contest_start_month,contest_end_month,"
+        "reg_start_date,reg_end_date,contest_start_date,contest_end_date,"
+        "discover_source "
         "from competitions")}
     conn.close()
 
@@ -468,7 +509,9 @@ def main(argv=None):
             contest = it.get("contest")
             proposals[cid] = {"image": it.get("image"),
                               "reg": tuple(reg) if reg else None,
-                              "contest": tuple(contest) if contest else None}
+                              "contest": tuple(contest) if contest else None,
+                              "reg_dates": (it.get("proposed") or {}).get("reg_dates"),
+                              "contest_dates": (it.get("proposed") or {}).get("contest_dates")}
         print("[来源] 复用预检报告 %s（不联网、不调模型）" % args.from_report)
         st = raw.get("stats") or {}
         if st:
@@ -527,8 +570,34 @@ def main(argv=None):
             c = notice["contest"]
             contest_final = (c["start"], c["end"])
             contest_action = "add"
+        elif not any(contest_final) and saikr.get("contest"):
+            c = saikr["contest"]
+            contest_final = (c.get("start"), c.get("end"))
+            contest_action = "add_saikr"
         elif notice.get("contest") and any(contest_final):
             contest_action = "keep_existing"
+
+        # ---- 精确日期（第二轨）：赛氪结构化优先，通知页模型次之；只补空 ----
+        reg_dates_final = (row.get("reg_start_date"), row.get("reg_end_date"))
+        reg_dates_action = "keep"
+        saikr_reg = saikr.get("reg") or {}
+        if (saikr_reg.get("start_date") or saikr_reg.get("end_date")):
+            reg_dates_final = (saikr_reg.get("start_date"), saikr_reg.get("end_date"))
+            reg_dates_action = "add" if (row.get("reg_start_date"),
+                                         row.get("reg_end_date")) != reg_dates_final else "same"
+
+        contest_dates_final = (row.get("contest_start_date"), row.get("contest_end_date"))
+        contest_dates_action = "keep"
+        if not any(contest_dates_final):
+            for candidate, src in ((notice.get("contest") or {}, "notice"),
+                                   (saikr.get("contest") or {}, "saikr")):
+                pair = (candidate.get("start_date"), candidate.get("end_date"))
+                if any(pair):
+                    contest_dates_final = pair
+                    contest_dates_action = "add_%s" % src
+                    break
+        elif (notice.get("contest") or saikr.get("contest")) and any(contest_dates_final):
+            contest_dates_action = "keep_existing"
 
         has_image = bool(image_final)
         has_time = any(contest_final)
@@ -540,11 +609,16 @@ def main(argv=None):
             "saikr": saikr, "notice": notice,
             "current": {k: row.get(k) for k in
                         ("image_url", "reg_start_month", "reg_end_month", "reg_cross_year",
-                         "contest_start_month", "contest_end_month")},
+                         "contest_start_month", "contest_end_month",
+                         "reg_start_date", "reg_end_date",
+                         "contest_start_date", "contest_end_date")},
             "proposed": {
                 "image_url": image_final, "image_action": image_action,
                 "reg": reg_final, "reg_action": reg_action,
+                "reg_dates": reg_dates_final, "reg_dates_action": reg_dates_action,
                 "contest": contest_final, "contest_action": contest_action,
+                "contest_dates": contest_dates_final,
+                "contest_dates_action": contest_dates_action,
             },
             "status": status,
         }
@@ -560,13 +634,18 @@ def main(argv=None):
         else:
             cover_txt = {"stale": "往年跳过", "no_match": "无映射",
                          "error": "接口失败", "skipped": "跳过"}.get(saikr.get("status"), "无图")
-        time_txt = {"add": "新增", "keep": "已有", "keep_existing": "保留"}[contest_action]
+        time_txt = {"add": "新增", "add_saikr": "新增(赛氪)", "keep": "已有",
+                    "keep_existing": "保留"}[contest_action]
         if not has_time:
             time_txt = "仍缺"
-        print("  %-3s %-24s 封面:%-6s 报名:%s-%s  比赛:%-4s(%s)  页面:%s" % (
+        date_txt = ""
+        if contest_dates_action.startswith("add"):
+            date_txt = " +日(%s)" % ("~".join(
+                str(x)[5:] if x else "?" for x in contest_dates_final))
+        print("  %-3s %-24s 封面:%-6s 报名:%s-%s  比赛:%-4s(%s%s)  页面:%s" % (
             cid, (row["name"] or "")[:22], cover_txt,
             reg_final[0], reg_final[1], time_txt,
-            ("%s-%s" % contest_final if has_time else "空"),
+            ("%s-%s" % contest_final if has_time else "空"), date_txt,
             (notice.get("body_chars") or 0)))
 
     # ---- 汇总 ----
@@ -582,7 +661,9 @@ def main(argv=None):
         "cover_kept": cnt(lambda r: r["proposed"]["image_action"] == "keep" and r["proposed"]["image_url"]),
         "cover_rejected": cnt(lambda r: r["proposed"]["image_action"] == "reject"),
         "cover_missing": cnt(lambda r: not r["proposed"]["image_url"]),
-        "time_added": cnt(lambda r: r["proposed"]["contest_action"] == "add"),
+        "time_added": cnt(lambda r: r["proposed"]["contest_action"] in ("add", "add_saikr")),
+        "date_added": cnt(lambda r: r["proposed"]["contest_dates_action"].startswith("add")),
+        "reg_date_added": cnt(lambda r: r["proposed"]["reg_dates_action"] == "add"),
         "time_kept": cnt(lambda r: bool(r["current"]["contest_start_month"] or r["current"]["contest_end_month"])),
         "time_missing": cnt(lambda r: not any(r["proposed"]["contest"])),
         "full": cnt(lambda r: r["status"] == "full"),
@@ -595,6 +676,7 @@ def main(argv=None):
     print("汇总（%d 条）" % stats["total"])
     print("  封面：新增 %(cover_added)d / 已有 %(cover_kept)d / 闸门拒收 %(cover_rejected)d / 仍空 %(cover_missing)d（含拒收）" % stats)
     print("  比赛时间：新增 %(time_added)d / 已有 %(time_kept)d / 仍空 %(time_missing)d" % stats)
+    print("  精确日期：比赛日新增 %(date_added)d / 报名日新增 %(reg_date_added)d" % stats)
     print("  最终状态：图+时间 %(full)d / 只有图 %(image_only)d / 只有时间 %(time_only)d / 都没有 %(none)d" % stats)
     print("  赛氪：成功 %(saikr_ok)d / 往年跳过 %(saikr_stale)d / 无映射 %(saikr_no_match)d" % stats)
 
@@ -611,7 +693,9 @@ def main(argv=None):
     if args.apply:
         proposals = {r["competition_id"]: {"image": r["proposed"]["image_url"],
                                            "reg": r["proposed"]["reg"],
-                                           "contest": r["proposed"]["contest"]}
+                                           "contest": r["proposed"]["contest"],
+                                           "reg_dates": r["proposed"]["reg_dates"],
+                                           "contest_dates": r["proposed"]["contest_dates"]}
                      for r in report}
         print()
         return run_write(args, target, current, proposals, now)

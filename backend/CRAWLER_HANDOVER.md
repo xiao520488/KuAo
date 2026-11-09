@@ -13,6 +13,8 @@
 **详情页卡片版已构建完成；云端前端发布目录问题已定位（实际 root = `/var/www/html`），下一步核心任务见下方【当前任务】。**
 
 > ✅ **新窗口接手先看：本文件「零·补」——P0 账号串号与顶部搜索框变形已修复（2026-11-08 22:30），上云前请按该节完成双账号复验。**
+>
+> ✅ **管理后台（候选审核 / 用户反馈）已上线本地，见「十四、管理后台」——管理员判定看 `users.is_admin`，用 `promote_admin.py` 授权；`/admin` 前端守卫 + 后端 `get_current_admin` 双层拦截。**
 
 > **【2026-11-08 20:26 现场问题｜云端后端代码未同步】**
 >
@@ -1480,3 +1482,81 @@ systemctl start kuao-backend
 **已知质量待评审点**：id=1 的「参赛要求」章节偏项目要求（含年龄/学籍条款）；id=18 参赛对象为平台结构化短句；id=15 内容范围取自「竞赛规则」；id=2/30 等旧届数据被护栏挡掉。预览文件：`workspace/saikr_enrich_applied.json`。
 
 **说明**：上面的 19:51 实跑是**未接 AI 提纯**的旧版本结果，仅用于评估章节抽取质量；重构后的真机结果见本节开头表格。前端卡片如需保留换行，给 `<p>` 加 `whitespace-pre-line`（尚未改；AI 输出为多行编号列表）。
+
+---
+
+## 十四、管理后台（2026-11-09 落地）
+
+### 14.1 设计目标与权限模型
+
+把「审核候选赛事」和「处理用户反馈」从命令行搬到网页，管理员不用再登服务器跑 `review_candidates.py`。**双层拦截**：
+
+| 层 | 位置 | 行为 |
+|---|---|---|
+| 前端守卫 | `frontend/src/router/index.js`，路由 `meta: { requiresAuth: true, requiresAdmin: true }` | 无 token → 弹登录框；有 token 但不是管理员 → `showToast('无权限访问管理后台')` + 跳回 `/`（`return { path: '/' }`） |
+| 前端入口 | `frontend/src/components/Header.vue` | 「管理后台」链接 `v-if="isAdmin"`（`authState.user?.is_admin`），普通用户看不到入口 |
+| 后端 | `backend/security.py` `get_current_admin()` | 每个 admin 接口都挂 `Depends(get_current_admin)`，非管理员抛 403 `{"detail": "需要管理员权限"}`。**前端守卫只是体验层，真正的墙在服务端** |
+
+管理员标记存在 `users.is_admin`（INTEGER DEFAULT 0，`schema_v2.sql` + `db.migrate_user_columns()` 幂等补列，老库启动自动迁移）。`routers/auth.py` 的 `UserInfo.is_admin` 会随登录 / `/api/auth/me` 一起返回，前端只认这个字段。
+
+### 14.2 后端接口（`backend/routers/admin.py`，全部挂在 `/api/admin`）
+
+| 方法 | 路径 | 作用 |
+|---|---|---|
+| GET | `/admin/candidates?limit=&offset=` | 候选赛事列表（默认只取 `status='pending'`），返回 `{code, total, items}` |
+| POST | `/admin/candidates/{id}/approve` | 走 `db.promote_candidate()`：重名/`check_image()` 闸门 → 同事务写 `competitions` + 标记 `approved`；返回新赛事 id 与提示语 |
+| POST | `/admin/candidates/{id}/reject` | 只把候选标记 `rejected`，不动主表 |
+| GET | `/admin/feedback?limit=&offset=` | 反馈列表（新的在前）+ `unread` 未读数；`username` 由 `users` 表联查，注销用户回退「已注销用户」 |
+| PUT | `/admin/feedback/{id}/read` | 标记已读；`busyId` 防重复点击，前端同步减角标 |
+
+约定：候选不存在 → 404，状态不是 `pending` → 400 `"该候选已处理"`；approve 内部复用 CLI 同一套 `_build_competition_data` / `_infer_level` / `_clean_name`，所以网页和 CLI 写库结果一致。`main.py` 的 CORS 已补 `PUT`（否则「标记已读」预检直接挂）。
+
+### 14.3 前端页面（`frontend/src/views/AdminView.vue`，单文件 ~560 行）
+
+- 布局：`Header` + 左侧 220px 侧边栏（候选赛事 / 用户反馈，带待审 / 未读角标）+ 右侧内容区；`lg` 以下自动堆叠，侧边栏变横向 tab。沿用全站 Tailwind 暗色 / 极简风，**未引入 Element Plus 等 UI 库**。
+- 候选赛事：表格列 = 赛事名称（含来源链接）/ 级别 / 来源 / 抓取月份 / 操作。来源 `saikr→赛氪`、`edu-roster→教育部门名录`、`manual→人工录入`，未知值原样显示。
+- 用户反馈：卡片列表，未读整卡高亮蓝底 + 「未读」角标 + 【标记已读】；正文 `whitespace-pre-wrap break-words`，长文本自动换行。
+- **二次确认（2026-11-09 补）**：通过 / 拒绝都会写主库，点按钮先弹轻量弹窗——标题「确认审核通过这个赛事？」/「确认拒绝这个赛事？」，正文带《赛事名》+ 后果说明（通过→立即进正式库，拒绝→只标记不进库），按钮为【取消】/【确认通过】（拒绝态转红 `bg-red-600`），提交中禁用并显示「提交中…」；支持 `Esc` / 点遮罩关闭，弹窗用 `Teleport to="body"` + `Transition` 淡入。
+- 深链：`/admin?tab=feedback` 可直接打开反馈面板，切 tab 时 `router.replace` 同步地址栏（`refresh` 不跳走）。
+- 首屏两个面板的列表都拉一次：侧边栏「待审 / 未读」两个角标需要两份数据。
+- 状态处理：骨架屏、空态（「没有待审核的候选赛事，全部处理完了 🎉」/「还没有用户反馈」）、错误横幅 + 右上角「刷新」、`busyId` 行级 loading。
+
+**踩坑记录（值得保留）**：`main.js` 启动时会调一次 `restoreSession()`，`/admin` 守卫也要调一次；原实现遇到 `loading=true` 直接 `return null`，守卫误判未登录 → 管理员刷新 `/admin` 被弹登录框（后端日志却是 `/api/auth/me` 200）。已改成 **in-flight Promise 去重**（`services/auth.js` 的 `inflightRestore`），所有调用方等同一个真实结果。以后再加「守卫里查登录态」的路由，都走这个函数，别自己发请求。
+
+### 14.4 `promote_admin.py` 用法（授权 / 撤权 / 查看）
+
+```powershell
+cd D:\agent-lab\KuAo-Platform\backend
+
+# 查看当前所有管理员
+venv\Scripts\python.exe promote_admin.py --list
+
+# 授权（按用户名；用户必须已存在，否则报错退出）
+venv\Scripts\python.exe promote_admin.py xas
+
+# 撤权
+venv\Scripts\python.exe promote_admin.py --revoke xas
+```
+
+- 只改 `users.is_admin`，**不碰密码**；改完让用户重新登录 / 刷新页面（`/api/auth/me` 会带回新的 `is_admin`）才生效。
+- 支持 `--db-path` 指向别的库（默认 `competitions.db`），测试库演练时用得上。
+- 2026-11-09 现状：`tester_e2e`(id 1)、`xas`(id 4) 是管理员；`alice`(id 2) 保留为**非管理员越权测试账号**（会看到 Toast 并被踢回首页），别顺手提权。
+
+### 14.5 本地验收清单
+
+```powershell
+# 0) 服务（两个都要起）
+cd backend; venv\Scripts\python.exe -m uvicorn main:app --host 127.0.0.1 --port 8000
+cd frontend; D:\Tools\node.exe D:\Tools\node_modules\npm\bin\npm-cli.js run dev
+```
+
+1. `http://localhost:5173`（**必须 localhost**，Vite 不监听 127.0.0.1）用 `xas` 登录 → 头像下拉 → 「管理后台」，或用 `/admin` 直达。
+2. 候选赛事：点【通过】→ 弹确认框 → 【确认通过】→ 该行消失、Toast、`competitions` 多一条；【取消】/`Esc` 不产生任何请求。
+3. 反馈面板：未读角标数字 = 未读条数，点【标记已读】→ 卡片变灰、角标 -1、`feedbacks.is_read=1`。
+4. 越权复验：用 `alice` 登录访问 `/admin` → Toast「无权限访问管理后台」并落在首页；用 `alice` 的 token 直连 `GET /api/admin/candidates` → 403。
+5. 造测试反馈（**只对本地库**）：`.verify\seed_feedback.py` 会插 2 条中文反馈（`xas` / `alice` 各一条，未读）。验收完用 `DELETE FROM feedbacks WHERE id IN (...)` 清掉，别带到生产。
+
+**当前数据快照**：生产库本地副本 `competitions.db` 中候选 82 条（pending 80 / approved 1 / rejected 1）、`feedbacks` 2 条未读（仅本地测试数据，生产库为空）。前端改动需 `npm run build` 重新出 `dist/`；后端只需重启 uvicorn。
+
+**已知边界**：列表暂无分页（`limit=200`，够用但候选过千要加）；反馈无删除 / 回复功能；审核结果不可从网页撤销（需 CLI 或直接改库）。
+

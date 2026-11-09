@@ -91,6 +91,125 @@ ORDER BY
     id ASC
 """
 
+# ---------------------------------------------------------------------------
+# 智能排序（报名紧迫度）——列表与首页热门共用
+# ---------------------------------------------------------------------------
+# 「今天」固定按北京时间切日：
+#   SQLite 的 date('now') 取的是 UTC，UTC 部署的服务器上会把截止日整体平移 8 小时，
+#   出现「凌晨 0-8 点还把昨天截止的比赛算成报名中」的错位；
+#   统一用 date('now','+8 hours')，无论服务器时区设成什么，判断口径都一致。
+_TODAY_EXPR = "date('now','+8 hours')"
+
+
+def _is_date_sql(col: str) -> str:
+    """生成「该列是合法的 YYYY-MM-DD」判断。
+
+    三重校验，任一不过就当「无日期」：
+      1. 非空；
+      2. 形状是 YYYY-MM-DD（GLOB，先便宜地挡掉 '2026-11' 这类月度值）；
+      3. `date(col) = col` —— date() 对 2026-13-40 / 2026-1-9 返回 NULL，
+         对 2026-02-30 会归一化成 2026-03-02（不等于原值），
+         因此这一条同时干掉「越界月日」和「非规范写法」。
+    """
+    return (f"({col} IS NOT NULL AND {col} GLOB "
+            "'[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]' "
+            f"AND date({col}) = {col})")
+
+
+_CUR_MONTH_EXPR = f"CAST(strftime('%m', {_TODAY_EXPR}) AS INTEGER)"
+
+
+def _month_window_sql() -> str:
+    """生成「当前月份落在 [reg_start_month, reg_end_month] 内」判断。
+
+    口径与 Python 侧 `_month_in_range()` **逐字对齐**（同一份跨年规则）：
+      * reg_cross_year=0 且 start <= end：month BETWEEN start AND end；
+      * 其余（跨年 / 区间不规范 start > end）：month >= start OR month <= end。
+    月度值越界（如 0、13）一律视为不可判定，返回 FALSE。
+    """
+    return (
+        "("
+        "reg_start_month IS NOT NULL AND reg_end_month IS NOT NULL "
+        "AND reg_start_month BETWEEN 1 AND 12 "
+        "AND reg_end_month BETWEEN 1 AND 12 "
+        "AND (CASE "
+        "WHEN COALESCE(reg_cross_year, 0) = 0 "
+        "AND reg_start_month <= reg_end_month "
+        f"THEN ({_CUR_MONTH_EXPR} BETWEEN reg_start_month AND reg_end_month) "
+        f"ELSE ({_CUR_MONTH_EXPR} >= reg_start_month "
+        f"OR {_CUR_MONTH_EXPR} <= reg_end_month) "
+        "END)"
+        ")"
+    )
+
+
+# 是否拥有「可用的精确日期」（决定走日期判定还是月份兜底）
+_HAS_DATE_SQL = (f"({_is_date_sql('reg_start_date')} "
+                 f"OR {_is_date_sql('reg_end_date')})")
+
+# 月份兜底：完全没有精确日期，但 *_month 区间覆盖当前月 —— 也算「正在报名」。
+# 只在没有精确日期时才启用，避免月份区间盖过更准的日期判定。
+_MONTH_FALLBACK_SQL = f"(NOT {_HAS_DATE_SQL} AND {_month_window_sql()})"
+
+
+# 报名阶段：
+#   0 = 正在报名（今天落在 [reg_start_date, reg_end_date] 内，含首尾；
+#               只有截止日、没有开始日的也算开放中；
+#               无精确日期但 *_month 覆盖本月 -> 同样归入本阶段）
+#   1 = 尚未开始（今天 < reg_start_date）
+#   2 = 已截止  （今天 > reg_end_date）
+#   3 = 无日期  （日期与月份都不可用，沉底，绝不参与前排）
+# 注意顺序即优先级：「过期」先判，避免 reg_start_date 脏值把已截止的捞回前排。
+_PHASE_EXPR = f"""
+    CASE
+        WHEN {_is_date_sql('reg_end_date')} AND {_TODAY_EXPR} > reg_end_date THEN 2
+        WHEN {_is_date_sql('reg_start_date')} AND {_TODAY_EXPR} < reg_start_date THEN 1
+        WHEN {_HAS_DATE_SQL} THEN 0
+        WHEN {_MONTH_FALLBACK_SQL} THEN 0
+        ELSE 3
+    END
+"""
+
+# 「数据精度」：0 = 有精确日期，1 = 仅月份兜底。
+# 同属「正在报名」时，日期确定的永远排在只有月份的之前（不让学生看到
+# 一条只有月份的比赛抢在「明天截止」的上面）。
+_PREC_EXPR = f"""
+    CASE
+        WHEN {_HAS_DATE_SQL} THEN 0
+        WHEN {_MONTH_FALLBACK_SQL} THEN 1
+        ELSE 2
+    END
+"""
+
+# 排序：阶段优先 → 组内精度（有日期 > 仅月份）→ 组内紧迫度 → id 兜底
+#   * 报名中：reg_end_date 升序（越早截止越靠前）；缺截止日的排在组尾（9999-12-31）
+#   * 仅月份兜底：按「还有几个月截止」升序，用 (end_month - 当前月 + 12) % 12 计算，
+#     跨年区间（如 11 月开报、次年 3 月截止）也能算出正确的剩余月数
+#   * 未开始：reg_start_date 升序（最近要开报的在前）
+#   * 已截止：reg_end_date 倒序（刚结束的在上，最老的沉到最后）
+#   * 无日期：按比赛开始日兜底，仍无则按 id，整体压在最后
+_ORDER_BY_SMART = f"""
+ORDER BY
+    _phase ASC,
+    CASE WHEN _phase IN (0, 1) THEN _prec END ASC,
+    CASE _phase WHEN 0 THEN COALESCE(reg_end_date, '9999-12-31') END ASC,
+    CASE WHEN _phase = 0 AND _prec = 1
+         THEN ((reg_end_month - {_CUR_MONTH_EXPR} + 12) % 12) END ASC,
+    CASE _phase WHEN 1 THEN COALESCE(reg_start_date, '9999-12-31') END ASC,
+    CASE _phase WHEN 2 THEN COALESCE(reg_end_date, reg_start_date) END DESC,
+    CASE _phase WHEN 3 THEN COALESCE(contest_start_date, '9999-12-31') END ASC,
+    id ASC
+"""
+
+
+def _strip_phase(row) -> dict:
+    """去掉排序用的临时列 _phase/_prec，避免泄漏到 API 响应。"""
+    d = dict(row)
+    d.pop("_phase", None)
+    d.pop("_prec", None)
+    return d
+
+
 _LEVEL_LABELS = {
     "national": "国家级",
     "provincial": "省级",
@@ -202,6 +321,11 @@ CREATE TABLE IF NOT EXISTS competition_candidates (
     reg_cross_year      INTEGER DEFAULT 0,
     contest_start_month INTEGER,
     contest_end_month   INTEGER,
+    -- 精确日期（2026-11-09 双轨制）：'YYYY-MM-DD' 或 'MM-DD'；原文只有月份时留 NULL
+    reg_start_date      TEXT,
+    reg_end_date        TEXT,
+    contest_start_date  TEXT,
+    contest_end_date    TEXT,
     raw_json            TEXT,
     status              TEXT    NOT NULL DEFAULT 'pending',  -- pending/approved/rejected/duplicate
     competition_id      INTEGER,                -- 审核通过后回填 competitions.id
@@ -216,6 +340,15 @@ CREATE INDEX IF NOT EXISTS idx_candidates_norm_name
 CREATE INDEX IF NOT EXISTS idx_candidates_source
     ON competition_candidates (source);
 """
+
+# 候选表补列：精确日期（2026-11-09 双轨制）。老库的候选表由 CANDIDATES_DDL
+# 的 CREATE TABLE IF NOT EXISTS 建出，已存在的表不会被改写，故需单独 ALTER 补列。
+_CANDIDATE_MIGRATION_COLUMNS = {
+    "reg_start_date": "TEXT",
+    "reg_end_date": "TEXT",
+    "contest_start_date": "TEXT",
+    "contest_end_date": "TEXT",
+}
 
 # AI 生成任务表（2026-11-08 定）。
 # 攻略 / 灵感的异步生成都先落本表：唯一部分索引保证「同一赛事同一类任务同时只有 1 个
@@ -269,6 +402,12 @@ _MIGRATION_COLUMNS = {
     # 比赛时间月份（与报名月份同粒度）
     "contest_start_month": "INTEGER",
     "contest_end_month": "INTEGER",
+    # 精确日期（2026-11-09 双轨制）：与 *_month 并存，只增不删。
+    # 'YYYY-MM-DD' 或 'MM-DD'；原文只给月份时保持 NULL，前端降级回月份展示。
+    "reg_start_date": "TEXT",
+    "reg_end_date": "TEXT",
+    "contest_start_date": "TEXT",
+    "contest_end_date": "TEXT",
     # 采集溯源 / 上下架
     "discover_source": "TEXT",
     "last_checked_at": "TEXT",
@@ -397,6 +536,45 @@ def _migrate_insight_columns(conn: sqlite3.Connection) -> list:
     return added
 
 
+# users 表补列：is_admin 标记管理员（默认 0，老库由迁移自动补上）
+_USER_MIGRATION_COLUMNS = {
+    "is_admin": "INTEGER NOT NULL DEFAULT 0",
+}
+
+# feedbacks 表补列：is_read 供管理后台标记已读
+_FEEDBACK_MIGRATION_COLUMNS = {
+    "is_read": "INTEGER NOT NULL DEFAULT 0",
+}
+
+
+def _migrate_simple_columns(conn: sqlite3.Connection, table: str,
+                            columns: dict) -> list:
+    """幂等补列通用实现；返回本次实际新增的列名列表。"""
+    try:
+        existing = {
+            r["name"] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()
+        }
+    except sqlite3.OperationalError:
+        return []
+    added = []
+    for col, ddl in columns.items():
+        if col in existing:
+            continue
+        try:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {ddl}")
+            added.append(col)
+        except sqlite3.OperationalError as exc:
+            if "duplicate column name" not in str(exc).lower():
+                raise
+    return added
+
+
+def migrate_user_columns() -> list:
+    """对外入口：为 users 补 is_admin 列（迁移脚本 / 测试可用）。"""
+    with get_conn() as conn:
+        return _migrate_simple_columns(conn, "users", _USER_MIGRATION_COLUMNS)
+
+
 def _backfill_detail_fields(conn: sqlite3.Connection) -> None:
     """
     一次性安全回填：
@@ -439,6 +617,10 @@ def init_db(db_path: Optional[str] = None) -> None:
         _migrate_columns(conn)
         _migrate_award_columns(conn)
         _migrate_insight_columns(conn)
+        _migrate_simple_columns(conn, "users", _USER_MIGRATION_COLUMNS)
+        _migrate_simple_columns(conn, "feedbacks", _FEEDBACK_MIGRATION_COLUMNS)
+        _migrate_simple_columns(conn, "competition_candidates",
+                                _CANDIDATE_MIGRATION_COLUMNS)
         _ensure_ai_analysis_cache(conn)
         conn.executescript(INDEXES_SQL)
         _backfill_detail_fields(conn)
@@ -470,8 +652,9 @@ def add_competition(data: dict) -> int:
         cur = conn.execute(
             """INSERT INTO competitions
                (name, category, reg_start_month, reg_end_month, reg_cross_year,
-                official_url, level, level_label, sort_order, full_process_guide)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                official_url, level, level_label, sort_order, full_process_guide,
+                reg_start_date, reg_end_date, contest_start_date, contest_end_date)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 data.get("name"),
                 data.get("category"),
@@ -483,6 +666,10 @@ def add_competition(data: dict) -> int:
                 data.get("level_label"),
                 data.get("sort_order"),
                 data.get("full_process_guide"),
+                _date_or_none(data.get("reg_start_date")),
+                _date_or_none(data.get("reg_end_date")),
+                _date_or_none(data.get("contest_start_date")),
+                _date_or_none(data.get("contest_end_date")),
             ),
         )
         return cur.lastrowid
@@ -498,7 +685,9 @@ def update_competition(cid: int, data: dict) -> None:
                "full_process_guide", "image_url", "short_name",
                "contest_start_month", "contest_end_month", "discover_source",
                "last_checked_at", "is_active", "participants", "content_scope",
-               "exam_schedule")
+               "exam_schedule",
+               "reg_start_date", "reg_end_date",
+               "contest_start_date", "contest_end_date")
     fields, values = [], []
     for key in allowed:
         if key in data:
@@ -510,6 +699,9 @@ def update_competition(cid: int, data: dict) -> None:
             if key == "image_url":
                 # 二维码/logo/banner/非 http(s) 一律置 NULL，由前端走简称兜底
                 val = _clean_image_url(val)
+            if key in _DATE_FIELDS:
+                # 只接受能被证实的年月日；解析不出就写 NULL（不猜日期）
+                val = _date_or_none(val)
             fields.append(f"{key} = ?")
             values.append(val)
     if not fields:
@@ -654,29 +846,73 @@ def list_competitions(category: Optional[str] = None,
                       month: Optional[int] = None,
                       keyword: Optional[str] = None) -> list:
     """
-    条件查询比赛列表。
-    - category: 模糊匹配类别
-    - month: 报名月覆盖该月份（考虑跨年区间）
-    - keyword: 名称模糊匹配
+    条件查询比赛列表（智能排序）。
+
+    排序口径（2026-11-09 重构，全局统一）：
+      1. 正在报名（今天在 [reg_start_date, reg_end_date] 内）—— reg_end_date 升序
+         其中「只有月份、且 *_month 覆盖本月」的也算报名中，但整组排在
+         所有带精确日期的之后（不猜具体日期，也不抢前排）
+      2. 尚未开始（今天 < reg_start_date）—— reg_start_date 升序
+      3. 已截止（今天 > reg_end_date）—— reg_end_date 倒序
+      4. 无日期（日期与月份都不可用）—— 沉底
+
+    全部由 SQL 基于服务器当前时间计算，不落地任何「状态」字段：
+    过了截止日期，下一次刷新自动归入「已截止」；新审核通过的比赛按日期自动插队。
+
+    参数:
+        category: 类别模糊匹配
+        month: 报名月覆盖该月份（考虑跨年区间），Python 侧二次过滤
+        keyword: 名称模糊匹配
     """
-    sql = "SELECT * FROM competitions WHERE 1=1"
+    where = "WHERE 1=1"
     params = []
     if category:
-        sql += " AND category LIKE ?"
+        where += " AND category LIKE ?"
         params.append(f"%{category}%")
     if keyword:
-        sql += " AND name LIKE ?"
+        where += " AND name LIKE ?"
         params.append(f"%{keyword}%")
-    sql += _ORDER_BY_CLAUSE
+
+    sql = (f"SELECT * FROM (SELECT *, {_PHASE_EXPR} AS _phase, "
+           f"{_PREC_EXPR} AS _prec FROM competitions {where}) "
+           f"{_ORDER_BY_SMART}")
     with get_conn() as conn:
         rows = conn.execute(sql, params).fetchall()
-    result = [_enrich(r) for r in rows]
+    result = [_enrich(_strip_phase(r)) for r in rows]
     if month:
         result = [r for r in result
                   if _month_in_range(month, r.get("reg_start_month"),
                                      r.get("reg_end_month"),
                                      r.get("reg_cross_year"))]
     return result
+
+
+def list_hot_competitions(limit: int = 8) -> list:
+    """首页「热门竞赛」（冷启动口径：没有用户浏览数据时使用）。
+
+    定义：级别为国家级 + 当前正在报名或尚未开始（已截止、无日期的直接排除），
+    排序沿用列表同一套紧迫度（越早截止越靠前，其次按临近开报时间），取前 N 条。
+    无精确日期但 *_month 覆盖本月的也计入，排在所有带日期的之后。
+    全部由 SQL 依据服务器当前时间计算，不缓存、不落库，刷新即生效。
+
+    参数:
+        limit: 返回条数上限（自动收敛到 1~50，默认 8）
+    返回:
+        list[dict]，已按紧迫度排序、已补 level_label
+    """
+    try:
+        n = int(limit)
+    except (TypeError, ValueError):
+        n = 8
+    n = max(1, min(50, n))
+
+    sql = (f"SELECT * FROM (SELECT *, {_PHASE_EXPR} AS _phase, "
+           f"{_PREC_EXPR} AS _prec FROM competitions "
+           "WHERE COALESCE(NULLIF(TRIM(level), ''), 'national') = 'national') "
+           f"WHERE _phase IN (0, 1) {_ORDER_BY_SMART} LIMIT ?")
+    with get_conn() as conn:
+        rows = conn.execute(sql, (n,)).fetchall()
+    return [_enrich(_strip_phase(r)) for r in rows]
 
 
 def get_categories() -> list:
@@ -1133,6 +1369,10 @@ def remove_preparation(user_id: int, competition_id: int) -> bool:
 _PREP_EXTRA_COLUMNS = (
     ("contest_start_month", "c.contest_start_month"),
     ("contest_end_month", "c.contest_end_month"),
+    ("reg_start_date", "c.reg_start_date"),
+    ("reg_end_date", "c.reg_end_date"),
+    ("contest_start_date", "c.contest_start_date"),
+    ("contest_end_date", "c.contest_end_date"),
     ("image_url", "c.image_url"),
     ("short_name", "c.short_name"),
 )
@@ -1718,7 +1958,8 @@ CREATE TABLE IF NOT EXISTS feedbacks (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id    INTEGER REFERENCES users (id) ON DELETE SET NULL,
     content    TEXT    NOT NULL,
-    created_at TEXT    NOT NULL DEFAULT (datetime('now', 'localtime'))
+    created_at TEXT    NOT NULL DEFAULT (datetime('now', 'localtime')),
+    is_read    INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_feedbacks_created
     ON feedbacks (created_at);
@@ -1761,6 +2002,73 @@ def create_feedback(content: str, user_id: Optional[int] = None) -> int:
         return int(cur.lastrowid)
 
 
+def list_feedbacks(limit: int = 200, offset: int = 0,
+                   db_path: Optional[str] = None) -> list:
+    """管理后台用：按时间倒序读取所有用户反馈（含用户名、已读标记）。"""
+    limit = max(1, min(int(limit or 200), 500))
+    offset = max(0, int(offset or 0))
+    sql = (
+        "SELECT f.id, f.user_id, f.content, f.created_at, f.is_read, "
+        "       u.username "
+        "FROM feedbacks f LEFT JOIN users u ON u.id = f.user_id "
+        "ORDER BY f.id DESC LIMIT ? OFFSET ?"
+    )
+    with get_conn(db_path) as conn:
+        try:
+            rows = conn.execute(sql, (limit, offset)).fetchall()
+        except sqlite3.OperationalError as exc:
+            if "no such table" not in str(exc).lower():
+                raise
+            _ensure_feedbacks(conn)
+            rows = []
+    return [dict(row) for row in rows]
+
+
+def mark_feedback_read(feedback_id: int, is_read: int = 1,
+                       db_path: Optional[str] = None) -> bool:
+    """把单条反馈标记为已读（/ 未读）；返回是否命中记录。"""
+    with get_conn(db_path) as conn:
+        cur = conn.execute(
+            "UPDATE feedbacks SET is_read = ? WHERE id = ?",
+            (1 if is_read else 0, feedback_id),
+        )
+        return cur.rowcount > 0
+
+
+def count_unread_feedbacks(db_path: Optional[str] = None) -> int:
+    """未读反馈数（管理后台侧边栏角标用）。"""
+    with get_conn(db_path) as conn:
+        try:
+            return int(conn.execute(
+                "SELECT COUNT(*) FROM feedbacks WHERE is_read = 0"
+            ).fetchone()[0])
+        except sqlite3.OperationalError:
+            return 0
+
+
+def set_user_admin(user_id: int, is_admin: bool = True,
+                   db_path: Optional[str] = None) -> bool:
+    """设置 / 取消管理员标记；返回是否命中用户。"""
+    with get_conn(db_path) as conn:
+        cur = conn.execute(
+            "UPDATE users SET is_admin = ? WHERE id = ?",
+            (1 if is_admin else 0, user_id),
+        )
+        return cur.rowcount > 0
+
+
+def set_user_admin_by_username(username: str, is_admin: bool = True,
+                               db_path: Optional[str] = None) -> bool:
+    """按用户名（小写归一化后）设置管理员标记。"""
+    name = (username or "").strip().lower()
+    if not name:
+        return False
+    user = get_user_by_username(name)
+    if user is None:
+        return False
+    return set_user_admin(int(user["id"]), is_admin, db_path=db_path)
+
+
 # ============================================================
 # 十二、新赛事候选表（competition_candidates）
 # ============================================================
@@ -1779,6 +2087,7 @@ _CANDIDATE_WRITABLE_FIELDS = (
     "official_url", "image_url", "level_label", "category_hint",
     "reg_start_month", "reg_end_month", "reg_cross_year",
     "contest_start_month", "contest_end_month", "raw_json",
+    "reg_start_date", "reg_end_date", "contest_start_date", "contest_end_date",
     "status", "competition_id",
 )
 
@@ -1819,6 +2128,9 @@ def ensure_candidates_table(db_path: Optional[str] = None) -> bool:
         existed = _table_exists(conn, "competition_candidates")
         if not existed:
             conn.executescript(CANDIDATES_DDL)
+        # 老候选表补精确日期列（幂等；纯 ADD COLUMN，不动任何业务行）
+        _migrate_simple_columns(conn, "competition_candidates",
+                                _CANDIDATE_MIGRATION_COLUMNS)
     return not existed
 
 
@@ -1831,6 +2143,67 @@ def _month_or_none(value):
     except (TypeError, ValueError):
         return None
     return month if 1 <= month <= 12 else None
+
+
+_DATE_FIELDS = (
+    "reg_start_date", "reg_end_date",
+    "contest_start_date", "contest_end_date",
+)
+
+# 精确日期允许 2 种形态：'YYYY-MM-DD'（带年份）或 'MM-DD'（原文只有月日）。
+_RE_DATE_YMD = re.compile(r"^(\d{4})-(\d{2})-(\d{2})$")
+_RE_DATE_MD = re.compile(r"^(\d{2})-(\d{2})$")
+_RE_DATE_TEXT = re.compile(r"(?:(\d{4})\s*[年./-]\s*)?(\d{1,2})\s*[月./-]\s*(\d{1,2})")
+
+
+def _days_in_month(year: int, month: int) -> int:
+    if month == 2:
+        leap = year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)
+        return 29 if leap else 28
+    return 30 if month in (4, 6, 9, 11) else 31
+
+
+def _date_or_none(value) -> Optional[str]:
+    """精确日期归一化：接受 '2026-04-15' / '2026/4/15' / '4月15日' / '04-15'。
+
+    返回 'YYYY-MM-DD'（原文带年份）或 'MM-DD'（原文只有月日）；
+    解析不出「年-月-日」或日期不合法（如 2 月 30 日、2026-04 只有月）一律 None——
+    **宁缺毋滥，绝不替模型补日**。
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    text = str(value).strip()
+    if not text or text.lower() in ("null", "none", "nan", "-"):
+        return None
+
+    match = _RE_DATE_YMD.match(text)
+    if match:
+        year, month, day = int(match.group(1)), int(match.group(2)), int(match.group(3))
+        if 1 <= month <= 12 and 1 <= day <= _days_in_month(year, month):
+            return "%04d-%02d-%02d" % (year, month, day)
+        return None
+
+    match = _RE_DATE_MD.match(text)
+    if match:
+        month, day = int(match.group(1)), int(match.group(2))
+        if 1 <= month <= 12 and 1 <= day <= _days_in_month(2000, month):
+            return "%02d-%02d" % (month, day)
+        return None
+
+    # 中文/混合写法：2026年4月15日、2026.4.15、4月15日
+    match = _RE_DATE_TEXT.search(text)
+    if match:
+        year_text, month, day = match.group(1), int(match.group(2)), int(match.group(3))
+        if not 1 <= month <= 12:
+            return None
+        if year_text:
+            year = int(year_text)
+            if 1 <= day <= _days_in_month(year, month):
+                return "%04d-%02d-%02d" % (year, month, day)
+            return None
+        if 1 <= day <= _days_in_month(2000, month):
+            return "%02d-%02d" % (month, day)
+    return None
 
 
 def _clean_url(url) -> Optional[str]:
@@ -2060,6 +2433,8 @@ def add_candidate(data: dict, db_path: Optional[str] = None,
         raise ValueError("非法候选状态：%s" % row["status"])
     for field in _MONTH_FIELDS:
         row[field] = _month_or_none(data.get(field))
+    for field in _DATE_FIELDS:
+        row[field] = _date_or_none(data.get(field))
 
     if row["raw_json"] is not None and not isinstance(row["raw_json"], str):
         row["raw_json"] = json.dumps(row["raw_json"], ensure_ascii=False)
@@ -2090,8 +2465,9 @@ def add_candidate(data: dict, db_path: Optional[str] = None,
 _CANDIDATE_SELECT_COLUMNS = (
     "id, source, source_key, source_url, raw_name, norm_name, official_url, "
     "image_url, level_label, category_hint, reg_start_month, reg_end_month, "
-    "reg_cross_year, contest_start_month, contest_end_month, status, "
-    "competition_id, created_at, reviewed_at"
+    "reg_cross_year, contest_start_month, contest_end_month, "
+    "reg_start_date, reg_end_date, contest_start_date, contest_end_date, "
+    "status, competition_id, created_at, reviewed_at"
 )
 
 
@@ -2212,6 +2588,10 @@ def promote_candidate(candidate_id: int, data: dict,
         _clean_image_url(data.get("image_url")),
         _month_or_none(data.get("contest_start_month")),
         _month_or_none(data.get("contest_end_month")),
+        _date_or_none(data.get("reg_start_date")),
+        _date_or_none(data.get("reg_end_date")),
+        _date_or_none(data.get("contest_start_date")),
+        _date_or_none(data.get("contest_end_date")),
         data.get("discover_source"),
         data.get("last_checked_at") or now_str(),
         1 if data.get("is_active", 1) else 0,
@@ -2236,9 +2616,10 @@ def promote_candidate(candidate_id: int, data: dict,
             """INSERT INTO competitions
                (name, category, reg_start_month, reg_end_month, reg_cross_year,
                 official_url, image_url, contest_start_month, contest_end_month,
+                reg_start_date, reg_end_date, contest_start_date, contest_end_date,
                 discover_source, last_checked_at, is_active, level, level_label,
                 sort_order, tech_stack)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             params,
         )
         competition_id = int(cur.lastrowid)

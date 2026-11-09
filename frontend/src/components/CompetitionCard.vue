@@ -6,6 +6,7 @@ import { addPreparation, removePreparation } from '../services/api'
 import { openAuthModal } from '../composables/useAuthModal'
 import { categoryTag } from '@/utils/competitionCategory'
 import { coverFallback } from '@/utils/coverFallback'
+import { countdownState } from '@/utils/timeFormat'
 
 // 通用竞赛卡片：整卡/详情 -> 详情页，备赛 -> 备赛列表页
 const props = defineProps({
@@ -28,7 +29,12 @@ const props = defineProps({
   // 是否显示极简"移出备赛"按钮（备赛列表页使用，互斥于加入按钮）
   showRemoveBtn: { type: Boolean, default: false },
   // 当前用户是否已加入备赛（由父组件批量拉取后下发）
-  prepared: { type: Boolean, default: false }
+  prepared: { type: Boolean, default: false },
+  // 日期轨原始值（'YYYY-MM-DD' / 'MM-DD'），仅用于右上角倒计时徽章；
+  // 展示文案仍走 signUpTime / contestTime，二者互不影响。
+  regStartDate: { type: String, default: '' },
+  regEndDate: { type: String, default: '' },
+  contestStartDate: { type: String, default: '' }
 })
 
 const emit = defineEmits(['preparation-change'])
@@ -37,6 +43,30 @@ const router = useRouter()
 
 // 卡片标签统一展示“大类 · 细分”，原始长分类作为 title 提示
 const categoryLabel = computed(() => categoryTag(props.category))
+
+// 右上角倒计时：只在拿到精确日期时出现，纯月份数据保持安静（不猜日子）
+const countdown = computed(() =>
+  countdownState({
+    reg_start_date: props.regStartDate,
+    reg_end_date: props.regEndDate,
+    contest_start_date: props.contestStartDate
+  })
+)
+
+const COUNTDOWN_TONE = {
+  // 7 天内截止：最刺眼的一档
+  urgent: 'bg-gradient-to-r from-rose-500 to-orange-500 text-white shadow-rose-500/40',
+  // 报名进行中
+  open: 'bg-gradient-to-r from-amber-400 to-orange-500 text-white shadow-orange-500/40',
+  // 还没开报
+  soon: 'bg-gradient-to-r from-sky-500 to-blue-600 text-white shadow-blue-500/30',
+  // 等开赛
+  contest: 'bg-gradient-to-r from-indigo-500 to-violet-600 text-white shadow-indigo-500/30',
+  // 已截止：灰掉，不抢注意力
+  over: 'bg-white/85 text-slate-500 ring-1 ring-slate-300/70 dark:bg-slate-700/85 dark:text-slate-300 dark:ring-slate-600 shadow-slate-900/10'
+}
+
+const countdownClass = computed(() => (countdown.value ? COUNTDOWN_TONE[countdown.value.tone] : ''))
 
 // 封面兜底：无图 / 图片加载失败时，用名称哈希色相 + 2 字简称占位（布局尺寸不变）
 // 真实图片永远优先：只有 image 为空或 @error 后才渲染 fallback。
@@ -132,15 +162,16 @@ async function removeOnly() {
   <article
     role="link"
     tabindex="0"
-    class="card-in group flex gap-7 overflow-hidden rounded-2xl bg-white dark:bg-slate-800 p-6 cursor-pointer
+    class="card-in group flex flex-col gap-5 overflow-hidden rounded-2xl bg-white dark:bg-slate-800 p-6 cursor-pointer
+           sm:flex-row sm:gap-7
            ring-1 ring-slate-200/70 dark:ring-slate-700 shadow-sm
            transition-all duration-200
            hover:shadow-lg hover:shadow-slate-900/10 hover:ring-blue-200"
     @click="goDetail"
     @keydown.enter.prevent="goDetail"
   >
-    <!-- 左：固定 16:9 封面位；真实图片一律 cover 裁切居中，绝不拉伸 -->
-    <div class="relative w-52 shrink-0 self-center">
+    <!-- 左：16:9 封面位（随卡片宽度铺开，海报感）；真实图片一律 cover 裁切居中，绝不拉伸 -->
+    <div class="relative w-full shrink-0 sm:w-[42%] sm:max-w-[430px] sm:self-center">
       <div class="cover-media aspect-[16/9] w-full overflow-hidden rounded-xl bg-slate-100 dark:bg-slate-700/60">
         <img
           v-if="showImage"
@@ -162,8 +193,39 @@ async function removeOnly() {
           >{{ fallback.glyph }}</span>
         </div>
       </div>
+
+      <!-- 倒计时徽章：浮在封面右上角（移动端即卡片右上角） -->
+      <span
+        v-if="countdown"
+        class="countdown-badge pointer-events-none absolute right-3 top-3 inline-flex items-center gap-1.5
+               rounded-full px-3 py-1.5 text-xs font-bold tracking-wide shadow-lg backdrop-blur
+               supports-[backdrop-filter]:bg-clip-padding"
+        :class="countdownClass"
+        :title="countdown.tone === 'over' ? '报名已结束' : '根据平台采集的官方日期实时计算'"
+      >
+        <span
+          v-if="countdown.tone === 'urgent' || countdown.tone === 'open'"
+          class="countdown-dot"
+          :class="countdown.tone === 'urgent' ? 'countdown-dot--hot' : ''"
+          aria-hidden="true"
+        />
+        <svg
+          v-else
+          class="h-3.5 w-3.5 shrink-0"
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+          stroke-width="2"
+          aria-hidden="true"
+        >
+          <path stroke-linecap="round" stroke-linejoin="round"
+                d="M12 6v6l4 2m6-2a10 10 0 1 1-20 0 10 10 0 0 1 20 0z" />
+        </svg>
+        <span class="tabular-nums">{{ countdown.text }}</span>
+      </span>
     </div>
 
+    <!-- 右：内容区 -->
     <!-- 右：内容区 -->
     <div class="flex min-w-0 flex-1 flex-col">
       <!-- 标题 -->
@@ -295,6 +357,75 @@ async function removeOnly() {
     animation: none;
     opacity: 1;
     transform: none;
+  }
+}
+
+/* ---------------- 倒计时徽章 ---------------- */
+.countdown-badge {
+  /* 轻微上浮 + 描边高光，让胶囊从封面上“浮”起来 */
+  box-shadow:
+    0 8px 20px -6px rgb(15 23 42 / 0.35),
+    inset 0 1px 0 rgb(255 255 255 / 0.35);
+  animation: badgeIn 0.45s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes badgeIn {
+  from {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.92);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* 呼吸光点：报名进行中就是“活着”的信号 */
+.countdown-dot {
+  position: relative;
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 9999px;
+  background: currentColor;
+}
+
+.countdown-dot::after {
+  content: '';
+  position: absolute;
+  inset: -3px;
+  border-radius: 9999px;
+  background: currentColor;
+  opacity: 0.55;
+  animation: dotPulse 1.6s ease-out infinite;
+}
+
+.countdown-dot--hot::after {
+  animation-duration: 1s;
+}
+
+@keyframes dotPulse {
+  0% {
+    transform: scale(0.6);
+    opacity: 0.6;
+  }
+  70% {
+    transform: scale(1.9);
+    opacity: 0;
+  }
+  100% {
+    transform: scale(1.9);
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .countdown-badge {
+    animation: none;
+  }
+  .countdown-dot::after {
+    animation: none;
+    opacity: 0.25;
   }
 }
 </style>

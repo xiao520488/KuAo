@@ -33,64 +33,9 @@ watch(
 )
 
 // ---- 后端字段格式化 ----
-// 详情接口返回的是 *月份*（reg_*_month / contest_*_month，1-12 的数字），
-// 不是完整日期，因此“报名时间 / 比赛时间”必须在前端拼展示文案。
-function toMonth(value) {
-  if (value === null || value === undefined || value === '') return null
-  const str = String(value).trim()
-
-  if (/^\d{1,2}$/.test(str)) {
-    const n = parseInt(str, 10)
-    return n >= 1 && n <= 12 ? n : null
-  }
-
-  const parts = str.split(/[-/.\sT:]+/).filter(Boolean)
-  if (parts.length >= 2) {
-    if (parts[0].length === 4) {
-      const m = parseInt(parts[1], 10)
-      if (m >= 1 && m <= 12) return m
-    }
-    const m = parseInt(parts[0], 10)
-    if (m >= 1 && m <= 12) return m
-  }
-
-  const d = new Date(str)
-  if (!Number.isNaN(d.getTime())) return d.getMonth() + 1
-  return null
-}
-
-function formatSignUp(item) {
-  const start = toMonth(item.reg_start_month)
-  const end = toMonth(item.reg_end_month)
-
-  if (start && end) {
-    const crossYear =
-      item.reg_cross_year === true || item.reg_cross_year === 1 ||
-      item.reg_cross_year === '1' || item.reg_cross_year === 'true' ||
-      end < start
-
-    if (crossYear && end < start) return `${start} 月 - 次年 ${end} 月`
-    return `${start} 月 - ${end} 月`
-  }
-  if (start) return `${start} 月起`
-  if (end) return `截止 ${end} 月`
-  return '待公布'
-}
-
-// 同月 -> “11 月”；跨月 -> “10 月 - 11 月”；跨年 -> “12 月 - 次年 1 月”；缺值 -> “待定”
-function formatContest(item) {
-  const start = toMonth(item.contest_start_month)
-  const end = toMonth(item.contest_end_month)
-
-  if (start && end) {
-    if (end < start) return `${start} 月 - 次年 ${end} 月`
-    if (start === end) return `${start} 月`
-    return `${start} 月 - ${end} 月`
-  }
-  if (start) return `${start} 月`
-  if (end) return `${end} 月`
-  return '待定'
-}
+// 双轨制：日期轨（reg_*_date / contest_*_date）优先，为空时降级到月份轨；
+// 统一实现在 utils/timeFormat，避免各页面文案漂移。
+import { toMonth, formatSignUp, formatContest } from '../utils/timeFormat'
 
 // 封面图：只接受 http(s) 绝对地址，其余回落大图占位
 function resolveImage(item) {
@@ -401,26 +346,31 @@ const guideReady = computed(() => Boolean(detail.value?.full_process_guide))
 
       <!-- 正常内容 -->
       <template v-else>
-        <!-- 1. 全宽竞赛大图：最高 300px，cover 裁切居中，长图不撑破页面 -->
+        <!-- 1. 全宽竞赛大图：宽度撑满、高度按原图比例自适应，最高 400px。
+             只 shrink 不 crop：object-contain 保证海报上的标题/文字完整可见，
+             比例不匹配时的留白由容器背景色兜住，不再切掉核心文字。 -->
         <div class="mt-8 w-full">
-          <div class="cover-media h-[300px] max-h-[300px] w-full overflow-hidden rounded-3xl bg-slate-50 dark:bg-slate-900">
+          <div class="w-full overflow-hidden rounded-2xl bg-[#f8f9fa] ring-1 ring-slate-200/60 dark:bg-slate-800/60 dark:ring-slate-700/60">
             <img
               v-if="detail?.image && !heroFailed"
               :src="detail.image"
               alt=""
-              class="h-full w-full object-cover object-center"
+              class="block h-auto w-full object-contain object-center"
+              style="max-height: 400px"
               @error="onHeroError"
             />
-            <div
-              v-else
-              class="cover-fallback cover-fallback--hero"
-              :style="{ '--cover-hue': heroFallback.hue }"
-              aria-hidden="true"
-            >
-              <span
-                class="cover-fallback__glyph"
-                :class="{ 'cover-fallback__glyph--short': heroFallback.isShortName }"
-              >{{ heroFallback.glyph }}</span>
+            <!-- 无图 / 加载失败：容器固定高度保证兜底色块有尺寸，渐变压暗后与页面协调 -->
+            <div v-else class="h-[240px] w-full sm:h-[320px]">
+              <div
+                class="cover-fallback cover-fallback--hero"
+                :style="{ '--cover-hue': heroFallback.hue }"
+                aria-hidden="true"
+              >
+                <span
+                  class="cover-fallback__glyph"
+                  :class="{ 'cover-fallback__glyph--short': heroFallback.isShortName }"
+                >{{ heroFallback.glyph }}</span>
+              </div>
             </div>
           </div>
         </div>
@@ -605,7 +555,8 @@ const guideReady = computed(() => Boolean(detail.value?.full_process_guide))
                   <p class="mt-1 text-sm font-bold text-slate-400 dark:text-slate-500">暂未收录</p>
                 </div>
                 <p class="text-xs leading-5 text-slate-500 dark:text-slate-400">
-                  月份窗口来自平台采集，具体起止日期与校内选拔安排请以官网当年通知为准。
+                  时间来自平台采集：原文写到「日」就显示精确日期，只写到月份则显示月份；
+                  具体起止日期与校内选拔安排请以官网当年通知为准。
                 </p>
               </div>
 

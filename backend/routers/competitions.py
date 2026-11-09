@@ -3,7 +3,8 @@
 数据来源：db 层（SQLite 真实数据）。
 
 提供：
-  * GET  /api/competitions                       竞赛列表（支持筛选）
+  * GET  /api/competitions                       竞赛列表（支持筛选，按报名紧迫度智能排序）
+  * GET  /api/competitions/hot                   首页热门（国家级 + 报名中/未开始，前 8 条）
   * GET  /api/competitions/{id}                  竞赛详情（含攻略全文）
   * GET  /api/competitions/{id}/awards           获奖作品
   * POST /api/competitions/{id}/generate_guide   按需生成攻略（登录 + 异步）
@@ -25,6 +26,7 @@ from db import get_competition as db_get_competition
 from db import get_guide_state as db_get_guide_state
 from db import list_awards_by_competition as db_list_awards_by_competition
 from db import list_competitions as db_list_competitions
+from db import list_hot_competitions as db_list_hot_competitions
 from models.schemas import (
     Award,
     AwardList,
@@ -80,6 +82,11 @@ def _row_to_competition(row: Dict[str, Any]) -> Competition:
         reg_cross_year=bool(row.get("reg_cross_year")),
         contest_start_month=row.get("contest_start_month"),
         contest_end_month=row.get("contest_end_month"),
+        # 双轨制（2026-11-09）：精确日期，可为空；为空时前端降级用月份
+        reg_start_date=row.get("reg_start_date"),
+        reg_end_date=row.get("reg_end_date"),
+        contest_start_date=row.get("contest_start_date"),
+        contest_end_date=row.get("contest_end_date"),
         official_url=row.get("official_url"),
         image=row.get("image_url") or row.get("image"),
         short_name=row.get("short_name"),
@@ -132,6 +139,33 @@ def list_competitions(
 ) -> List[Competition]:
     """获取竞赛列表（真实数据）。"""
     rows = db_list_competitions(category=category, month=month, keyword=keyword)
+    return [_row_to_competition(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# GET /api/competitions/hot  首页热门（冷启动口径）
+# 注意：必须声明在 /api/competitions/{id} 之前，否则 "hot" 会被当成 id 解析成 422
+# ---------------------------------------------------------------------------
+@router.get(
+    "/api/competitions/hot",
+    response_model=List[Competition],
+    summary="获取首页热门竞赛",
+    description=(
+        "首页专属接口（冷启动阶段无用户行为数据时的「热门」口径）：\n\n"
+        "* 只保留级别为「国家级」的赛事；\n"
+        "* 只保留当前正在报名（今天在报名起止日之间）或尚未开始的赛事，"
+        "已截止与无日期的直接排除；\n"
+        "* 排序：正在报名的按报名截止日期升序（越早截止越靠前），"
+        "其次是尚未开始的按开报日期升序；\n"
+        "* 默认取前 8 条。\n\n"
+        "全部由 SQL 基于服务器当前时间实时计算，刷新即反映最新截止状态。"
+    ),
+)
+def list_hot_competitions(
+    limit: int = Query(8, ge=1, le=50, description="返回条数，默认 8"),
+) -> List[Competition]:
+    """首页热门竞赛（国家级 + 报名中/未开始，按紧迫度排序）。"""
+    rows = db_list_hot_competitions(limit=limit)
     return [_row_to_competition(r) for r in rows]
 
 

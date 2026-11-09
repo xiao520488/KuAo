@@ -13,58 +13,8 @@ const total = ref(0)
 const loading = ref(true)
 const errorMsg = ref('')
 
-const MONTH_RE = /^\d{1,2}$/
-
-// 后端返回的月份字段可能是 1-12 的数字或完整日期，统一成「N 月」展示
-function toMonth(value) {
-  if (value === null || value === undefined || value === '') return null
-  const str = String(value).trim()
-
-  if (MONTH_RE.test(str)) {
-    const n = parseInt(str, 10)
-    return n >= 1 && n <= 12 ? n : null
-  }
-
-  const parts = str.split(/[-/.\sT:]+/).filter(Boolean)
-  if (parts.length >= 2) {
-    const m = parseInt(parts[1], 10)
-    if (m >= 1 && m <= 12) return m
-  }
-  return null
-}
-
-function formatSignUp(item) {
-  const start = toMonth(item.reg_start_month)
-  const end = toMonth(item.reg_end_month)
-
-  if (start && end) {
-    const crossYear =
-      item.reg_cross_year === true || item.reg_cross_year === 1 ||
-      item.reg_cross_year === '1' || item.reg_cross_year === 'true' ||
-      end < start
-    if (crossYear && end < start) return `${start} 月 - 次年 ${end} 月`
-    return `${start} 月 - ${end} 月`
-  }
-  if (start) return `${start} 月起`
-  if (end) return `截止 ${end} 月`
-  return '待公布'
-}
-
-// 比赛时间：后端只给 contest_start_month / contest_end_month（1-12 的月份）
-// 同月 -> “11 月”；跨月 -> “10 月 - 11 月”；跨年 -> “12 月 - 次年 1 月”
-function formatContest(item) {
-  const start = toMonth(item.contest_start_month)
-  const end = toMonth(item.contest_end_month)
-
-  if (start && end) {
-    if (end < start) return `${start} 月 - 次年 ${end} 月`
-    if (start === end) return `${start} 月`
-    return `${start} 月 - ${end} 月`
-  }
-  if (start) return `${start} 月`
-  if (end) return `${end} 月`
-  return '待定'
-}
+// 时间展示统一走 utils/timeFormat（日期轨优先，缺失降级月份轨）
+import { formatSignUp, formatContest } from '../utils/timeFormat'
 
 // 封面图：后端 API 的 image（由 DB 的 image_url 映射而来）
 // 只接受 http(s) 绝对地址，避免相对路径 / 协议相对地址 / 空串打坏卡片占位图
@@ -93,7 +43,11 @@ function mapToPrepCard(item) {
     image: resolveImage(item),
     shortName: item.short_name || '',
     signUpTime: formatSignUp(item),
-    contestTime: formatContest(item)
+    contestTime: formatContest(item),
+    // 日期轨原始值：只喂给倒计时徽章
+    regStartDate: item.reg_start_date || '',
+    regEndDate: item.reg_end_date || '',
+    contestStartDate: item.contest_start_date || ''
   }
 }
 

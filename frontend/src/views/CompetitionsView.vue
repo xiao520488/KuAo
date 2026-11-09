@@ -137,61 +137,8 @@ const filtered = computed(() => {
   )
 })
 
-// ---------- 数据格式化（与首页保持一致） ----------
-function toMonth(value) {
-  if (value === null || value === undefined || value === '') return null
-  const str = String(value).trim()
-
-  if (/^\d{1,2}$/.test(str)) {
-    const n = parseInt(str, 10)
-    return n >= 1 && n <= 12 ? n : null
-  }
-
-  const parts = str.split(/[-/.\sT:]+/).filter(Boolean)
-  if (parts.length >= 2) {
-    if (parts[0].length === 4) {
-      const m = parseInt(parts[1], 10)
-      if (m >= 1 && m <= 12) return m
-    }
-    const m = parseInt(parts[0], 10)
-    if (m >= 1 && m <= 12) return m
-  }
-  return null
-}
-
-function formatSignUp(item) {
-  const start = toMonth(item.reg_start_month)
-  const end = toMonth(item.reg_end_month)
-
-  if (start && end) {
-    const crossYear =
-      item.reg_cross_year === true || item.reg_cross_year === 1 ||
-      item.reg_cross_year === '1' || item.reg_cross_year === 'true' ||
-      end < start
-
-    if (crossYear && end < start) return `${start} 月 - 次年 ${end} 月`
-    return `${start} 月 - ${end} 月`
-  }
-  if (start) return `${start} 月起`
-  if (end) return `截止 ${end} 月`
-  return '待公布'
-}
-
-// 比赛时间：后端只给 contest_start_month / contest_end_month（1-12 的月份）
-// 同月 -> “11 月”；跨月 -> “10 月 - 11 月”；跨年 -> “12 月 - 次年 1 月”
-function formatContest(item) {
-  const start = toMonth(item.contest_start_month)
-  const end = toMonth(item.contest_end_month)
-
-  if (start && end) {
-    if (end < start) return `${start} 月 - 次年 ${end} 月`
-    if (start === end) return `${start} 月`
-    return `${start} 月 - ${end} 月`
-  }
-  if (start) return `${start} 月`
-  if (end) return `${end} 月`
-  return '待定'
-}
+// ---------- 数据格式化（统一走 utils/timeFormat） ----------
+import { formatSignUp, formatContest } from '../utils/timeFormat'
 
 // 封面图：后端 API 的 image（由 DB 的 image_url 映射而来）
 // 只接受 http(s) 绝对地址，避免相对路径 / 协议相对地址 / 空串打坏卡片占位图
@@ -222,7 +169,11 @@ function mapToCard(item, index) {
     image: resolveImage(item),
     shortName: item.short_name || '',
     signUpTime: formatSignUp(item),
-    contestTime: formatContest(item)
+    contestTime: formatContest(item),
+    // 日期轨原始值：只喂给倒计时徽章，缺省时徽章自动不渲染
+    regStartDate: item.reg_start_date || '',
+    regEndDate: item.reg_end_date || '',
+    contestStartDate: item.contest_start_date || ''
   }
 }
 
@@ -277,7 +228,7 @@ onBeforeUnmount(() => {
       <div class="mb-8">
         <h1 class="text-3xl font-black tracking-tight text-slate-900 dark:text-slate-100">全部竞赛</h1>
         <p class="mt-2 text-sm text-slate-500 dark:text-slate-400">
-          共 {{ competitions.length }} 项竞赛，按科目与级别快速定位适合你的赛事
+          共 {{ competitions.length }} 项竞赛，按报名紧迫度排序：正在报名 → 即将开始 → 已截止
         </p>
       </div>
 
@@ -484,6 +435,9 @@ onBeforeUnmount(() => {
           :category="item.category"
           :sign-up-time="item.signUpTime"
           :contest-time="item.contestTime"
+          :reg-start-date="item.regStartDate"
+          :reg-end-date="item.regEndDate"
+          :contest-start-date="item.contestStartDate"
           :prepared="preparedMap[String(item.id)] === true"
           @preparation-change="onPreparationChange"
         />

@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 import config
 import db
-from routers import ai, auth, competitions, feedback, preparations
+from routers import admin, ai, auth, competitions, feedback, preparations
 
 app = FastAPI(
     title="Agent Lab API",
@@ -31,7 +31,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=config.CORS_ALLOW_ORIGINS,
     allow_credentials=False,       # 鉴权使用 Authorization: Bearer，不依赖 Cookie
-    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type"],
     max_age=600,
 )
@@ -63,6 +63,7 @@ app.include_router(ai.router)
 app.include_router(auth.router)
 app.include_router(preparations.router)
 app.include_router(feedback.router)
+app.include_router(admin.router)
 
 
 # ---------------------------------------------------------------------------

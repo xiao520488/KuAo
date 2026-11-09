@@ -164,6 +164,28 @@ export function getCompetitions(params = {}) {
 }
 
 /**
+ * 获取首页热门竞赛（首页专属接口）
+ *
+ * GET /api/competitions/hot?limit=8
+ *
+ * 后端已按「国家级 + 报名中/未开始 + 越早截止越靠前」排好序并限流，
+ * 前端**不要**再做二次排序或截断，直接按返回顺序渲染。
+ *
+ * @param {number} [limit=8] 返回条数（1~50）
+ * @returns {Promise<Array>} 竞赛数组（顺序即展示顺序）
+ */
+export function getHotCompetitions(limit = 8) {
+  const n = Number(limit)
+  const params = Number.isInteger(n) && n > 0 ? { limit: n } : {}
+  return api.get('/competitions/hot', { params }).then((data) => {
+    if (Array.isArray(data)) return data
+    if (Array.isArray(data?.data)) return data.data
+    if (Array.isArray(data?.items)) return data.items
+    return []
+  })
+}
+
+/**
  * AI 语义搜索赛事
  * POST /api/ai/search  body: { query }
  *
@@ -391,6 +413,9 @@ export function generatePlan(payload = {}) {
  * 提交用户反馈
  * POST /api/feedback  body: { content }
  *
+ * 注意：axios 实例的 baseURL 已经是 '/api'，这里只能写 '/feedback'，
+ * 写成 '/api/feedback' 会被拼成 '/api/api/feedback' -> 404 Not Found。
+ *
  * @param {string} content 反馈正文
  * @returns {Promise<{ message: string, id?: number }>}
  */
@@ -399,7 +424,7 @@ export function submitFeedback(content) {
   if (!text) return Promise.reject(new Error('请输入反馈内容'))
   if (text.length > 1000) return Promise.reject(new Error('反馈内容不能超过 1000 字'))
 
-  return api.post('/api/feedback', { content: text }).then((data) => ({
+  return api.post('/feedback', { content: text }).then((data) => ({
     message: typeof data?.message === 'string' ? data.message : '感谢你的反馈',
     id: Number.isInteger(data?.id) ? data.id : undefined
   }))
@@ -444,6 +469,66 @@ export function removePreparation(competitionId) {
   const cid = normalizeCompetitionId(competitionId)
   if (cid === null) return Promise.reject(new Error('竞赛 ID 无效'))
   return api.delete(`/preparations/${cid}`)
+}
+
+// ---------------------------------------------------------------- admin
+
+/**
+ * 管理后台：待审候选赛事列表
+ * GET /api/admin/candidates?limit=&offset=
+ *
+ * 后端已用 get_current_admin 把关，401 = 未登录，403 = 不是管理员。
+ *
+ * @param {{ limit?: number, offset?: number }} [params]
+ * @returns {Promise<{ total: number, items: Array }>}
+ */
+export function getAdminCandidates(params = {}) {
+  const query = {}
+  if (Number.isInteger(params.limit)) query.limit = params.limit
+  if (Number.isInteger(params.offset)) query.offset = params.offset
+
+  return api.get('/admin/candidates', { params: query }).then((data) => ({
+    total: Number.isFinite(data?.total) ? data.total : 0,
+    items: Array.isArray(data?.items) ? data.items : []
+  }))
+}
+
+/** 管理后台：通过候选（转入正式赛事） POST /api/admin/candidates/:id/approve */
+export function approveAdminCandidate(candidateId) {
+  const id = Number(candidateId)
+  if (!Number.isInteger(id) || id <= 0) return Promise.reject(new Error('候选 ID 无效'))
+  return api.post(`/admin/candidates/${id}/approve`)
+}
+
+/** 管理后台：拒绝候选 POST /api/admin/candidates/:id/reject */
+export function rejectAdminCandidate(candidateId) {
+  const id = Number(candidateId)
+  if (!Number.isInteger(id) || id <= 0) return Promise.reject(new Error('候选 ID 无效'))
+  return api.post(`/admin/candidates/${id}/reject`)
+}
+
+/**
+ * 管理后台：全部用户反馈
+ * GET /api/admin/feedback?limit=&offset=
+ *
+ * @returns {Promise<{ items: Array, unread: number }>}
+ */
+export function getAdminFeedback(params = {}) {
+  const query = {}
+  if (Number.isInteger(params.limit)) query.limit = params.limit
+  if (Number.isInteger(params.offset)) query.offset = params.offset
+
+  return api.get('/admin/feedback', { params: query }).then((data) => ({
+    items: Array.isArray(data?.items) ? data.items : [],
+    unread: Number.isFinite(data?.unread) ? data.unread : 0
+  }))
+}
+
+/** 管理后台：标记反馈已读 PUT /api/admin/feedback/:id/read */
+export function markAdminFeedbackRead(feedbackId) {
+  const id = Number(feedbackId)
+  if (!Number.isInteger(id) || id <= 0) return Promise.reject(new Error('反馈 ID 无效'))
+  return api.put(`/admin/feedback/${id}/read`)
 }
 
 export default api

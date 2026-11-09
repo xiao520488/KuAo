@@ -1,7 +1,8 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import HomeView from '@/views/HomeView.vue'
-import { hasToken } from '@/services/auth'
+import { authState, hasToken, restoreSession } from '@/services/auth'
 import { openAuthModal, openAuthModalDeferred } from '@/composables/useAuthModal'
+import { showToast } from '@/composables/useToast'
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
@@ -40,6 +41,14 @@ const router = createRouter({
       meta: { requiresAuth: true },
       component: () => import('@/views/PreparationWorkspaceView.vue')
     },
+    {
+      // 管理后台：需登录 + 管理员身份。两道拦截，
+      // 前端守卫只负责体验，真正的权限由后端 get_current_admin 把关。
+      path: '/admin',
+      name: 'admin',
+      meta: { requiresAuth: true, requiresAdmin: true },
+      component: () => import('@/views/AdminView.vue')
+    },
     // 404 兜底：后续可替换为专门的 NotFound 页面
     {
       path: '/:pathMatch(.*)*',
@@ -61,36 +70,65 @@ const router = createRouter({
 })
 
 /**
- * 全局前置守卫：登录鉴权
+ * 全局前置守卫：登录鉴权 + 管理员鉴权
  *
  * 判定规则：
- * - 目标路由（含父级）声明了 requiresAuth，且本地无 token → 拦截
- * - 拦截动作：唤起 AuthModal 登录弹窗，并取消本次导航（留在当前页）
+ * - 目标路由（含父级）声明了 requiresAuth，且本地无 token → 唤起登录弹窗并拦截
+ * - 声明了 requiresAdmin（必然同时 requiresAuth）：
+ *     · 内存里已有用户信息 → 直接看 is_admin
+ *     · 内存为空（整页刷新直达 /admin）→ await restoreSession() 拉一次 /api/auth/me
+ *     · 不是管理员 → Toast 提示无权限，踢回首页
  *
  * 说明：
- * - 只校验「有没有 token」，不做 API 请求。token 是否真的失效由
+ * - 普通路由只校验「有没有 token」，不做 API 请求，token 是否真的失效由
  *   api.js 的 401 拦截器兜底（会清 token 并派发 auth:unauthorized）。
- *   若在这里 await 校验接口，会让每次跳转都多一次网络往返，得不偿失。
+ * - 只有 /admin 这一层会额外等待一次用户信息，代价可接受且只发生在进入后台时。
  * - 子路由若未显式声明，使用 to.matched.some() 向上匹配父级 meta。
  */
-router.beforeEach((to, from) => {
+router.beforeEach(async (to) => {
   const needAuth = to.matched.some((record) => record.meta?.requiresAuth)
   if (!needAuth) return true
 
-  if (hasToken()) return true
+  if (!hasToken()) {
+    // 未登录：唤醒登录弹窗 + 阻断跳转
+    //
+    // 这里同时用同步与延迟两次调用，原因见 useAuthModal.js：
+    // 地址栏直接回车（整页刷新）时，首次导航的守卫早于 app.mount，
+    // 同步设置的状态可能被紧随其后的初始化流程覆盖，导致「拦住了但没弹窗」。
+    //   - 同步调用：常规的页内跳转立即生效，无延迟感；
+    //   - 延迟调用：兜住整页刷新场景，等初始化完成后再确保弹窗可见。
+    // 两者幂等，重复置 true 无副作用。
+    openAuthModal('login')
+    openAuthModalDeferred('login')
+    return false
+  }
 
-  // 未登录：唤醒登录弹窗 + 阻断跳转
-  //
-  // 这里同时用同步与延迟两次调用，原因见 useAuthModal.js：
-  // 地址栏直接回车（整页刷新）时，首次导航的守卫早于 app.mount，
-  // 同步设置的状态可能被紧随其后的初始化流程覆盖，导致「拦住了但没弹窗」。
-  //   - 同步调用：常规的页内跳转立即生效，无延迟感；
-  //   - 延迟调用：兜住整页刷新场景，等初始化完成后再确保弹窗可见。
-  // 两者幂等，重复置 true 无副作用。
-  openAuthModal('login')
-  openAuthModalDeferred('login')
+  const needAdmin = to.matched.some((record) => record.meta?.requiresAdmin)
+  if (!needAdmin) return true
 
-  return false
+  // 管理员校验：内存里没用户就补拉一次（整页刷新场景）
+  let user = authState.user
+  if (!user) {
+    try {
+      user = await restoreSession()
+    } catch {
+      user = null
+    }
+  }
+
+  // token 失效：restoreSession 内部会清掉 token，这里按未登录处理
+  if (!user) {
+    openAuthModal('login')
+    openAuthModalDeferred('login')
+    return false
+  }
+
+  if (user.is_admin) return true
+
+  showToast('无权限访问管理后台')
+  // 已在首页时避免重复导航（会抛冗余导航错误）
+  if (to.path === '/') return false
+  return { path: '/' }
 })
 
 export default router

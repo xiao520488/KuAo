@@ -4,7 +4,7 @@ import Header from '@/components/Header.vue'
 import CompetitionCard from '@/components/CompetitionCard.vue'
 import BackToTop from '@/components/BackToTop.vue'
 import { useRoute, useRouter } from 'vue-router'
-import { getCompetitions, searchCompetitions, checkPrepared } from '@/services/api'
+import { getHotCompetitions, searchCompetitions, checkPrepared } from '@/services/api'
 import { authState } from '@/services/auth'
 import { theme } from '@/composables/useTheme'
 
@@ -15,6 +15,9 @@ const router = useRouter()
 const competitions = ref([])
 const loading = ref(true)
 const errorMsg = ref('')
+
+// 首页热门条数：与后端 /api/competitions/hot 的默认值保持一致
+const HOT_LIMIT = 8
 
 /* ---------------- 入场动效状态 ---------------- */
 // heroReady：首屏元素是否已就绪。挂载后下一帧置 true，触发 hero 元素滑入。
@@ -28,72 +31,8 @@ const listAnimKey = ref(0)
 // 上一次参与动画的数据签名，用于判断列表是否真的变了
 let lastSignature = ''
 
-// 只取月份数字：兼容 "2025-03-01" / "2025.03.01" / "2025/3/5" / 纯数字月份 "3" / Date 字符串
-function toMonth(value) {
-  if (value === null || value === undefined || value === '') return null
-  const str = String(value).trim()
-
-  // 纯数字：可能是月份(1-12)或时间戳
-  if (/^\d{1,2}$/.test(str)) {
-    const n = parseInt(str, 10)
-    return n >= 1 && n <= 12 ? n : null
-  }
-
-  // 带分隔符的日期：按 - . / 拆分，从候选中挑出 1-12 的月份
-  // 形如 2025-03-01：年份是 4 位，月份是第 2 段
-  const parts = str.split(/[-/.\sT:]+/).filter(Boolean)
-  if (parts.length >= 2) {
-    if (parts[0].length === 4) {
-      const m = parseInt(parts[1], 10)
-      if (m >= 1 && m <= 12) return m
-    }
-    // 形如 03-01（无年份）：第 1 段即月份
-    const m = parseInt(parts[0], 10)
-    if (m >= 1 && m <= 12) return m
-  }
-
-  // 兜底交给 Date 解析
-  const d = new Date(str)
-  if (!Number.isNaN(d.getTime())) return d.getMonth() + 1
-  return null
-}
-
-// 报名时间格式化为 "X 月 - Y 月"
-function formatSignUp(item) {
-  const start = toMonth(item.reg_start_month)
-  const end = toMonth(item.reg_end_month)
-
-  if (start && end) {
-    // 跨年报名：结束月份小于开始月份，例如 12 月 - 次年 1 月
-    // 后端 reg_cross_year 为真时也按跨年处理
-    const crossYear =
-      item.reg_cross_year === true || item.reg_cross_year === 1 ||
-      item.reg_cross_year === '1' || item.reg_cross_year === 'true' ||
-      end < start
-
-    if (crossYear && end < start) return `${start} 月 - 次年 ${end} 月`
-    return `${start} 月 - ${end} 月`
-  }
-  if (start) return `${start} 月起`
-  if (end) return `截止 ${end} 月`
-  return '待公布'
-}
-
-// 比赛时间：后端只给 contest_start_month / contest_end_month（1-12 的月份）
-// 同月 -> “11 月”；同月跨年也按单月处理；跨月 -> “10 月 - 11 月”；跨年 -> “12 月 - 次年 1 月”
-function formatContest(item) {
-  const start = toMonth(item.contest_start_month)
-  const end = toMonth(item.contest_end_month)
-
-  if (start && end) {
-    if (end < start) return `${start} 月 - 次年 ${end} 月`
-    if (start === end) return `${start} 月`
-    return `${start} 月 - ${end} 月`
-  }
-  if (start) return `${start} 月`
-  if (end) return `${end} 月`
-  return '待定'
-}
+// 时间展示统一走 utils/timeFormat（双轨制：精确日期优先，缺失降级到月份）
+import { formatSignUp, formatContest } from '../utils/timeFormat'
 
 // 封面图：后端 API 的 image（由 DB 的 image_url 映射而来）
 // 只接受 http(s) 绝对地址，避免相对路径 / 协议相对地址 / 空串打坏卡片占位图
@@ -123,7 +62,11 @@ function mapToCard(item, index) {
     image: resolveImage(item),
     shortName: item.short_name || '',
     signUpTime: formatSignUp(item),
-    contestTime: formatContest(item)
+    contestTime: formatContest(item),
+    // 日期轨原始值：只喂给倒计时徽章
+    regStartDate: item.reg_start_date || '',
+    regEndDate: item.reg_end_date || '',
+    contestStartDate: item.contest_start_date || ''
   }
 }
 
@@ -166,8 +109,10 @@ async function loadCompetitions() {
   loading.value = true
   errorMsg.value = ''
   try {
-    const list = await getCompetitions()
-    competitions.value = list.slice(0, 8).map(mapToCard)
+    // 首页热门：后端已按「国家级 + 报名中/未开始 + 紧迫度」排序并限流到 8 条，
+    // 前端原样渲染（不做 sort / slice，避免打乱后端的紧迫度顺序）
+    const list = await getHotCompetitions(HOT_LIMIT)
+    competitions.value = list.map(mapToCard)
     bumpListAnimation()
     loadPreparedStates(competitions.value)
   } catch (err) {
@@ -712,6 +657,9 @@ watch(
           :category="item.category"
           :sign-up-time="item.signUpTime"
           :contest-time="item.contestTime"
+          :reg-start-date="item.regStartDate"
+          :reg-end-date="item.regEndDate"
+          :contest-start-date="item.contestStartDate"
           :prepared="preparedMap[String(item.id)] === true"
           @preparation-change="onPreparationChange"
         />

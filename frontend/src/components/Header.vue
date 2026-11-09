@@ -126,6 +126,8 @@ const mobileNavList = navList
 
 const user = computed(() => authState.user)
 const isLoggedIn = computed(() => !!authState.user)
+// 管理后台入口：仅管理员可见（is_admin 由后端 /api/auth/me 返回）
+const isAdmin = computed(() => Boolean(authState.user?.is_admin))
 
 function openAuth(mode = 'login') {
   openAuthModal(mode)
@@ -582,6 +584,16 @@ onBeforeUnmount(() => {
               >
                 我的备赛
               </router-link>
+              <!-- 管理后台：仅管理员可见 -->
+              <router-link
+                v-if="isAdmin"
+                to="/admin"
+                class="block rounded-lg px-3 py-2 text-sm font-medium text-blue-600 dark:text-blue-400
+                       hover:bg-blue-50 dark:hover:bg-blue-500/15"
+                @click="menuOpen = false"
+              >
+                管理后台
+              </router-link>
               <button
                 class="block w-full rounded-lg px-3 py-2 text-left text-sm font-medium
                        text-red-500 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-500/15"
@@ -761,6 +773,16 @@ onBeforeUnmount(() => {
               @click="closeMobile"
             >
               我的备赛
+            </router-link>
+            <!-- 管理后台：仅管理员可见 -->
+            <router-link
+              v-if="isAdmin"
+              to="/admin"
+              class="block w-full rounded-xl px-4 py-3 text-left text-base font-bold
+                     text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-500/15 transition-colors"
+              @click="closeMobile"
+            >
+              管理后台
             </router-link>
             <button
               class="mt-1 w-full rounded-xl px-4 py-3 text-left text-base font-bold

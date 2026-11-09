@@ -53,6 +53,7 @@ class UserInfo(BaseModel):
     id: int = Field(..., description="用户 ID")
     username: str = Field(..., description="用户名")
     created_at: str = Field(..., description="注册时间")
+    is_admin: bool = Field(False, description="是否管理员（决定前端是否显示管理后台入口）")
 
 
 class TokenResponse(BaseModel):
@@ -82,6 +83,14 @@ def _to_user_dict(user) -> dict:
     return {key: user[key] for key in user.keys()}
 
 
+def _is_admin(user) -> bool:
+    """从用户记录里安全读 is_admin（老库无该列时按非管理员处理）。"""
+    try:
+        return bool(int(user["is_admin"] or 0))
+    except (KeyError, IndexError, TypeError, ValueError):
+        return False
+
+
 def _build_token_response(user) -> TokenResponse:
     user = _to_user_dict(user)
     token = create_access_token(user["id"], user["username"])
@@ -92,7 +101,8 @@ def _build_token_response(user) -> TokenResponse:
         user=UserInfo(
             id=user["id"],
             username=user["username"],
-            created_at=user["created_at"]
+            created_at=user["created_at"],
+            is_admin=_is_admin(user),
         ),
     )
 
@@ -176,4 +186,5 @@ def read_current_user(user: dict = Depends(get_current_user)) -> UserInfo:
         id=user["id"],
         username=user["username"],
         created_at=user["created_at"],
+        is_admin=_is_admin(user),
     )

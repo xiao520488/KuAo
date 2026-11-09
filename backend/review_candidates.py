@@ -90,6 +90,11 @@ def build_competition_data(candidate: dict, image_url) -> dict:
         "image_url": image_url,
         "contest_start_month": candidate.get("contest_start_month"),
         "contest_end_month": candidate.get("contest_end_month"),
+        # 双轨制：精确日期可选，为空就留空（不推断）
+        "reg_start_date": candidate.get("reg_start_date"),
+        "reg_end_date": candidate.get("reg_end_date"),
+        "contest_start_date": candidate.get("contest_start_date"),
+        "contest_end_date": candidate.get("contest_end_date"),
         "discover_source": discover_source,
         "last_checked_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "is_active": 1,

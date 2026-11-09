@@ -67,9 +67,17 @@ SYSTEM_PROMPT = (
     "如果正文只给出了报名或提交截止、没有明确的比赛举办时间，"
     "必须把 contest_start_month 与 contest_end_month 都留 null，不要猜测、不要用截止月份凑数。"
     "若只有“某月中旬开展”这类表述，可以填该月，但结束月份没有依据时必须留 null。"
+    # 双轨制（2026-11-09）：月份 + 精确日期并存，日期只抄原文，绝不推算
+    "关于 *_date 精确日期字段的红线（reg_start_date / reg_end_date / "
+    "contest_start_date / contest_end_date）："
+    "只有当正文明确写出「年-月-日」（如 2026-04-15、2026年4月15日）时，才填写对应的 *_date，"
+    "格式统一为 YYYY-MM-DD；正文写「4月15日」这种没有年份的，填 MM-DD（如 04-15）；"
+    "正文只给到月份（如「4 月」「4-5 月」）时，对应 *_date 必须留 null，"
+    "严禁由月份推算、补齐或编造任何具体的「日」，也严禁自己加上原文没有的年份。"
+    "填写了 *_date 时，同时把对应的 *_month 填成该日期所在的月份（两者必须一致）。"
 )
 
-SCHEMA_HINT = """只输出一个 JSON 对象，且仅包含以下 12 个键（值按正文填写，不要照抄说明文字）：
+SCHEMA_HINT = """只输出一个 JSON 对象，且仅包含以下 16 个键（值按正文填写，不要照抄说明文字）：
   name                 —— 字符串，赛事全称（去掉年份、届次、“关于举办”等前缀，保留品牌名）
   level                —— 字符串，只能是 national 或 provincial
   category             —— 字符串，必须从给定类别列表中选择一个
@@ -79,6 +87,11 @@ SCHEMA_HINT = """只输出一个 JSON 对象，且仅包含以下 12 个键（�
   contest_start_month  —— 整数 1-12 或 null，比赛开始月份（只填比赛实际举办时间；
                           报名/材料提交截止时间不属于比赛时间，没有就留 null）
   contest_end_month    —— 整数 1-12 或 null，比赛结束月份（同上，没有依据必须留 null）
+  reg_start_date       —— 字符串或 null，报名开始日；正文写明到「日」时填 YYYY-MM-DD（无年份填 MM-DD），
+                          只给月份必须填 null，禁止推算
+  reg_end_date         —— 字符串或 null，报名截止日，规则同上
+  contest_start_date   —— 字符串或 null，比赛开始日，规则同上（不是报名截止日）
+  contest_end_date     —— 字符串或 null，比赛结束日，规则同上
   official_url         —— 字符串或 null，赛事官网（http/https 开头，不是本新闻页）
   intro                —— 字符串，80~150 字赛事简介
   summary              —— 字符串，40~80 字赛事摘要
@@ -289,12 +302,18 @@ def build_prompt(page: dict, max_chars: int = 6000) -> str:
         "3. level：全国/国家/中国/国际赛事填 national；省级/省赛/赛区填 provincial。\n"
         "4. category：必须从以下列表中选择最贴近的一个：\n"
         f"   {', '.join(CATEGORY_CHOICES)}\n"
-        "5. 时间字段统一用月份整数（1-12），不要输出日期字符串：\n"
-        "   - reg_start_month / reg_end_month：报名开始/结束月份；\n"
-        "     若只给出截止日期，reg_start_month 填 null，reg_end_month 填截止月。\n"
+        "5. 时间字段分两轨，月份与精确日期都要填（原文有就填，没有就 null）：\n"
+        "   - 月份轨：reg_start_month / reg_end_month / contest_start_month / contest_end_month，\n"
+        "     统一用 1-12 的整数，不要输出日期字符串；\n"
+        "     · reg_start_month / reg_end_month：报名开始/结束月份；\n"
+        "       若只给出截止日期，reg_start_month 填 null，reg_end_month 填截止月。\n"
+        "     · contest_start_month / contest_end_month：比赛开始/结束月份；\n"
+        "       多阶段赛事（省赛+总决赛）取最早到最晚的月份。\n"
+        "   - 日期轨：reg_start_date / reg_end_date / contest_start_date / contest_end_date，\n"
+        "     只在正文明确写到「日」时填写，格式 YYYY-MM-DD（无年份写 MM-DD，如 04-15）；\n"
+        "     正文只给月份（如「4 月」「4-5 月」）时，对应 *_date 一律 null；\n"
+        "     严禁由月份推算具体日期、严禁自己补年份；日期与对应月份必须一致。\n"
         "   - reg_cross_year：报名是否跨年（开始月 > 结束月或正文明确写“次年”）。\n"
-        "   - contest_start_month / contest_end_month：比赛开始/结束月份；\n"
-        "     多阶段赛事（省赛+总决赛）取最早到最晚的月份。\n"
         "6. official_url：赛事官方网站，不是本新闻/转载页面；\n"
         "   优先官网主站，不要填报名系统/报名链接（除非页面没有官网）；\n"
         "   正文出现网址时优先使用，必须补全为 http:// 或 https://。\n"
@@ -328,6 +347,36 @@ def _to_month(value):
         return None
     month = int(match.group(1))
     return month if 1 <= month <= 12 else None
+
+
+def _to_date(value):
+    """精确日期归一化：'2026-04-15' / '2026/4/15' / '4月15日' / '04-15'。
+
+    只认「年-月-日」或「月-日」；只有月份（如 '4月'、'2026-04'）一律 None。
+    实现委托 db._date_or_none，保证「模型输出 -> 入库」只有一套口径。
+    """
+    return db._date_or_none(value)
+
+
+def _month_of_date(date_text):
+    """从归一化后的日期串取月份（'2026-04-15' / '04-15' -> 4）。"""
+    if not date_text:
+        return None
+    try:
+        return int(str(date_text).split("-")[-2])
+    except (ValueError, IndexError):
+        return None
+
+
+def _year_of_date(date_text):
+    """带年份的日期返回年份，'MM-DD' 返回 None。"""
+    text = str(date_text or "")
+    if len(text) == 10 and text[4] == "-":
+        try:
+            return int(text[:4])
+        except ValueError:
+            return None
+    return None
 
 
 def _to_bool(value, default=False) -> bool:
@@ -441,18 +490,57 @@ def normalize_extraction(raw, page: dict) -> dict:
 
     reg_start = _to_month(_first_value(raw, ("reg_start_month", "报名开始月份", "报名开始时间")))
     reg_end = _to_month(_first_value(raw, ("reg_end_month", "报名结束月份", "报名截止时间")))
-    reg_cross = _to_bool(
-        _first_value(raw, ("reg_cross_year", "报名是否跨年")),
-        default=bool(reg_start and reg_end and reg_start > reg_end),
-    )
     contest_start = _to_month(
         _first_value(raw, ("contest_start_month", "比赛开始月份", "比赛开始时间"))
     )
     contest_end = _to_month(
         _first_value(raw, ("contest_end_month", "比赛结束月份", "比赛结束时间"))
     )
+
+    # 精确日期（双轨制的第二轨）：只认原文写明的「日」，不推算、不补年份
+    reg_start_date = _to_date(
+        _first_value(raw, ("reg_start_date", "报名开始日期", "报名开始日"))
+    )
+    reg_end_date = _to_date(
+        _first_value(raw, ("reg_end_date", "报名结束日期", "报名截止日期"))
+    )
+    contest_start_date = _to_date(
+        _first_value(raw, ("contest_start_date", "比赛开始日期", "比赛开始日"))
+    )
+    contest_end_date = _to_date(
+        _first_value(raw, ("contest_end_date", "比赛结束日期", "比赛结束日"))
+    )
+
+    # 两轨冲突时以精确日期为准（日期是更细的观测，月份只是它的投影）
+    if reg_start_date:
+        reg_start = _month_of_date(reg_start_date)
+    if reg_end_date:
+        reg_end = _month_of_date(reg_end_date)
+    if contest_start_date:
+        contest_start = _month_of_date(contest_start_date)
+    if contest_end_date:
+        contest_end = _month_of_date(contest_end_date)
+
+    reg_cross = _to_bool(
+        _first_value(raw, ("reg_cross_year", "报名是否跨年")),
+        default=bool(reg_start and reg_end and reg_start > reg_end),
+    )
+    if reg_start_date and reg_end_date:
+        start_year, end_year = _year_of_date(reg_start_date), _year_of_date(reg_end_date)
+        if start_year and end_year:
+            reg_cross = end_year > start_year
+
     if contest_start and contest_end and contest_end < contest_start:
         contest_end = contest_start
+    # 结束日早于开始日 = 模型抄错年份/顺序，宁可留空也不写错时间
+    if contest_start_date and contest_end_date and contest_end_date < contest_start_date:
+        logger.warning("比赛结束日早于开始日，丢弃结束日：%s < %s",
+                       contest_end_date, contest_start_date)
+        contest_end_date = None
+    if reg_start_date and reg_end_date and reg_end_date < reg_start_date:
+        logger.warning("报名结束日早于开始日，丢弃结束日：%s < %s",
+                       reg_end_date, reg_start_date)
+        reg_end_date = None
 
     official_url = _normalize_official_url(
         _first_value(raw, ("official_url", "官网", "官方网站", "赛事官网")),
@@ -481,6 +569,10 @@ def normalize_extraction(raw, page: dict) -> dict:
         "reg_cross_year": bool(reg_cross),
         "contest_start_month": contest_start,
         "contest_end_month": contest_end,
+        "reg_start_date": reg_start_date,
+        "reg_end_date": reg_end_date,
+        "contest_start_date": contest_start_date,
+        "contest_end_date": contest_end_date,
         "official_url": official_url or None,
         "image_url": page.get("image_url") or None,
         "intro": intro or None,
@@ -544,6 +636,12 @@ def build_update_data(extracted: dict, page: dict, *, include_name: bool) -> dic
         value = extracted.get(key)
         if value is not None:
             data[key] = value
+    # 精确日期：只有模型真的抽到「日」才写，避免把已有日期清成 NULL
+    for key in ("reg_start_date", "reg_end_date",
+                "contest_start_date", "contest_end_date"):
+        value = extracted.get(key)
+        if value:
+            data[key] = value
     return data
 
 
@@ -582,6 +680,8 @@ def save_competition(extracted: dict, page: dict, *,
         "official_url": extracted.get("official_url"),
         "reg_start_month": extracted.get("reg_start_month"),
         "reg_end_month": extracted.get("reg_end_month"),
+        "reg_start_date": extracted.get("reg_start_date"),
+        "reg_end_date": extracted.get("reg_end_date"),
         "reg_cross_year": 1 if extracted.get("reg_cross_year") else 0,
         "sort_order": 9999,
     }
@@ -648,6 +748,8 @@ def _print_record(record: dict, title: str) -> None:
         "id", "name", "category", "level", "level_label",
         "reg_start_month", "reg_end_month", "reg_cross_year",
         "contest_start_month", "contest_end_month",
+        "reg_start_date", "reg_end_date",
+        "contest_start_date", "contest_end_date",
         "official_url", "image_url", "intro", "summary", "discover_source",
         "last_checked_at", "is_active",
     )

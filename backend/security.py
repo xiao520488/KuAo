@@ -148,6 +148,36 @@ def get_current_user(
     return user
 
 
+# ---------------------------------------------------------------------------
+# FastAPI 依赖：管理员
+# ---------------------------------------------------------------------------
+def get_current_admin(user: dict = Depends(get_current_user)) -> dict:
+    """
+    管理员专用依赖：在 get_current_user 之上再校验 users.is_admin。
+
+    用法::
+
+        @router.get("/admin/feedback")
+        def list_feedback(admin: dict = Depends(get_current_admin)):
+            ...
+
+    失败场景：
+      * 未登录 / Token 失效 / 用户已删除 -> 401（由 get_current_user 抛出）
+      * 已登录但不是管理员           -> 403
+    """
+    try:
+        is_admin = int(user["is_admin"] or 0)
+    except (KeyError, IndexError, TypeError, ValueError):
+        # 老库尚未迁移出 is_admin 列时按非管理员处理，绝不默认放行
+        is_admin = 0
+    if not is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="需要管理员权限",
+        )
+    return user
+
+
 # 可选依赖：有 Token 就尝试解析，没有也放行（本期暂未使用，预留）
 def get_optional_user(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer_scheme),
