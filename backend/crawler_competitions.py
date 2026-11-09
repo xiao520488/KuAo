@@ -39,6 +39,7 @@ from urllib.parse import urljoin, urlparse, urlunparse
 
 import crawler_news as news
 import db
+import image_guard as guard
 import llm
 
 logger = logging.getLogger("crawler_competitions")
@@ -115,12 +116,18 @@ def _is_meaningful_image(src: str, img_tag) -> bool:
     if not low or low.startswith(("data:", "javascript:")):
         return False
     bad_tokens = (
-        "logo", "icon", "qrcode", "qr_code", "avatar", "wechat", "weixin",
-        "loading", "blank", "spacer", "pixel", "1x1", "share_icon",
+        "logo", "icon", "qrcode", "qr_code", "erweima", "ewm", "banner",
+        "avatar", "wechat", "weixin", "loading", "blank", "spacer",
+        "pixel", "1x1", "share_icon", "favicon", "placeholder",
     )
     if any(token in low for token in bad_tokens):
         return False
     if low.endswith(".svg"):
+        return False
+    # 图片本身文件名干净、但 alt/class 写着“扫码/加群”的，同样是二维码图
+    if guard.is_qr_text(
+        img_tag.get("alt"), img_tag.get("title"), img_tag.get("class")
+    ):
         return False
     width = img_tag.get("width")
     height = img_tag.get("height")
@@ -149,9 +156,11 @@ def extract_image_url(html: str, page_url: str) -> str:
         key = (meta.get("property") or meta.get("name") or "").strip().lower()
         if key in image_meta_keys:
             url = _clean_image_url(meta.get("content") or "", page_url)
-            if url:
+            if url and not guard.is_bad_image_url(url):
                 logger.info("封面图来自 %s：%s", key, url)
                 return url
+            if url:
+                logger.warning("og:image 命中图片黑名单，跳过：%s", url)
 
     # 回退：正文容器里的第一张有效图片
     fallback_soup = news._make_soup(html)
@@ -163,7 +172,7 @@ def extract_image_url(html: str, page_url: str) -> str:
         if not _is_meaningful_image(src, img):
             continue
         url = _clean_image_url(src, page_url)
-        if url:
+        if url and not guard.is_bad_image_url(url):
             logger.info("未找到 og:image，回退正文配图（容器 %s）：%s", selector, url)
             return url
 
@@ -171,16 +180,87 @@ def extract_image_url(html: str, page_url: str) -> str:
     return ""
 
 
-def fetch_competition_page(url: str) -> dict:
+def extract_image_candidates(html: str, page_url: str, limit: int = 6) -> list:
+    """按优先级列出所有候选封面 URL（og:image 优先，其次正文配图）。
+
+    只做 URL/标签层面的粗筛，不联网；真正的尺寸/二维码校验由
+    ``image_guard.check_image`` 负责。
+    """
+    soup = news._make_soup(html)
+    seen, urls = set(), []
+
+    image_meta_keys = {
+        "og:image", "og:image:url", "og:image:secure_url",
+        "twitter:image", "twitter:image:src",
+    }
+    for meta in soup.find_all("meta"):
+        key = (meta.get("property") or meta.get("name") or "").strip().lower()
+        if key not in image_meta_keys:
+            continue
+        candidate = _clean_image_url(meta.get("content") or "", page_url)
+        if candidate and not guard.is_bad_image_url(candidate) and candidate not in seen:
+            seen.add(candidate)
+            urls.append(candidate)
+
+    fallback_soup = news._make_soup(html)
+    news._strip_noise(fallback_soup)
+    container, _ = news._pick_container(fallback_soup)
+    for img in container.find_all("img"):
+        src = (img.get("src") or img.get("data-src")
+               or img.get("data-original") or "").strip()
+        if not _is_meaningful_image(src, img):
+            continue
+        candidate = _clean_image_url(src, page_url)
+        if candidate and not guard.is_bad_image_url(candidate) and candidate not in seen:
+            seen.add(candidate)
+            urls.append(candidate)
+        if len(urls) >= limit:
+            break
+
+    return urls[:limit]
+
+
+def fetch_competition_page(url: str, *, validate_image: bool = True) -> dict:
     """抓取页面 + 抽正文 + 抽封面图 URL。
 
-    额外把原始 HTML 挂在 page["html"]，方便上层（如 batch_update_competitions.py）
-    在封面图不合格时重新挑候选图，而不必二次抓取。
+    封面图必须通过 ``image_guard`` 的严格闸门（URL 黑名单 / 尺寸比例 /
+    二维码内容识别）；所有候选都不合格时把 ``image_url`` 置空，让前端
+    走两字简称兜底，绝不把垃圾图写进库。
+
+    ``validate_image=False`` 只做 URL/标签层粗筛、不下载图片，供
+    batch_update_competitions.py 使用（它在 LLM 抽取后会自己跑完整闸门，
+    避免同一张图下载两次）。
+
+    额外把原始 HTML 挂在 page["html"]，方便上层在封面图不合格时重新挑
+    候选图，而不必二次抓取。
     """
     html = news.fetch_html(url)
     page = news.extract_page(html, url)
     page["html"] = html
-    page["image_url"] = extract_image_url(html, url)
+
+    candidates = extract_image_candidates(html, url)
+    page["image_candidates"] = []
+    page["image_url"] = ""
+    if not validate_image:
+        page["image_url"] = candidates[0] if candidates else ""
+        return page
+
+    for candidate in candidates:
+        ok, reason, info = guard.check_image(candidate)
+        page["image_candidates"].append(
+            {"url": candidate, "ok": ok, "reason": reason, **info}
+        )
+        if ok:
+            page["image_url"] = candidate
+            logger.info(
+                "封面图通过严格闸门：%sx%s  %s",
+                info.get("width"), info.get("height"), candidate,
+            )
+            break
+        logger.warning("丢弃候选封面图：%s  %s", reason, candidate)
+
+    if not page["image_url"]:
+        logger.warning("没有通过闸门的封面图，image_url 置空（前端走简称兜底）")
     return page
 
 

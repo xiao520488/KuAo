@@ -114,6 +114,44 @@ def test_data_uri_in_og_image_is_rejected():
     assert cc.extract_image_url(html, PAGE_URL) == "https://cise.example.edu/uploads/fallback.jpg"
 
 
+def test_og_image_with_blacklisted_url_falls_back_to_body():
+    """og:image 本身是 qrcode/banner 时不能直接用，回退到正文海报。"""
+    html = _wrap(
+        f'<div id="vsb_content"><p>{LONG_TEXT}</p>'
+        '<img src="/uploads/poster.jpg"></div>',
+        head='<meta property="og:image" content="/static/qrcode-wechat.png">',
+    )
+    assert cc.extract_image_url(html, PAGE_URL) == "https://cise.example.edu/uploads/poster.jpg"
+
+
+def test_fetch_competition_page_drops_images_rejected_by_guard(monkeypatch):
+    """单页爬虫也必须过完整闸门：候选全被拒时 image_url 置空。"""
+    html = _wrap(
+        f'<div id="vsb_content"><p>{LONG_TEXT}</p>'
+        '<img src="/uploads/cover.png"></div>',
+    )
+
+    def fake_extract_page(raw_html, url):
+        return {
+            "url": url,
+            "title": "测试赛事",
+            "site_name": "",
+            "publish_date": "",
+            "body": LONG_TEXT,
+        }
+
+    monkeypatch.setattr(cc.news, "fetch_html", lambda url: html)
+    monkeypatch.setattr(cc.news, "extract_page", fake_extract_page)
+    monkeypatch.setattr(
+        cc.guard, "check_image", lambda url: (False, "检测到二维码", {"verdict": "bad"})
+    )
+
+    page = cc.fetch_competition_page(PAGE_URL)
+    assert page["image_url"] == ""
+    assert len(page["image_candidates"]) == 1
+    assert page["image_candidates"][0]["ok"] is False
+
+
 # ===========================================================================
 # 二、_normalize_level
 # ===========================================================================

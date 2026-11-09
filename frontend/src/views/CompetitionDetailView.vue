@@ -401,14 +401,14 @@ const guideReady = computed(() => Boolean(detail.value?.full_process_guide))
 
       <!-- 正常内容 -->
       <template v-else>
-        <!-- 1. 全宽竞赛大图（无图/加载失败时走渐变首字兜底） -->
+        <!-- 1. 全宽竞赛大图：最高 300px，cover 裁切居中，长图不撑破页面 -->
         <div class="mt-8 w-full">
-          <div class="relative h-64 w-full overflow-hidden rounded-3xl bg-slate-50 dark:bg-slate-900">
+          <div class="cover-media h-[300px] max-h-[300px] w-full overflow-hidden rounded-3xl bg-slate-50 dark:bg-slate-900">
             <img
               v-if="detail?.image && !heroFailed"
               :src="detail.image"
               alt=""
-              class="h-full w-full object-cover"
+              class="h-full w-full object-cover object-center"
               @error="onHeroError"
             />
             <div

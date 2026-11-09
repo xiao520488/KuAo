@@ -41,6 +41,8 @@ import unicodedata
 from datetime import datetime
 from urllib.parse import urlparse
 
+import image_guard
+
 logger = logging.getLogger(__name__)
 
 # 数据库文件路径（与 db.py 同目录）
@@ -505,6 +507,9 @@ def update_competition(cid: int, data: dict) -> None:
                 val = 1 if val else 0
             if key == "level" and val not in ("national", "provincial"):
                 val = "national"
+            if key == "image_url":
+                # 二维码/logo/banner/非 http(s) 一律置 NULL，由前端走简称兜底
+                val = _clean_image_url(val)
             fields.append(f"{key} = ?")
             values.append(val)
     if not fields:
@@ -1843,6 +1848,19 @@ def _clean_url(url) -> Optional[str]:
     return text
 
 
+def _clean_image_url(url) -> Optional[str]:
+    """清洗封面图 URL：绝对地址 + image_guard 黑名单（qr/logo/banner...）。
+
+    所有写 image_url 的入口（采集、候选提拔、批量补全）都会经过这里，
+    即使调用方绕过爬虫闸门，也不会把二维码/站点 logo 写进正式表。
+    """
+    cleaned = _clean_url(url)
+    if cleaned and image_guard.is_bad_image_url(cleaned):
+        logger.warning("封面图 URL 命中黑名单，拒绝入库：%s", cleaned)
+        return None
+    return cleaned
+
+
 def normalize_competition_name(name: str) -> str:
     """赛事名归一化（去序号/年份/届次/标点/空白/大小写），用于去重。
 
@@ -2029,7 +2047,7 @@ def add_candidate(data: dict, db_path: Optional[str] = None,
         "raw_name": raw_name,
         "norm_name": norm_name,
         "official_url": official_url,
-        "image_url": _clean_url(data.get("image_url")),
+        "image_url": _clean_image_url(data.get("image_url")),
         "level_label": data.get("level_label") or None,
         "category_hint": data.get("category_hint") or None,
         "reg_cross_year": 1 if str(data.get("reg_cross_year") or 0).strip() in
@@ -2191,7 +2209,7 @@ def promote_candidate(candidate_id: int, data: dict,
         _month_or_none(data.get("reg_end_month")),
         1 if data.get("reg_cross_year") else 0,
         _clean_url(data.get("official_url")),
-        _clean_url(data.get("image_url")),
+        _clean_image_url(data.get("image_url")),
         _month_or_none(data.get("contest_start_month")),
         _month_or_none(data.get("contest_end_month")),
         data.get("discover_source"),

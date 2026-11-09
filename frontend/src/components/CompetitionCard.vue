@@ -139,14 +139,14 @@ async function removeOnly() {
     @click="goDetail"
     @keydown.enter.prevent="goDetail"
   >
-    <!-- 左：固定宽高比图片占位 -->
-    <div class="relative w-52 shrink-0">
-      <div class="aspect-[4/3] w-full overflow-hidden rounded-xl bg-slate-100 dark:bg-slate-700/60">
+    <!-- 左：固定 16:9 封面位；真实图片一律 cover 裁切居中，绝不拉伸 -->
+    <div class="relative w-52 shrink-0 self-center">
+      <div class="cover-media aspect-[16/9] w-full overflow-hidden rounded-xl bg-slate-100 dark:bg-slate-700/60">
         <img
           v-if="showImage"
           :src="image"
           alt=""
-          class="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
+          class="h-full w-full object-cover object-center transition-transform duration-300 group-hover:scale-105"
           @error="onImageError"
         />
         <!-- 无图 / 加载失败：按名称哈希生成淡彩渐变 + 2 字简称（无简称则首字） -->

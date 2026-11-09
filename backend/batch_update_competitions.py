@@ -48,11 +48,11 @@ import sys
 import time
 from datetime import datetime
 
-import requests
-
 import crawler_competitions as cc
 import crawler_news as news
 import db
+# pipeline_update / review_candidates 仍从这里导入 check_image，保留模块级别名
+from image_guard import check_image, is_bad_image_url
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PRODUCTION_DB_PATH = os.path.join(BASE_DIR, "competitions.db")
@@ -70,12 +70,7 @@ FILLABLE = (
     "level_label",
 )
 
-# 封面图质量闸门：卡片是 4:3 的略宽图，Banner（如 855x200）裁进去只剩一条
-IMAGE_MIN_WIDTH = 300
-IMAGE_MIN_HEIGHT = 150
-IMAGE_MAX_ASPECT = 2.6      # 宽/高 超过即当 banner 处理
-IMAGE_MIN_ASPECT = 0.45     # 高/宽 超过 2.2（超长竖图）同样丢弃
-IMAGE_MAX_BYTES = 3 * 1024 * 1024
+# 封面图阈值统一放在 image_guard.py（URL 黑名单 + 尺寸 + 二维码识别）
 IMAGE_CANDIDATES = 4        # 最多试几张候选图
 
 FILTER_SQL = {
@@ -171,88 +166,8 @@ def _diff_keys(before: dict, patch: dict) -> list:
 
 
 # ---------------------------------------------------------------------------
-# 封面图质量闸门
+# 封面图质量闸门（实现见 image_guard.py）
 # ---------------------------------------------------------------------------
-
-def _image_dimensions(data: bytes):
-    """从文件头解析宽高（PNG/JPEG/GIF/WebP），认不出返回 (None, None)。"""
-    if len(data) < 24:
-        return None, None
-    if data[:8] == b"\x89PNG\r\n\x1a\n":
-        return int.from_bytes(data[16:20], "big"), int.from_bytes(data[20:24], "big")
-    if data[:6] in (b"GIF87a", b"GIF89a"):
-        return int.from_bytes(data[6:8], "little"), int.from_bytes(data[8:10], "little")
-    if data[:2] == b"\xff\xd8":  # JPEG：扫 SOFn 段
-        i = 2
-        while i < len(data) - 9:
-            if data[i] != 0xFF:
-                i += 1
-                continue
-            marker = data[i + 1]
-            if marker in (0xD8, 0xD9, 0x01) or 0xD0 <= marker <= 0xD7:
-                i += 2
-                continue
-            seg_len = int.from_bytes(data[i + 2:i + 4], "big")
-            if 0xC0 <= marker <= 0xCF and marker not in (0xC4, 0xC8, 0xCC):
-                height = int.from_bytes(data[i + 5:i + 7], "big")
-                width = int.from_bytes(data[i + 7:i + 9], "big")
-                return width, height
-            i += 2 + seg_len
-        return None, None
-    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
-        kind = data[12:16]
-        if kind == b"VP8X":
-            return (int.from_bytes(data[24:27], "little") + 1,
-                    int.from_bytes(data[27:30], "little") + 1)
-        if kind == b"VP8 ":
-            return (int.from_bytes(data[26:28], "little") & 0x3FFF,
-                    int.from_bytes(data[28:30], "little") & 0x3FFF)
-        if kind == b"VP8L":
-            b = data[21:25]
-            return (1 + (((b[1] & 0x3F) << 8) | b[0]),
-                    1 + (((b[3] & 0x0F) << 10) | (b[2] << 2) | ((b[1] & 0xC0) >> 6)))
-    return None, None
-
-
-def check_image(url: str, timeout=(8, 15)) -> tuple:
-    """下载校验封面图：可达 + 真是图片 + 尺寸/比例适合 4:3 卡片。
-
-    返回 (ok, reason, info)；reason 为空表示通过。
-    """
-    try:
-        resp = requests.get(url, timeout=timeout, headers={"User-Agent": news.USER_AGENT},
-                            stream=True)
-    except Exception as exc:  # noqa: BLE001
-        return False, f"图片请求失败（{type(exc).__name__}）", {}
-
-    with resp:
-        if resp.status_code != 200:
-            return False, f"图片 HTTP {resp.status_code}", {}
-        ctype = (resp.headers.get("Content-Type") or "").lower()
-        if not ctype.startswith("image/"):
-            return False, f"不是图片（Content-Type={ctype or '未知'}）", {}
-
-        chunks, total = [], 0
-        for chunk in resp.iter_content(65536):
-            chunks.append(chunk)
-            total += len(chunk)
-            if total > IMAGE_MAX_BYTES:
-                break
-        data = b"".join(chunks)
-
-    width, height = _image_dimensions(data)
-    info = {"bytes": len(data), "width": width, "height": height, "content_type": ctype}
-    if not width or not height:
-        # 认不出尺寸（少见的格式）时，只要确实是图片就放行
-        return True, f"尺寸未知（{len(data) // 1024} KB），放行", info
-    if width < IMAGE_MIN_WIDTH or height < IMAGE_MIN_HEIGHT:
-        return False, f"尺寸过小 {width}x{height}", info
-    ratio = width / height
-    if ratio > IMAGE_MAX_ASPECT:
-        return False, f"宽高比 {ratio:.2f} 过大（{width}x{height}，疑似 banner）", info
-    if ratio < IMAGE_MIN_ASPECT:
-        return False, f"高宽比 {height / width:.2f} 过大（{width}x{height}，竖图）", info
-    return True, "", info
 
 
 def collect_image_candidates(page: dict, limit: int = IMAGE_CANDIDATES) -> list:
@@ -347,7 +262,9 @@ def process_one(row: dict, args, index: int, total: int) -> dict:
         record["attempts"] = attempt
         try:
             log("抓取", f"[{index}/{total}] id={row['id']} {row['name'][:26]} -> {url}")
-            page = cc.fetch_competition_page(url)
+            # 图片先只做 URL 粗筛；LLM 抽取后再由 pick_checked_cover 下载校验，
+            # 避免同一张封面在抓取阶段和校验阶段各下载一次。
+            page = cc.fetch_competition_page(url, validate_image=False)
             record["body_chars"] = len(page.get("body") or "")
             break
         except Exception as exc:  # noqa: BLE001 - 单条失败不影响整批
@@ -390,10 +307,13 @@ def process_one(row: dict, args, index: int, total: int) -> dict:
         return record
 
     # 封面图质量闸门：不合格宁可不写，也不要往库里塞 banner / 404 死链
+    record["extracted_image_raw"] = extracted.get("image_url")
     if args.no_image_check:
+        # 即使跳过下载校验，URL 黑名单也必须生效，避免 qrcode/logo 直接入库
+        raw_image = extracted.get("image_url")
         record["image_candidates"] = []
+        extracted["image_url"] = None if is_bad_image_url(raw_image) else raw_image
     else:
-        record["extracted_image_raw"] = extracted.get("image_url")
         extracted["image_url"] = pick_checked_cover(page, extracted, record)
 
     patch = build_patch(row, extracted, page, update_name=args.update_name)
