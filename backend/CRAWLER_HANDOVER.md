@@ -449,7 +449,7 @@ cd frontend; D:\Tools\node.exe D:\Tools\node_modules\npm\bin\npm-cli.js run dev
 2. 候选赛事：点【通过】→ 弹确认框 →【确认通过】→ 该行消失、Toast、`competitions` 多一条；【取消】/`Esc` 不产生任何请求。
 3. 反馈面板：未读角标数字 = 未读条数，点【标记已读】→ 卡片变灰、角标 -1、`feedbacks.is_read=1`。
 4. 越权复验：`alice` 登录访问 `/admin` → Toast「无权限访问管理后台」并落回首页；用 `alice` 的 token 直连 `GET /api/admin/candidates` → 403。
-5. 造测试反馈（**只对本地库**）：`.verify\seed_feedback.py` 插 2 条中文反馈（`xas` / `alice` 各一条，未读），验收完 `DELETE FROM feedbacks WHERE id IN (...)` 清掉。
+5. 造测试反馈（**只对本地库**）：`backend/tests/tools/seed_feedback.py` 插 2 条中文反馈（`xas` / `alice` 各一条，未读），验收完 `DELETE FROM feedbacks WHERE id IN (...)` 清掉。
 6. 自动补全复验：点【通过】后按钮保持「提交中…」20~60 秒，同时到后端控制台看 `[审核补全]` 三行日志；完成后 Toast 形如「已通过并入库：XX（简称=机人；详情补全 2 项（另补日期 2 项））」；查库确认 `short_name` / `participants` / `reg_start_date`。看到「详情未补（无赛氪 contest_id）」属**预期降级**（见 5.6）。
 
 **已知边界**：列表暂无分页（`limit=200`，候选过千要加）；反馈无删除/回复；审核结果不能从网页撤销（需 CLI 或改库）。
@@ -472,7 +472,7 @@ cd frontend; D:\Tools\node.exe D:\Tools\node_modules\npm\bin\npm-cli.js run dev
 | `frontend/src/services/api.js` | `approveAdminCandidate()` 超时 **60s → 180s**（补全常见 20~60s，默认超时会把已入库成功的请求判成失败） |
 | `frontend/src/views/AdminView.vue` | 审批前先 toast「审批中：正在补全简称与赛氪详情（约 20~60 秒）…」，完成后显示 `data.message` |
 
-**实测**（隔离库 `.verify/approve_api_test.db`，真实 HTTP + Admin Token，未写 `competitions.db`）：
+**实测**（隔离库 `%TEMP%\kuo-verify\approve_api_test.db`，真实 HTTP + Admin Token，未写 `competitions.db`）：
 
 | 候选 | 结果 | 耗时 |
 |---|---|---|
@@ -489,7 +489,7 @@ cd frontend; D:\Tools\node.exe D:\Tools\node_modules\npm\bin\npm-cli.js run dev
 
 **范围决策已变更（2026-11-10 晚）**：原定「方案 B 只保底、不做名称解析」，但现场确认 57 条 pending **全部**是 `edu-roster`、`source_url` 全指向同一目录页，`no_mapping` 等于永远空壳 → 改为**按名称匹配赛氪**，见 5.7。
 
-**回归与自测脚本**：`pytest test_enrich_saikr.py` → 11 passed（新逻辑只补空值，未破坏原断言）。`.verify/` 下新增 `prep_test_db.py`（复制生产库并选样）、`run_api_patched.py`（用隔离库起服务）、`smoke_approve.py`（POST 审批 + 回读字段）、`find_enrichable_candidate.py`（找可补全样本）。
+**回归与自测脚本**：`pytest test_enrich_saikr.py` → 11 passed（新逻辑只补空值，未破坏原断言）。`backend/tests/tools/` 下新增/收纳 `prep_test_db.py`（复制生产库并选样）、`run_api_patched.py`（用隔离库起服务）、`smoke_approve.py`（POST 审批 + 回读字段）、`find_enrichable_candidate.py`（找可补全样本），临时库统一落 `%TEMP%\kuo-verify\`。
 
 ### 5.7 名录候选按「名称」匹配赛氪（2026-11-10 晚重构）
 
@@ -516,7 +516,7 @@ cd frontend; D:\Tools\node.exe D:\Tools\node_modules\npm\bin\npm-cli.js run dev
 
 **定时刷新**：`0 4 1,15 * * … saikr_match.py --refresh-if-stale`（详见 9.2）——每月 1 号 / 15 号 04:00，半月一次；索引仍新鲜时脚本 0 请求退出，**不要改成每日**（52 页/次有封 IP 风险）。
 
-**前端**：`CompetitionDetailView.vue` 新增 `isRealOfficialSite()` —— 名录站域名（`sdaeu.edu.cn`）与 CMS 通知页路径（`/info/<数字>/<数字>.htm`）**不渲染「官网」按钮**，改显示纯文本「来源：教育部门名录」；真实官网不受影响（`.verify/check_official_url.js` 7 例全过）。
+**前端**：`CompetitionDetailView.vue` 新增 `isRealOfficialSite()` —— 名录站域名（`sdaeu.edu.cn`）与 CMS 通知页路径（`/info/<数字>/<数字>.htm`）**不渲染「官网」按钮**，改显示纯文本「来源：教育部门名录」；真实官网不受影响（`frontend/tests/official-url.check.mjs` 7 例全过）。
 
 ---
 ## 六、前端展示规范（已定稿，勿回退）
@@ -566,19 +566,24 @@ cd frontend; D:\Tools\node.exe D:\Tools\node_modules\npm\bin\npm-cli.js run dev
 cd ..\frontend; npm.cmd run build
 cd ..\frontend; D:\Tools\node.exe D:\Tools\node_modules\npm\bin\npm-cli.js run build
 ```
-**`.verify/` 脚本用途**
+**测试工具脚本用途**（`backend/tests/tools/` 与 `frontend/tests/`，均已纳入版本库；临时库统一落 `%TEMP%\kuo-verify\`）
 
 | 脚本 | 用途 |
 |---|---|
-| `prep_test_db.py` | 复制生产库 → `.verify/approve_api_test.db`，挑一条可审样本并保证库里有管理员账号 |
-| `run_api_patched.py` | 用隔离库起后端（`KUO_DB_PATH=<库> KUO_PORT=8010`），绝不写 `competitions.db` |
-| `smoke_approve.py` | 走真实 HTTP 审批一条候选，打印响应与入库结果（`python smoke_approve.py <candidate_id> [base_url]`） |
-| `find_enrichable_candidate.py` | 找出「应能补全成功」的 pending 候选（`raw_json` 带 `contest_id` 或名称能对 `saikr_map`） |
-| `check_official_url.js` | Node 校验详情页「官网链接」判定（名录目录页/非法协议必须拒绝，真实官网放行） |
-| `wcag_contrast.py` | 校验封面兜底配色的 WCAG 对比度（纯计算，不看图），口径对齐 `main.css` |
-| `audit_cover_fallback.py` | 审计兜底在真实数据上的表现：多少卡片走兜底、简称是否撞名/撞形、哈希色相是否撞色 |
+| `backend/tests/tools/prep_test_db.py` | 复制生产库 → `%TEMP%\kuo-verify\approve_api_test.db`，挑一条可审样本并保证库里有管理员账号 |
+| `backend/tests/tools/run_api_patched.py` | 用隔离库起后端（`KUO_DB_PATH=<库> KUO_PORT=8010`），绝不写 `competitions.db` |
+| `backend/tests/tools/smoke_approve.py` | 走真实 HTTP 审批一条候选，打印响应与入库结果（`python smoke_approve.py <candidate_id> [base_url]`） |
+| `backend/tests/tools/verify_admin.py` | 管理后台接口验收：反馈已读 / 越权 403 / 通过 / 拒绝 / 重复审批 400，临时副本库上跑 |
+| `backend/tests/tools/find_enrichable_candidate.py` | 找出「应能补全成功」的 pending 候选（`raw_json` 带 `contest_id` 或名称能对 `saikr_map`） |
+| `backend/tests/tools/seed_feedback.py` | 往**本地**库插 2 条测试反馈（勿在生产执行） |
+| `backend/tests/tools/check_smart_order.py` | 智能排序回归：合成 17 行边界数据，断言三阶段 / 月份兜底 / 脏值沉底 / 热门筛选 / limit 收敛 |
+| `backend/tests/tools/stats_dates.py` | 盘点日期轨覆盖率（主表 + 候选池） |
+| `backend/tests/tools/audit_cover_fallback.py` | 审计兜底在真实数据上的表现：多少卡片走兜底、简称是否撞名/撞形、哈希色相是否撞色 |
+| `backend/tests/tools/wcag_contrast.py` | 校验封面兜底配色的 WCAG 对比度（纯计算，不看图），口径对齐 `main.css` |
+| `frontend/tests/timeformat.check.mjs` | Node 校验 `timeFormat.js`（日期/月份/倒计时/跨年/非法日期）：`node frontend/tests/timeformat.check.mjs` |
+| `frontend/tests/official-url.check.mjs` | Node 校验详情页「官网链接」判定（名录目录页/非法协议必须拒绝，真实官网放行） |
 
-**验收口径**：改动后至少跑 `py_compile` + 相关单测 + 一次 dry-run；写库改动先在隔离库（`.verify/*.db`）跑通再碰正式库。
+**验收口径**：改动后至少跑 `py_compile` + 相关单测 + 一次 dry-run；写库改动先在隔离库（`%TEMP%\kuo-verify\*.db`）跑通再碰正式库。`.verify/` 已进 `.gitignore`，只作本机临时取证目录，**新脚本不要再放进去**。
 
 ---
 ## 九、云端部署与运维
