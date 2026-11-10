@@ -12,6 +12,8 @@ POST /api/admin/candidates/{id}/approve    通过：候选 -> competitions，标
 POST /api/admin/candidates/{id}/reject     拒绝：标记 rejected，不动主表
 GET  /api/admin/feedback                   全部用户反馈（按时间倒序）
 PUT  /api/admin/feedback/{id}/read         标记单条反馈已读
+GET  /api/admin/competitions               正式赛事列表（分页，供「赛事管理」）
+DELETE /api/admin/competitions/{id}        删除赛事 + 级联清理 awards/ideas/insights 等
 
 设计要点：
   - 复用 db 层已有的 promote_candidate / update_candidate_status，与 CLI
@@ -363,6 +365,81 @@ def reject_candidate(candidate_id: int) -> dict:
         "candidate_id": candidate_id,
         "status": "rejected",
         "message": "已拒绝",
+    }
+
+
+# ---------------------------------------------------------------------------
+# 赛事管理（正式赛事库）
+# ---------------------------------------------------------------------------
+@router.get(
+    "/competitions",
+    summary="正式赛事列表（后台赛事管理）",
+    responses={
+        401: {"description": "未登录"},
+        403: {"description": "需要管理员权限"},
+    },
+)
+def list_competitions_admin(
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    keyword: str = Query("", max_length=50),
+) -> dict:
+    """按 id 倒序分页返回主表比赛，供后台「赛事管理」列表使用。"""
+    data = db.list_competitions_for_admin(
+        limit=limit, offset=offset, keyword=(keyword or "").strip() or None
+    )
+    return {
+        "code": 0,
+        "total": data["total"],
+        "limit": limit,
+        "offset": offset,
+        "items": [
+            {
+                "id": row["id"],
+                "name": row["name"],
+                "short_name": row.get("short_name"),
+                "level_label": row.get("level_label") or row.get("level"),
+                "category": row.get("category"),
+                "source": row.get("discover_source"),
+                "official_url": row.get("official_url"),
+                "image_url": row.get("image_url"),
+                "is_active": bool(row.get("is_active")),
+                "awards_count": row.get("awards_count") or 0,
+                "created_at": row.get("created_at"),
+            }
+            for row in data["items"]
+        ],
+    }
+
+
+@router.delete(
+    "/competitions/{competition_id}",
+    summary="删除赛事（级联清理关联数据）",
+    responses={
+        401: {"description": "未登录"},
+        403: {"description": "需要管理员权限"},
+        404: {"description": "赛事不存在"},
+    },
+)
+def delete_competition(competition_id: int) -> dict:
+    """永久删除一条赛事，并清理 awards / ideas / insights / 备赛计划 / AI 任务。
+
+    单事务执行，任一步失败整体回滚；候选表的 competition_id 置 NULL 保留审核痕迹。
+    """
+    result = db.delete_competition_cascade(competition_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="赛事不存在")
+
+    logger.info("[管理员操作] 删除了赛事：%s", result["name"])
+    deleted = result.get("deleted") or {}
+    detail = "、".join("%s %d" % (table, count) for table, count in deleted.items())
+    return {
+        "code": 0,
+        "id": competition_id,
+        "name": result["name"],
+        "deleted": deleted,
+        "candidates_unlinked": result.get("candidates_unlinked", 0),
+        "message": "已删除《%s》%s" % (result["name"], "（连带清理 %s）" % detail if detail else ""),
     }
 
 

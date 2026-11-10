@@ -834,6 +834,91 @@ def delete_competition(cid: int) -> None:
         conn.execute("DELETE FROM competitions WHERE id = ?", (cid,))
 
 
+# 删除赛事时必须一并清理的子表（都以 competition_id 关联，不清理会产生数据孤儿）。
+# 与 cleanup_empty_shells.py 口径一致：新增关联表时两处都要补。
+COMPETITION_CHILD_TABLES = (
+    "awards",            # 获奖作品
+    "ideas",             # 备赛灵感 / 计划
+    "insights",          # AI 洞察
+    "user_preparations", # 用户备赛收藏
+    "ai_jobs",           # AI 任务队列
+    "ai_analysis_cache", # AI 分析缓存
+    "ai_usage",          # AI 用量统计
+)
+
+
+def _table_has_column(conn, table: str, column: str) -> bool:
+    """表不存在或没有该列时返回 False（老库缺表不报错）。"""
+    try:
+        return any(row[1] == column for row in conn.execute("PRAGMA table_info(%s)" % table))
+    except sqlite3.Error:
+        return False
+
+
+def delete_competition_cascade(cid: int) -> Optional[dict]:
+    """删除比赛并级联清理全部子表数据（单事务，失败整体回滚）。
+
+    返回 {"name": 名称, "deleted": {表名: 删除条数}, "candidates_unlinked": n}；
+    比赛不存在时返回 None，由路由层转 404。
+    """
+    cid = int(cid)
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT name FROM competitions WHERE id = ?", (cid,)
+        ).fetchone()
+        if row is None:
+            return None
+        name = row["name"]
+
+        deleted = {}
+        for table in COMPETITION_CHILD_TABLES:
+            if _table_has_column(conn, table, "competition_id"):
+                cur = conn.execute(
+                    "DELETE FROM %s WHERE competition_id = ?" % table, (cid,)
+                )
+                if cur.rowcount:
+                    deleted[table] = cur.rowcount
+
+        # 候选表保留审核痕迹，只解绑外键，避免指向已删赛事
+        unlinked = 0
+        if _table_has_column(conn, "competition_candidates", "competition_id"):
+            cur = conn.execute(
+                "UPDATE competition_candidates SET competition_id = NULL "
+                "WHERE competition_id = ?", (cid,)
+            )
+            unlinked = cur.rowcount
+
+        conn.execute("DELETE FROM competitions WHERE id = ?", (cid,))
+    return {"name": name, "deleted": deleted, "candidates_unlinked": unlinked}
+
+
+def list_competitions_for_admin(limit: int = 20, offset: int = 0,
+                                keyword: Optional[str] = None) -> dict:
+    """管理后台「赛事管理」列表：轻量字段 + 分页，按 id 倒序（新入库在前）。
+
+    返回 {"total": 总数, "items": [...]}；items 只带后台展示必需的列，
+    不返回 longtext（intro / guide），避免列表响应过大。
+    """
+    where, params = "", []
+    if keyword:
+        where = " WHERE name LIKE ?"
+        params.append("%%%s%%" % keyword)
+    with get_conn() as conn:
+        total = conn.execute(
+            "SELECT COUNT(*) AS c FROM competitions" + where, params
+        ).fetchone()["c"]
+        rows = conn.execute(
+            "SELECT id, name, short_name, level, level_label, category, "
+            "       discover_source, official_url, image_url, is_active, created_at, "
+            "       (SELECT COUNT(*) FROM awards a "
+            "         WHERE a.competition_id = competitions.id) AS awards_count "
+            "FROM competitions" + where +
+            " ORDER BY id DESC LIMIT ? OFFSET ?",
+            params + [int(limit), int(offset)],
+        ).fetchall()
+    return {"total": total, "items": [dict(row) for row in rows]}
+
+
 def get_competition(cid: int) -> Optional[dict]:
     """按 id 获取单条比赛，不存在返回 None。"""
     with get_conn() as conn:

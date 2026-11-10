@@ -33,7 +33,7 @@
 ### 0.4 数据库快照（2026-11-10 实测）
 | 对象 | 现状 |
 |---|---|
-| `competitions.db`（本地生产库副本） | 赛事 **49**（2026-11-10 晚清理 5 条名录空壳后）/ 获奖 **87** / 候选 **82**（approved 17 · pending 57 · rejected 8）/ 攻略 **7** / `short_name` 全覆盖 / `ai_jobs` **0** |
+| `competitions.db`（本地生产库副本） | 赛事 **46**（11-10 深夜再清 5 条三字段全空的冷门空壳后）/ 获奖 **87** / 候选 **82**（approved 17 · pending 57 · rejected 8）/ 攻略 **7** / `short_name` 全覆盖 / `ai_jobs` **0** |
 | `test_crawl.db`（测试库） | 赛事 **33** / 获奖 **88** / 候选 **82**（全 pending）/ 攻略 **9** / `ai_jobs` 2（均 done）；**schema 落后**，缺 `*_date` 四列，需 `db.init_db('test_crawl.db')` 补列后再跑日期类脚本 |
 | 云端 `competitions.db` | 2026-11-08 迁移后 33 / 87 / 82 / 攻略 7 / ai_jobs 0，SHA `297e17df…`；本地新数据尚未同步 |
 | 候选来源 | `edu-roster` 62 / `saikr` 20，`UNIQUE(source, source_key)` 零重复 |
@@ -418,10 +418,12 @@ Copy-Item .\competitions.db .\test_crawl.db -Force
 | POST | `/admin/candidates/{id}/reject` | 只标记 `rejected`，不动主表 |
 | GET | `/admin/feedback?limit=&offset=` | 反馈列表（新的在前）+ `unread` 未读数；`username` 由 `users` 联查，注销用户回退「已注销用户」 |
 | PUT | `/admin/feedback/{id}/read` | 标记已读；`busyId` 防重复点击，前端同步减角标 |
+| GET | `/admin/competitions?limit=&offset=&keyword=` | 正式赛事列表（id 倒序，轻字段 + `awards_count`），供后台「赛事管理」分页 |
+| DELETE | `/admin/competitions/{id}` | 永久删除赛事：单事务级联清 `awards / ideas / insights / user_preparations / ai_jobs / ai_analysis_cache / ai_usage`，候选表 `competition_id` 置 NULL；日志 `[管理员操作] 删除了赛事：{name}`（见 5.8） |
 
 约定：候选不存在 → 404，状态不是 `pending` → 400 `"该候选已处理"`；approve 复用 CLI 同一套 `_build_competition_data` / `_infer_level` / `_clean_name`，网页与 CLI 写库结果一致。`main.py` 的 CORS 必须允许 `PUT`，否则「标记已读」预检直接挂。
 ### 5.3 前端页面（`frontend/src/views/AdminView.vue`）
-- 布局：`Header` + 左 220px 侧边栏（候选赛事 / 用户反馈，带待审、未读角标）+ 右内容区；`lg` 以下堆叠为横向 tab。沿用全站 Tailwind 暗色/极简风，**未引入 Element Plus 等 UI 库**。
+- 布局：`Header` + 左 220px 侧边栏（候选赛事 / 用户反馈 / 赛事管理，带待审、未读、赛事总数角标）+ 右内容区；`lg` 以下堆叠为横向 tab。沿用全站 Tailwind 暗色/极简风，**未引入 Element Plus 等 UI 库**。
 - 候选赛事表格列：赛事名称（含来源链接）/ 级别 / 来源 / 抓取月份 / 操作；来源映射 `saikr→赛氪`、`edu-roster→教育部门名录`、`manual→人工录入`，未知值原样显示。用户反馈为卡片列表，未读高亮蓝底 + 「未读」角标，正文 `whitespace-pre-wrap break-words`。
 - **二次确认**：通过/拒绝都会写主库，点按钮先弹轻量弹窗（标题「确认审核通过这个赛事？」/「确认拒绝这个赛事？」，正文带《赛事名》+ 后果说明），按钮【取消】/【确认通过】（拒绝态转红 `bg-red-600`）；提交中禁用并显示「提交中…」；支持 `Esc` / 点遮罩关闭；`Teleport to="body"` + `Transition` 淡入。
 - 深链 `/admin?tab=feedback` 直开反馈面板，切 tab 用 `router.replace` 同步地址栏；首屏两个面板各拉一次列表（两个角标需要两份数据）。状态齐全：骨架屏、空态（「没有待审核的候选赛事，全部处理完了 🎉」/「还没有用户反馈」）、错误横幅 + 「刷新」、`busyId` 行级 loading。
@@ -517,6 +519,25 @@ cd frontend; D:\Tools\node.exe D:\Tools\node_modules\npm\bin\npm-cli.js run dev
 **定时刷新**：`0 4 1,15 * * … saikr_match.py --refresh-if-stale`（详见 9.2）——每月 1 号 / 15 号 04:00，半月一次；索引仍新鲜时脚本 0 请求退出，**不要改成每日**（52 页/次有封 IP 风险）。
 
 **前端**：`CompetitionDetailView.vue` 新增 `isRealOfficialSite()` —— 名录站域名（`sdaeu.edu.cn`）与 CMS 通知页路径（`/info/<数字>/<数字>.htm`）**不渲染「官网」按钮**，改显示纯文本「来源：教育部门名录」；真实官网不受影响（`frontend/tests/official-url.check.mjs` 7 例全过）。
+
+### 5.8 赛事管理：删除赛事 + 空壳清理（2026-11-10 深夜）
+**产品决策**：赛氪都没收录的冷门赛事大概率为「水赛」，不再全网搜，直接清理；后台给管理员一个可视化删除入口。
+
+**清理脚本 `backend/cleanup_empty_shells.py`**（默认 dry-run）
+- 判定：`image_url` / `participants` / `reg_start_date` **三字段全空**（`COALESCE(TRIM(x),'')=''`，NULL、空串、纯空白都算空）。
+- 保守口径：默认只删「无 awards / ideas / insights / user_preparations / ai_jobs」的空壳；带数据的先保留待 enrich 补字段，加 `--include-with-data` 才会连带删。
+- `--apply` 前自动备份到 `%TEMP%\kuo-verify\competitions.bak-<时间戳>.db`；单事务删 7 张子表 + `competition_candidates.competition_id` 置 NULL。
+- 实测：51 条里三字段全空 13 条 → **删 5 条**（全球校园AI算法精英大赛 / 信息安全竞赛·省赛区 / 中国教育机器人大赛 / 数学建模竞赛 / 未来设计师）**51 → 46**；保留 8 条（挑战杯、计算机设计大赛、信息安全竞赛等，共 20 awards / 4 ideas / 3 insights / 1 备赛计划）。
+
+**接口**（见 5.2 表）
+- `GET /api/admin/competitions`：分页 + `keyword` 模糊搜索，返回 `{code,total,limit,offset,items}`，`source` 取 `discover_source`（`saikr:list` / `edu:roster`）。
+- `DELETE /api/admin/competitions/{id}`：`db.delete_competition_cascade()` 同事务级联，返回 `{name, deleted:{表:条数}, candidates_unlinked, message}`；不存在 → 404。子表清单常量化在 `db.COMPETITION_CHILD_TABLES`，与清理脚本保持同一口径（新增关联表两处都要补）。
+
+**前端 `AdminView.vue` 第三个 tab「赛事管理」**
+- 表格列：赛事名称（链到详情页新窗口）/ 级别 / 来源 / 获奖数 / 入库月份 / 操作；分页 10 条/页，`上一页 / 第 x/y 页 / 下一页`，删掉当前页最后一条自动回退一页。
+- 红色【删除】→ **自定义二次确认弹窗**（标题「确认要永久删除吗？」，正文《赛事名》+「此操作不可恢复！」+ 将连带删除的获奖条数），【取消】/【永久删除】（红），提交中禁用，支持 `Esc` / 点遮罩关闭，成功后 Toast「已删除《XXX》」并刷新列表。
+
+**验证**：TestClient 副本库 15 项断言全 PASS（分页/关键词/403/401/404/级联 awards=8/候选解绑/总数收敛）；浏览器 E2E 在隔离库上跑通「点删除 → 弹窗 → 永久删除 → 列表 46→45 + Toast」，生产库计数不变。**注意**：隔离后端必须用 `backend/tests/tools/run_api_patched.py`（它才读 `KUO_DB_PATH`），直接 `uvicorn main:app` 会指向生产库。
 
 ---
 ## 六、前端展示规范（已定稿，勿回退）

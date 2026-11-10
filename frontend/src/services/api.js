@@ -533,4 +533,37 @@ export function markAdminFeedbackRead(feedbackId) {
   return api.put(`/admin/feedback/${id}/read`)
 }
 
+/**
+ * 管理后台：正式赛事列表（「赛事管理」模块）
+ * GET /api/admin/competitions?limit=&offset=&keyword=
+ *
+ * @param {{ limit?: number, offset?: number, keyword?: string }} [params]
+ * @returns {Promise<{ total: number, items: Array }>}
+ */
+export function getAdminCompetitions(params = {}) {
+  const query = {}
+  if (Number.isInteger(params.limit)) query.limit = params.limit
+  if (Number.isInteger(params.offset)) query.offset = params.offset
+  if (typeof params.keyword === 'string' && params.keyword.trim()) {
+    query.keyword = params.keyword.trim()
+  }
+
+  return api.get('/admin/competitions', { params: query }).then((data) => ({
+    total: Number.isFinite(data?.total) ? data.total : 0,
+    items: Array.isArray(data?.items) ? data.items : []
+  }))
+}
+
+/**
+ * 管理后台：删除赛事（级联清理关联数据）
+ * DELETE /api/admin/competitions/:id
+ *
+ * @returns {Promise<{ name: string, deleted: object, message: string }>}
+ */
+export function deleteAdminCompetition(competitionId) {
+  const id = Number(competitionId)
+  if (!Number.isInteger(id) || id <= 0) return Promise.reject(new Error('赛事 ID 无效'))
+  return api.delete(`/admin/competitions/${id}`)
+}
+
 export default api

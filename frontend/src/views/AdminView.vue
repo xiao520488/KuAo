@@ -5,9 +5,11 @@ import Header from '@/components/Header.vue'
 import {
   getAdminCandidates,
   getAdminFeedback,
+  getAdminCompetitions,
   approveAdminCandidate,
   rejectAdminCandidate,
-  markAdminFeedbackRead
+  markAdminFeedbackRead,
+  deleteAdminCompetition
 } from '@/services/api'
 import { showToast } from '@/composables/useToast'
 
@@ -28,7 +30,11 @@ const route = useRoute()
 const router = useRouter()
 
 // 当前面板支持 ?tab=feedback 深链，刷新 / 前进后退后停在原面板
-const activeTab = ref(route.query.tab === 'feedback' ? 'feedback' : 'candidates')
+const activeTab = ref(
+  ['candidates', 'feedback', 'competitions'].includes(route.query.tab)
+    ? route.query.tab
+    : 'candidates'
+)
 
 const candidates = ref([])
 const candidatesTotal = ref(0)
@@ -39,6 +45,19 @@ const feedbacks = ref([])
 const feedbackUnread = ref(0)
 const feedbackLoading = ref(false)
 const feedbackError = ref('')
+
+// 赛事管理：主库分页列表
+const competitions = ref([])
+const competitionsTotal = ref(0)
+const competitionsLoading = ref(false)
+const competitionsError = ref('')
+const competitionsPage = ref(0)
+const COMPETITIONS_PAGE_SIZE = 10
+
+// 删除赛事二次确认：不可恢复，必须显式确认
+const deleteOpen = ref(false)
+const deleteItem = ref(null)
+const deleteBusy = ref(false)
 
 // 正在处理的行（按钮 loading / 防重复点击）
 const busyId = ref(null)
@@ -88,7 +107,7 @@ function formatMonth(raw) {
   return text.length >= 7 ? text.slice(0, 7) : text
 }
 
-/** 来源标识 -> 中文名 */
+/** 来源标识 -> 中文名（主库存的是 saikr:list / edu:roster 这类带后缀的标识） */
 const SOURCE_LABELS = {
   saikr: '赛氪',
   'edu-roster': '教育部门名录',
@@ -96,7 +115,11 @@ const SOURCE_LABELS = {
 }
 function sourceLabel(source) {
   if (!source) return '未知'
-  return SOURCE_LABELS[source] || source
+  if (SOURCE_LABELS[source]) return SOURCE_LABELS[source]
+  if (source.startsWith('saikr')) return '赛氪'
+  if (source.startsWith('edu')) return '教育部门名录'
+  if (source.startsWith('manual')) return '人工录入'
+  return source
 }
 
 /* ---------------------------- 数据加载 ---------------------------- */
@@ -131,17 +154,48 @@ async function loadFeedback() {
   }
 }
 
+async function loadCompetitions() {
+  competitionsLoading.value = true
+  competitionsError.value = ''
+  try {
+    const data = await getAdminCompetitions({
+      limit: COMPETITIONS_PAGE_SIZE,
+      offset: competitionsPage.value * COMPETITIONS_PAGE_SIZE
+    })
+    competitions.value = data.items
+    competitionsTotal.value = data.total
+  } catch (err) {
+    competitionsError.value = errorText(err, '赛事列表加载失败')
+    if (err?.response?.status === 403) competitionsError.value = '当前账号没有管理员权限'
+  } finally {
+    competitionsLoading.value = false
+  }
+}
+
+const competitionsPages = computed(() =>
+  Math.max(1, Math.ceil(competitionsTotal.value / COMPETITIONS_PAGE_SIZE))
+)
+
+function goCompetitionsPage(next) {
+  const target = Math.min(Math.max(0, next), competitionsPages.value - 1)
+  if (target === competitionsPage.value) return
+  competitionsPage.value = target
+  loadCompetitions()
+}
+
 function switchTab(tab) {
   activeTab.value = tab
   // 同步到地址栏（replace，不污染历史栈）
   router.replace({ query: { ...route.query, tab } })
   if (tab === 'candidates' && !candidates.value.length) loadCandidates()
   if (tab === 'feedback' && !feedbacks.value.length) loadFeedback()
+  if (tab === 'competitions' && !competitions.value.length) loadCompetitions()
 }
 
 function refresh() {
   if (activeTab.value === 'candidates') loadCandidates()
-  else loadFeedback()
+  else if (activeTab.value === 'feedback') loadFeedback()
+  else loadCompetitions()
 }
 
 /* ---------------------------- 审核操作 ---------------------------- */
@@ -191,9 +245,49 @@ async function confirmAudit() {
   }
 }
 
+/* ---------------------------- 删除赛事 ---------------------------- */
+/* 永久删除（连带 awards / ideas / insights / 备赛计划），必须先弹自定义确认框。 */
+
+function askDelete(item) {
+  if (busyId.value || deleteBusy.value) return
+  deleteItem.value = item
+  deleteOpen.value = true
+}
+
+function cancelDelete() {
+  if (deleteBusy.value) return
+  deleteOpen.value = false
+  deleteItem.value = null
+}
+
+async function confirmDelete() {
+  const item = deleteItem.value
+  if (!item || deleteBusy.value) return
+  deleteBusy.value = true
+  busyId.value = item.id
+  try {
+    const data = await deleteAdminCompetition(item.id)
+    showToast(data?.message || `已删除《${item.name}》`)
+    deleteOpen.value = false
+    deleteItem.value = null
+    // 删掉当前页最后一条时回退一页，避免停在空页上
+    if (competitions.value.length === 1 && competitionsPage.value > 0) {
+      competitionsPage.value -= 1
+    }
+    await loadCompetitions()
+  } catch (err) {
+    showToast(errorText(err, '删除失败，请重试'))
+  } finally {
+    deleteBusy.value = false
+    busyId.value = null
+  }
+}
+
 /** Esc 关闭弹窗，和站内其他弹窗保持一致 */
 function onGlobalKeydown(event) {
-  if (event.key === 'Escape' && confirmOpen.value) cancelConfirm()
+  if (event.key !== 'Escape') return
+  if (deleteOpen.value) cancelDelete()
+  else if (confirmOpen.value) cancelConfirm()
 }
 onMounted(() => window.addEventListener('keydown', onGlobalKeydown))
 onBeforeUnmount(() => window.removeEventListener('keydown', onGlobalKeydown))
@@ -229,28 +323,42 @@ const navItems = computed(() => [
     label: '用户反馈',
     hint: '未读',
     count: feedbackUnread.value
+  },
+  {
+    id: 'competitions',
+    label: '赛事管理',
+    hint: '主库',
+    count: competitionsTotal.value
   }
 ])
 
-const currentTitle = computed(() =>
-  activeTab.value === 'candidates' ? '候选赛事审核' : '用户反馈'
-)
+const currentTitle = computed(() => {
+  if (activeTab.value === 'candidates') return '候选赛事审核'
+  if (activeTab.value === 'feedback') return '用户反馈'
+  return '赛事管理'
+})
 
-const currentDesc = computed(() =>
-  activeTab.value === 'candidates'
-    ? '从采集库里捞出来的赛事，通过后进入正式赛事列表，拒绝则仅在候选表里标记。'
-    : '用户在「个人中心」提交的反馈，标为已读后不再计入未读角标。'
-)
+const currentDesc = computed(() => {
+  if (activeTab.value === 'candidates') {
+    return '从采集库里捞出来的赛事，通过后进入正式赛事列表，拒绝则仅在候选表里标记。'
+  }
+  if (activeTab.value === 'feedback') {
+    return '用户在「个人中心」提交的反馈，标为已读后不再计入未读角标。'
+  }
+  return '正式赛事库里的全部比赛，可在这里永久删除（连带获奖作品、备赛灵感与 AI 洞察，不可恢复）。'
+})
+
+const currentLoading = computed(() => {
+  if (activeTab.value === 'candidates') return candidatesLoading.value
+  if (activeTab.value === 'feedback') return feedbackLoading.value
+  return competitionsLoading.value
+})
 
 onMounted(() => {
-  // 两个面板的数据都先拉一次：侧边栏的未读 / 待审角标需要两个数字
-  if (activeTab.value === 'candidates') {
-    loadCandidates()
-    loadFeedback()
-  } else {
-    loadFeedback()
-    loadCandidates()
-  }
+  // 三个面板都先拉一次：侧边栏的待审 / 未读 / 赛事总数角标需要这些数字
+  loadCandidates()
+  loadFeedback()
+  loadCompetitions()
 })
 </script>
 
@@ -275,10 +383,10 @@ onMounted(() => {
                  px-5 py-2 text-sm font-semibold text-slate-600 dark:text-slate-300
                  transition-colors hover:border-slate-300 dark:hover:border-slate-600
                  hover:text-slate-900 dark:hover:text-white disabled:opacity-50"
-          :disabled="activeTab === 'candidates' ? candidatesLoading : feedbackLoading"
+          :disabled="currentLoading"
           @click="refresh"
         >
-          {{ (activeTab === 'candidates' ? candidatesLoading : feedbackLoading) ? '刷新中…' : '刷新' }}
+          {{ currentLoading ? '刷新中…' : '刷新' }}
         </button>
       </header>
 
@@ -433,8 +541,138 @@ onMounted(() => {
             </template>
           </template>
 
+          <!-- ============ 赛事管理 ============ -->
+          <template v-else-if="activeTab === 'competitions'">
+            <div
+              v-if="competitionsError"
+              class="mb-4 rounded-xl border border-red-100 dark:border-red-500/30 bg-red-50 dark:bg-red-500/15
+                     px-4 py-3 text-sm font-semibold text-red-600 dark:text-red-400"
+            >
+              {{ competitionsError }}
+            </div>
+
+            <div v-if="competitionsLoading" class="space-y-2">
+              <div
+                v-for="n in 5"
+                :key="n"
+                class="h-12 animate-pulse rounded-xl bg-slate-100 dark:bg-slate-700/60"
+              ></div>
+            </div>
+
+            <div
+              v-else-if="!competitions.length"
+              class="rounded-xl border border-dashed border-slate-200 dark:border-slate-700
+                     px-4 py-14 text-center text-sm text-slate-500 dark:text-slate-400"
+            >
+              <template v-if="competitionsError">数据没加载出来，点右上角「刷新」重试</template>
+              <template v-else>赛事库里暂时没有比赛</template>
+            </div>
+
+            <template v-else>
+              <div class="overflow-x-auto">
+                <table class="w-full min-w-[760px] border-collapse text-left text-sm">
+                  <thead>
+                    <tr class="border-b border-slate-200 dark:border-slate-700 text-xs uppercase tracking-wide
+                               text-slate-500 dark:text-slate-400">
+                      <th class="px-3 py-3 font-bold">赛事名称</th>
+                      <th class="px-3 py-3 font-bold">级别</th>
+                      <th class="px-3 py-3 font-bold">来源</th>
+                      <th class="px-3 py-3 font-bold">获奖</th>
+                      <th class="px-3 py-3 font-bold">入库时间</th>
+                      <th class="px-3 py-3 text-right font-bold">操作</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr
+                      v-for="item in competitions"
+                      :key="item.id"
+                      class="border-b border-slate-100 dark:border-slate-700/60
+                             transition-colors hover:bg-slate-50 dark:hover:bg-slate-700/30"
+                    >
+                      <td class="px-3 py-3">
+                        <router-link
+                          :to="`/competition/${item.id}`"
+                          target="_blank"
+                          class="font-semibold text-slate-900 hover:text-blue-600
+                                 dark:text-slate-100 dark:hover:text-blue-400"
+                        >
+                          {{ item.name }}
+                        </router-link>
+                        <span
+                          v-if="item.short_name"
+                          class="ml-2 rounded-full bg-slate-100 dark:bg-slate-700/60 px-2 py-0.5
+                                 text-xs font-semibold text-slate-500 dark:text-slate-300"
+                        >
+                          {{ item.short_name }}
+                        </span>
+                      </td>
+                      <td class="whitespace-nowrap px-3 py-3">
+                        <span
+                          class="rounded-full bg-slate-100 dark:bg-slate-700/60 px-2.5 py-1
+                                 text-xs font-semibold text-slate-600 dark:text-slate-300"
+                        >
+                          {{ item.level_label || '未标注' }}
+                        </span>
+                      </td>
+                      <td class="whitespace-nowrap px-3 py-3 text-slate-600 dark:text-slate-300">
+                        {{ sourceLabel(item.source) }}
+                      </td>
+                      <td class="whitespace-nowrap px-3 py-3 text-slate-600 dark:text-slate-300">
+                        {{ item.awards_count }}
+                      </td>
+                      <td class="whitespace-nowrap px-3 py-3 text-slate-600 dark:text-slate-300">
+                        {{ formatMonth(item.created_at) }}
+                      </td>
+                      <td class="whitespace-nowrap px-3 py-3 text-right">
+                        <button
+                          type="button"
+                          class="rounded-full border border-red-200 dark:border-red-500/40 px-3.5 py-1.5
+                                 text-xs font-bold text-red-600 dark:text-red-400
+                                 transition-colors hover:bg-red-600 hover:text-white
+                                 dark:hover:bg-red-600 dark:hover:text-white disabled:opacity-50"
+                          :disabled="busyId === item.id"
+                          @click="askDelete(item)"
+                        >
+                          {{ busyId === item.id ? '删除中…' : '删除' }}
+                        </button>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+
+              <div class="mt-4 flex flex-wrap items-center justify-between gap-3">
+                <p class="text-xs text-slate-500 dark:text-slate-400">
+                  共 {{ competitionsTotal }} 条 · 第 {{ competitionsPage + 1 }} / {{ competitionsPages }} 页
+                </p>
+                <div class="inline-flex items-center gap-2">
+                  <button
+                    type="button"
+                    class="rounded-full border border-slate-200 dark:border-slate-600 px-3.5 py-1.5
+                           text-xs font-bold text-slate-600 dark:text-slate-300
+                           transition-colors hover:bg-slate-50 dark:hover:bg-slate-700/60 disabled:opacity-40"
+                    :disabled="competitionsPage === 0 || competitionsLoading"
+                    @click="goCompetitionsPage(competitionsPage - 1)"
+                  >
+                    上一页
+                  </button>
+                  <button
+                    type="button"
+                    class="rounded-full border border-slate-200 dark:border-slate-600 px-3.5 py-1.5
+                           text-xs font-bold text-slate-600 dark:text-slate-300
+                           transition-colors hover:bg-slate-50 dark:hover:bg-slate-700/60 disabled:opacity-40"
+                    :disabled="competitionsPage >= competitionsPages - 1 || competitionsLoading"
+                    @click="goCompetitionsPage(competitionsPage + 1)"
+                  >
+                    下一页
+                  </button>
+                </div>
+              </div>
+            </template>
+          </template>
+
           <!-- ============ 用户反馈 ============ -->
-          <template v-else>
+          <template v-else-if="activeTab === 'feedback'">
             <div
               v-if="feedbackError"
               class="mb-4 rounded-xl border border-red-100 dark:border-red-500/30 bg-red-50 dark:bg-red-500/15
@@ -574,6 +812,79 @@ onMounted(() => {
                 @click="confirmAudit"
               >
                 {{ confirmBusy ? '提交中…' : confirmOkText }}
+              </button>
+            </div>
+          </div>
+        </div>
+      </Transition>
+    </Teleport>
+
+    <!-- ============ 删除赛事二次确认（不可恢复，红色警示） ============ -->
+    <Teleport to="body">
+      <Transition
+        enter-active-class="transition duration-150 ease-out"
+        enter-from-class="opacity-0"
+        enter-to-class="opacity-100"
+        leave-active-class="transition duration-100 ease-in"
+        leave-from-class="opacity-100"
+        leave-to-class="opacity-0"
+      >
+        <div
+          v-if="deleteOpen"
+          class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 px-4 backdrop-blur-sm"
+          @click.self="cancelDelete"
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            class="w-full max-w-[460px] rounded-2xl border border-red-200 bg-white p-6
+                   shadow-xl dark:border-red-500/40 dark:bg-slate-800"
+          >
+            <div class="flex items-start gap-3">
+              <span
+                class="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full
+                       bg-red-100 text-lg font-black text-red-600 dark:bg-red-500/20 dark:text-red-400"
+              >
+                !
+              </span>
+              <div class="min-w-0">
+                <h2 class="text-lg font-bold text-slate-900 dark:text-slate-100">
+                  确认要永久删除吗？
+                </h2>
+                <p
+                  class="mt-2 break-words rounded-xl bg-slate-50 px-3 py-2 text-sm font-semibold
+                         text-slate-700 dark:bg-slate-700/50 dark:text-slate-200"
+                >
+                  《{{ deleteItem?.name }}》
+                </p>
+                <p class="mt-3 text-sm leading-relaxed text-slate-500 dark:text-slate-400">
+                  此操作不可恢复！将同时删除该赛事的
+                  获奖作品 {{ deleteItem?.awards_count || 0 }} 条，以及关联的备赛灵感、
+                  AI 洞察与用户备赛计划。
+                </p>
+              </div>
+            </div>
+
+            <div class="mt-6 flex justify-end gap-2">
+              <button
+                type="button"
+                class="rounded-full border border-slate-200 px-4 py-2 text-sm font-bold
+                       text-slate-600 transition-colors hover:bg-slate-50
+                       disabled:opacity-50 dark:border-slate-600 dark:text-slate-300
+                       dark:hover:bg-slate-700/60"
+                :disabled="deleteBusy"
+                @click="cancelDelete"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                class="rounded-full bg-red-600 px-4 py-2 text-sm font-bold text-white
+                       transition-colors hover:bg-red-700 disabled:opacity-50"
+                :disabled="deleteBusy"
+                @click="confirmDelete"
+              >
+                {{ deleteBusy ? '删除中…' : '永久删除' }}
               </button>
             </div>
           </div>
