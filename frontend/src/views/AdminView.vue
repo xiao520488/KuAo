@@ -171,6 +171,8 @@ async function confirmAudit() {
   busyId.value = item.id
   try {
     if (action === 'approve') {
+      // 通过后会同步抓赛氪详情 + AI 提纯，最长约 1 分钟，先给个进度提示
+      showToast('审批中：正在补全简称与赛氪详情（约 20~60 秒）…')
       const data = await approveAdminCandidate(item.id)
       showToast(data?.message || '已通过')
     } else {

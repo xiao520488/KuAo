@@ -675,9 +675,14 @@ def add_competition(data: dict) -> int:
         return cur.lastrowid
 
 
-def update_competition(cid: int, data: dict) -> None:
+def update_competition(cid: int, data: dict, *,
+                       db_path: Optional[str] = None) -> None:
     """
     按 id 更新比赛信息。仅更新 data 中出现的字段。
+
+    参数:
+        db_path: 可选目标库；批量脚本 / 审核补全可指向测试库，
+                 默认沿用模块级 DB_PATH（生产库）。
     """
     allowed = ("name", "category", "reg_start_month", "reg_end_month",
                "reg_cross_year", "official_url", "level", "level_label",
@@ -707,7 +712,7 @@ def update_competition(cid: int, data: dict) -> None:
     if not fields:
         return
     values.append(cid)
-    with get_conn() as conn:
+    with get_conn(db_path) as conn:
         conn.execute(
             f"UPDATE competitions SET {', '.join(fields)} WHERE id = ?", values
         )

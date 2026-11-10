@@ -18,9 +18,12 @@ PUT  /api/admin/feedback/{id}/read         标记单条反馈已读
     (review_candidates.py) 走同一条入库路径，避免两套逻辑分叉；
   - 例外：CLI 里的「封面重新过闸门」需要联网 HEAD 图片，管理后台点击即响应
     优先，这里直接沿用候选采集阶段已通过 image_guard 的 image_url；
-  - 通过后不自动生成简称 / 不自动抓详情（CLI 的慢操作），需要时跑脚本补。
+  - 通过后与 CLI 一致，自动补全「2 字简称 + 赛氪详情（抓取 + AI 提纯）」。
+    两者都是增强数据：失败只记日志并把原因回传给前端，绝不回滚已入库的赛事，
+    避免「审批成功但详情永远为空」的静默空壳。
 """
 
+import json
 import logging
 import re
 import unicodedata
@@ -29,6 +32,8 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 import db
+import enrich_saikr_details as enrich
+import short_names
 from security import get_current_admin
 
 logger = logging.getLogger(__name__)
@@ -127,6 +132,133 @@ def _candidate_brief(row: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# 审核后自动补全：2 字简称 + 赛氪详情（抓取 + AI 提纯）
+# ---------------------------------------------------------------------------
+# 与 CLI（review_candidates.cmd_approve）保持同一套增强逻辑，避免两条入库路径
+# 产物不一致 —— 这是「通过审核后变成空壳」的根因所在。
+# 扩展性数据缺失不算入库失败：异常只记 warning 并在响应里回传原因，
+# 前端据此回退到名称首字 / 无图兜底，而不是静默留空。
+def _candidate_contest_id(candidate: dict):
+    """从 saikr 候选里取赛氪 contest_id；其它来源返回 None（走名称相似度兜底）。"""
+    if str(candidate.get("source") or "").strip() != "saikr":
+        return None
+
+    match = re.search(r"(\d+)\s*$", str(candidate.get("source_key") or ""))
+    if match:
+        return int(match.group(1))
+
+    raw = candidate.get("raw_json")
+    if not raw:
+        return None
+    try:
+        payload = json.loads(raw) if isinstance(raw, str) else raw
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    try:
+        contest_id = int(payload.get("contest_id") or 0)
+    except (TypeError, ValueError):
+        return None
+    return contest_id if contest_id > 0 else None
+
+
+def _auto_complete_after_approve(competition_id: int, name: str,
+                                 candidate: dict) -> dict:
+    """入库后补全简称与详情；返回结构化结果供接口回传（永不抛异常）。"""
+    result = {"short_name": None, "short_name_error": None, "enrich": None}
+
+    # 1) 2 字简称：失败时前端回退名称首字
+    try:
+        short_name = short_names.extract_short_name(name)
+        db.save_short_name(competition_id, short_name)
+        result["short_name"] = short_name
+        logger.info("[审核补全] competition=%s 简称=%s", competition_id, short_name)
+    except Exception as exc:  # noqa: BLE001 - 简称失败不影响已入库赛事
+        result["short_name_error"] = str(exc)
+        logger.warning(
+            "[审核补全] competition=%s 简称提取失败（前端回退首字）：%s",
+            competition_id, exc,
+        )
+
+    # 2) 赛氪详情抓取 + AI 提纯：只填空字段，不覆盖已有值
+    #    名录类候选没有 contest_id，且 source_url 是共用的目录页 —— 严禁拿它当锚点，
+    #    交给 enrich 内部的「名称 -> 本地赛氪索引」匹配（allow_name_match）。
+    contest_id = _candidate_contest_id(candidate)
+    logger.info(
+        "[审核补全] competition=%s 开始抓取赛氪详情（contest_id=%s，约 20~60 秒）",
+        competition_id, contest_id or "待按名称匹配",
+    )
+    try:
+        enriched = enrich.enrich_competition(
+            db.DB_PATH, competition_id, contest_id=contest_id,
+            allow_stale=False, allow_name_match=True,
+        )
+    except (Exception, SystemExit) as exc:  # noqa: BLE001 - 详情失败不影响主流程
+        result["enrich"] = {"status": "failed", "error": str(exc)}
+        logger.warning(
+            "[审核补全] competition=%s 详情抓取失败（字段保持 NULL，赛事仍在库）：%s",
+            competition_id, exc,
+        )
+        return result
+
+    result["enrich"] = {
+        key: enriched.get(key)
+        for key in ("status", "contest_id", "written", "reason", "extra")
+        if enriched.get(key) is not None
+    }
+    if enriched.get("status") == "updated":
+        labels = [
+            enrich.FIELD_LABELS.get(field, field)
+            for field in enriched.get("written") or []
+        ]
+        logger.info(
+            "[审核补全] competition=%s 详情已写入 %d 项：%s",
+            competition_id, len(labels), "、".join(labels),
+        )
+    else:
+        logger.info(
+            "[审核补全] competition=%s 详情未写入（status=%s%s）",
+            competition_id, enriched.get("status"),
+            "：" + str(enriched["reason"]) if enriched.get("reason") else "",
+        )
+    return result
+
+
+def _auto_complete_summary(result: dict) -> str:
+    """把补全结果压成一句人话，回传给管理后台的 toast。"""
+    parts = []
+    if result.get("short_name"):
+        parts.append("简称=%s" % result["short_name"])
+    else:
+        parts.append("简称未生成（回退首字）")
+
+    enriched = result.get("enrich") or {}
+    status = enriched.get("status")
+    if status == "updated":
+        detail = "详情补全 %d 项" % len(enriched.get("written") or [])
+        extra = enriched.get("extra") or {}
+        bonus = []
+        if extra.get("dates"):
+            bonus.append("日期 %d 项" % len(extra["dates"]))
+        if extra.get("cover"):
+            bonus.append("封面")
+        if bonus:
+            detail += "（另补%s）" % "、".join(bonus)
+        parts.append(detail)
+    elif status == "complete":
+        parts.append("详情本就完整")
+    elif status == "failed":
+        parts.append("详情抓取失败，已入库待补")
+    elif status:
+        reason = str(enriched.get("reason") or status)
+        parts.append("详情未补（%s），已入库待补" % reason[:40])
+    else:
+        parts.append("详情未补，已入库待补")
+    return "；".join(parts)
+
+
+# ---------------------------------------------------------------------------
 # 候选赛事
 # ---------------------------------------------------------------------------
 @router.get(
@@ -161,7 +293,11 @@ def list_pending_candidates(
     },
 )
 def approve_candidate(candidate_id: int) -> dict:
-    """把候选提拔进 competitions，并在同一事务里标记 approved。"""
+    """把候选提拔进 competitions（同一事务标记 approved），随后自动补全简称与详情。
+
+    补全失败不回滚、不抛 500：赛事已在库，缺失字段回退前端兜底，
+    失败原因写日志并在响应的 `short_name` / `enrich` 里回传。
+    """
     candidate = db.get_candidate(candidate_id)
     if candidate is None:
         raise HTTPException(status_code=404, detail="候选不存在")
@@ -177,16 +313,25 @@ def approve_candidate(candidate_id: int) -> dict:
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    # 入库成功后立即补全简称与详情（同步执行，与 CLI 同口径）。
+    # 该路由是 def（FastAPI 会放进线程池），阻塞期间不影响其他请求。
+    completion = _auto_complete_after_approve(
+        competition_id, data.get("name") or "", candidate
+    )
+    summary = _auto_complete_summary(completion)
+
     logger.info(
-        "管理后台通过候选 candidate_id=%s -> competition_id=%s",
-        candidate_id, competition_id,
+        "管理后台通过候选 candidate_id=%s -> competition_id=%s（%s）",
+        candidate_id, competition_id, summary,
     )
     return {
         "code": 0,
         "candidate_id": candidate_id,
         "competition_id": competition_id,
         "status": "approved",
-        "message": "已通过并入库：%s" % data["name"],
+        "short_name": completion.get("short_name"),
+        "enrich": completion.get("enrich"),
+        "message": "已通过并入库：%s（%s）" % (data["name"], summary),
     }
 
 

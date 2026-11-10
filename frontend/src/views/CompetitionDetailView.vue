@@ -39,7 +39,7 @@ watch(
 // ---- 后端字段格式化 ----
 // 双轨制：日期轨（reg_*_date / contest_*_date）优先，为空时降级到月份轨；
 // 统一实现在 utils/timeFormat，避免各页面文案漂移。
-import { toMonth, formatSignUp, formatContest } from '../utils/timeFormat'
+import { toMonth, parseDate, formatSignUp, formatContest } from '../utils/timeFormat'
 
 // 封面图：只接受 http(s) 绝对地址，其余回落大图占位
 function resolveImage(item) {
@@ -255,6 +255,35 @@ function safeExternalUrl(raw) {
 
 const officialUrl = computed(() => safeExternalUrl(detail.value?.official_url))
 
+// 目录页 / 通知页不是「赛事官网」：教育部门名录里的每条候选共用同一个目录链接
+// （如 https://www.sdaeu.edu.cn/jwc/info/1047/2528.htm），把它渲染成「查看官网」
+// 按钮会误导用户点进学校教务处列表页，所以这类地址只保留纯文本来源标注。
+const ROSTER_HOSTS = ['sdaeu.edu.cn']
+const NOTICE_PATH_RE = /\/info\/\d{1,6}\/\d{1,6}\.(?:html?|shtml?)$/i
+
+function isRealOfficialSite(raw) {
+  const href = safeExternalUrl(raw)
+  if (!href) return false
+  try {
+    const url = new URL(href)
+    const roster = ROSTER_HOSTS.some(
+      (host) => url.hostname === host || url.hostname.endsWith('.' + host)
+    )
+    if (roster) return false
+    return !NOTICE_PATH_RE.test(url.pathname)
+  } catch (e) {
+    return false
+  }
+}
+
+const officialIsReal = computed(() => isRealOfficialSite(detail.value?.official_url))
+
+// 名录类来源在库里没有独立字段（discover_source 未下发到详情），
+// 用「链接是不是目录页」反推来源文案，避免多改后端模型。
+const officialFallbackText = computed(() =>
+  officialUrl.value && !officialIsReal.value ? '来源：教育部门名录' : '暂未收录官网'
+)
+
 // 官网域名（用于在没有完整 URL 时也能显示真实来源）
 const officialHost = computed(() => {
   if (!officialUrl.value) return ''
@@ -301,19 +330,35 @@ const examArrangement = computed(() =>
   String(detail.value?.exam_arrangement || detail.value?.exam_schedule || '').trim()
 )
 
-// 月份字段是否存在，决定展示真实时间还是“暂未收录”空壳
+// 时间展示文案 + 可用性判断。
+// 双轨制：日期轨（原文写到「日」）优先，月份轨（老数据 / 只写到月）兜底，
+// 两轨都空才显示「暂未收录」——**判断口径必须和 utils/timeFormat 的降级顺序一致**，
+// 否则会出现「列表卡片有精确日期、详情页却写暂未收录」。
+const regTimeText = computed(() => {
+  const legacy = String(detail.value?.sign_up_time || '').trim()
+  return legacy || formatSignUp(detail.value || {})
+})
+const contestTimeText = computed(() => {
+  const legacy = String(detail.value?.contest_time || '').trim()
+  return legacy || formatContest(detail.value || {})
+})
+
 const hasRegTime = computed(() =>
   Boolean(
+    parseDate(detail.value?.reg_start_date) ||
+    parseDate(detail.value?.reg_end_date) ||
     toMonth(detail.value?.reg_start_month) ||
     toMonth(detail.value?.reg_end_month) ||
-    detail.value?.sign_up_time
+    String(detail.value?.sign_up_time || '').trim()
   )
 )
 const hasContestTime = computed(() =>
   Boolean(
+    parseDate(detail.value?.contest_start_date) ||
+    parseDate(detail.value?.contest_end_date) ||
     toMonth(detail.value?.contest_start_month) ||
     toMonth(detail.value?.contest_end_month) ||
-    detail.value?.contest_time
+    String(detail.value?.contest_time || '').trim()
   )
 )
 const hasAnyTime = computed(() => hasRegTime.value || hasContestTime.value)
@@ -416,7 +461,7 @@ const guideReady = computed(() => Boolean(detail.value?.full_process_guide))
 
           <div class="mt-5 flex flex-wrap items-center gap-x-4 gap-y-2">
             <a
-              v-if="officialUrl"
+              v-if="officialIsReal"
               :href="officialUrl"
               target="_blank"
               rel="noopener noreferrer"
@@ -435,7 +480,7 @@ const guideReady = computed(() => Boolean(detail.value?.full_process_guide))
               class="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-4 py-2 text-xs
                      font-semibold text-slate-500 dark:bg-slate-800 dark:text-slate-400"
             >
-              暂未收录官网
+              {{ officialFallbackText }}
             </span>
             <span class="text-xs text-slate-500 dark:text-slate-400">
               信息来自平台采集，最终以官网当年通知为准
@@ -455,7 +500,7 @@ const guideReady = computed(() => Boolean(detail.value?.full_process_guide))
               class="mt-1.5 text-lg font-black leading-tight"
               :class="hasRegTime ? 'text-slate-800 dark:text-slate-100' : 'text-slate-500 dark:text-slate-400'"
             >
-              {{ hasRegTime ? detail.signUpTime : '暂未收录' }}
+              {{ hasRegTime ? regTimeText : '暂未收录' }}
             </p>
           </div>
 
@@ -469,7 +514,7 @@ const guideReady = computed(() => Boolean(detail.value?.full_process_guide))
               class="mt-1.5 text-lg font-black leading-tight"
               :class="hasContestTime ? 'text-slate-800 dark:text-slate-100' : 'text-slate-500 dark:text-slate-400'"
             >
-              {{ hasContestTime ? detail.contestTime : '暂未收录' }}
+              {{ hasContestTime ? contestTimeText : '暂未收录' }}
             </p>
           </div>
 
@@ -512,7 +557,7 @@ const guideReady = computed(() => Boolean(detail.value?.full_process_guide))
               </p>
             </div>
             <a
-              v-if="officialUrl"
+              v-if="officialIsReal"
               :href="officialUrl"
               target="_blank"
               rel="noopener noreferrer"
@@ -543,7 +588,7 @@ const guideReady = computed(() => Boolean(detail.value?.full_process_guide))
                 <div v-if="hasRegTime" class="border-l-2 border-blue-400/70 pl-4">
                   <p class="text-xs font-bold tracking-wide text-blue-500 dark:text-blue-400">报名阶段</p>
                   <p class="mt-1 text-xl font-black text-slate-800 dark:text-slate-100">
-                    {{ detail.signUpTime }}
+                    {{ regTimeText }}
                   </p>
                 </div>
                 <div v-if="!hasRegTime" class="border-l-2 border-dashed border-slate-300 pl-4 dark:border-slate-600">
@@ -553,7 +598,7 @@ const guideReady = computed(() => Boolean(detail.value?.full_process_guide))
                 <div v-if="hasContestTime" class="border-l-2 border-sky-400/70 pl-4">
                   <p class="text-xs font-bold tracking-wide text-sky-500 dark:text-sky-400">比赛阶段</p>
                   <p class="mt-1 text-xl font-black text-slate-800 dark:text-slate-100">
-                    {{ detail.contestTime }}
+                    {{ contestTimeText }}
                   </p>
                 </div>
                 <div v-if="!hasContestTime" class="border-l-2 border-dashed border-slate-300 pl-4 dark:border-slate-600">
@@ -576,7 +621,7 @@ const guideReady = computed(() => Boolean(detail.value?.full_process_guide))
                   平台尚未采集到该赛事的报名或比赛月份。
                 </p>
                 <a
-                  v-if="officialUrl"
+                  v-if="officialIsReal"
                   :href="officialUrl"
                   target="_blank"
                   rel="noopener noreferrer"
@@ -650,7 +695,7 @@ const guideReady = computed(() => Boolean(detail.value?.full_process_guide))
                   平台尚未采集到该赛事的参赛资格与组队要求。
                 </p>
                 <a
-                  v-if="officialUrl"
+                  v-if="officialIsReal"
                   :href="officialUrl"
                   target="_blank"
                   rel="noopener noreferrer"
@@ -693,7 +738,7 @@ const guideReady = computed(() => Boolean(detail.value?.full_process_guide))
                   平台尚未采集到该赛事的赛项与作品范围说明。
                 </p>
                 <a
-                  v-if="officialUrl"
+                  v-if="officialIsReal"
                   :href="officialUrl"
                   target="_blank"
                   rel="noopener noreferrer"
@@ -736,7 +781,7 @@ const guideReady = computed(() => Boolean(detail.value?.full_process_guide))
                   平台尚未采集到该赛事的赛制、考试或答辩安排。
                 </p>
                 <a
-                  v-if="officialUrl"
+                  v-if="officialIsReal"
                   :href="officialUrl"
                   target="_blank"
                   rel="noopener noreferrer"

@@ -497,7 +497,9 @@ export function getAdminCandidates(params = {}) {
 export function approveAdminCandidate(candidateId) {
   const id = Number(candidateId)
   if (!Number.isInteger(id) || id <= 0) return Promise.reject(new Error('候选 ID 无效'))
-  return api.post(`/admin/candidates/${id}/approve`)
+  // 通过后会同步补全「2 字简称 + 赛氪详情（抓取 + AI 提纯）」，常见 20~60 秒，
+  // 因此单独放宽超时，避免默认 60s 把已经入库成功的请求判成失败。
+  return api.post(`/admin/candidates/${id}/approve`, null, { timeout: 180000 })
 }
 
 /** 管理后台：拒绝候选 POST /api/admin/candidates/:id/reject */

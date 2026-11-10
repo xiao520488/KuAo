@@ -1,1037 +1,70 @@
 # CRAWLER_HANDOVER.md
-
-> 交接范围：`backend/` 下高校新闻获奖采集、赛事基础数据采集、**生产库赛事批量补全**、**赛氪网数据源预检**、**候选表与审核 CLI**、**AI 攻略/灵感生成链路**、**云端定时任务链**、测试库联调与数据库迁移。
-> 生成时间：2026-11-07（Asia/Shanghai）｜最后更新：2026-11-08 22:30（P0 账号串号与搜索框变形已修复，见「零·补」）
-> 原则：后续接手请先读本文件，再按需读代码。
+> 交接范围：`backend/` 的新闻获奖采集、赛事基础数据采集与补全、赛氪详情补充、候选表与审核、AI 攻略/灵感链路、云端定时任务、管理后台、前端展示规范。
+> 最后更新：2026-11-10（审核后自动补全修复）。本文件是**操作手册**，不记变更史；单条历史用 `git log` 与 `workspace/*.json` 回溯。
+> 读法：第零节 30 秒 → 第二节命令 → 第五节后台 → 第七节边界。
+## 文档导航
+零、接手必读（30 秒版）
+一、架构、数据契约与文件清单
+二、运行命令
+三、赛氪数据源事实与合规边界
+四、使用隔离红线
+五、管理后台
+六、前端展示规范（已定稿，勿回退）
+七、未完成项与已知边界
+八、测试与验证
+九、云端部署与运维
 
 ---
-
 ## 零、接手必读（30 秒版）
-
-**当前阶段：爬虫闭环 + AI 内容生成闭环已完成；赛氪详情补充器已完成 AI 提纯 + `--backfill`/`--daily-update` 双模式 + 审核联动（本地测试库验证通过）。下一步 = 生产库迁移/回填/上云同步 + 80 条候选审核 + 新闻 `LIST_URL` 确定后补挂 cron。**
-
-**详情页卡片版已构建完成；云端前端发布目录问题已定位（实际 root = `/var/www/html`），下一步核心任务见下方【当前任务】。**
-
-> ✅ **新窗口接手先看：本文件「零·补」——P0 账号串号与顶部搜索框变形已修复（2026-11-08 22:30），上云前请按该节完成双账号复验。**
->
-> ✅ **管理后台（候选审核 / 用户反馈）已上线本地，见「十四、管理后台」——管理员判定看 `users.is_admin`，用 `promote_admin.py` 授权；`/admin` 前端守卫 + 后端 `get_current_admin` 双层拦截。**
-
-> **【2026-11-08 20:26 现场问题｜云端后端代码未同步】**
->
-> 本地回填并覆盖云端 DB 后，前端仍不显示详情三字段。已核对 commit 时间线：云端部署的是 `81e7686`（13:32，上云边界测试/部署手册），**早于**详情三列的 `077dce0`（19:56）和 AI 提纯的 `d685432`（20:14）。因此云端 `competitions.db` 虽已有三列，但云端 `routers/competitions.py` / `models/schemas.py` / `db.py` 仍是旧版，详情接口不会返回 `participants/content_scope/exam_schedule`。
->
-> **修复：** 在服务器 `/root/KuAo` 拉取并切到 `d685432`（或上传 `routers/competitions.py`、`models/schemas.py`、`db.py` 等对应文件），然后 `systemctl restart kuao-backend`；前端 `dist` 无需重建。
-
-> **【当前任务｜2026-11-08 20:05】赛氪详情补充器已完成代码重构，等待生产库同步**
->
-> **已完成：** `enrich_saikr_details.py` 支持 `--backfill` / `--daily-update`；抓取后必须先调一次 `llm.chat_json` 提炼为「1. 短句」列表（每条 ≤50 字），AI 失败/疑似照抄保留 NULL；`review_candidates.py --approve` 成功后自动补详情。
->
-> **下一步（按顺序）：** 本地生产库 `migrate_production.py --apply` 加三列 → `enrich_saikr_details.py --backfill --apply --allow-production` 回填 33 条 → `backup_db.py` 快照 → 停云端 `kuao-backend` → 覆盖云端库 → 校验/重启。生产库**仍未迁移、未写入**。
-
->
-> ~~**已解决（2026-11-08 19:10）：云端 Nginx 目录问题**：线上旧版根因是前端发布目录错误——实际 root 是 `/var/www/html`，上传到 `/root/KuAo/frontend/dist` / `/opt/kuao/frontend/dist` 都不会生效；线上无强缓存，正确覆盖命令已记录在 18:30 小节。~~
->
-> **已完成（2026-11-08 19:10）：详情页卡片排版恢复**：顶部 4 张速览卡 + 中部 12 栅格卡片（时间安排 / 赛事简介 / 参赛对象 / 内容范围 / 考试安排），有 `full_process_guide` 渲染真实 Markdown，无攻略保留空壳 +「✨ 生成 AI 攻略」按钮；`/competition/10`、`/1`、`/11` 桌面 + 移动端已验收，截图见 `backend/workspace/final_detail*.png`。
->
-> **历史记录（2026-11-08 18:30，已被 19:10 版式取代）** 详情页真实数据不展示：结论——**后端接口完全正常**，`GET /api/competitions/1`、`/10` 均返回 `official_url` / `reg_*_month` / `contest_*_month` / `full_process_guide` / `guide_status=ready`（id=10 攻略 5082 字，官网 `http://jsjds.blcu.edu.cn/`，比赛月份 7-8；id=1 攻略完整、官网 `https://cy.ncss.cn/`）。真正的 bug 在 **`CompetitionDetailView.vue`**：①「时间安排 / 参赛对象 / 内容范围 / 考试安排」四段和「参赛形式 / 竞赛内容 / 作品提交要求」三张卡片是**硬编码静态文案**，且**无条件渲染**，把真实信息压在下面，看起来就是“全是套话”；②官网与月份虽已绑定真实字段，但展示层级太低；③攻略按钮/渲染本身没有字段名错位（后端返回 `full_process_guide`，前端读的也是它），线上旧包被浏览器缓存时会表现为“只有套话”。**18:30 的修复**删除了全部静态区块、改为纯「赛事档案」；19:10 又在此基础上恢复了分块卡片空壳。**本次只改前端，需重新构建并上传 `dist/`，后端无需重启。**
-
-| 项目 | 现状 |
+### 0.1 当前阶段
+采集闭环、AI 内容闭环、管理后台（候选审核 + 用户反馈）都已在本地跑通；云端 2026-11-08 14:33 原地升级上线（`/root/KuAo`，systemd `kuao-backend`，前端根 `/var/www/html`）。11-09/10 的新能力（双轨日期、简称兜底、审核后自动补全、批量审核）**只在本地，云端未同步**；候选池仍在审核中。
+### 0.2 下一步（按优先级）
+1. **云端同步（阻塞其余任务）**：上传新 `frontend/dist` + 后端代码到 `/root/KuAo`，`systemctl restart kuao-backend`。云端只部署到 `81e7686`，缺详情三列、AI 提纯、简称/日期补全。
+2. **双账号复验** sessionStorage 隔离；清理旧 `localStorage` token 后全员需重新登录（见第七节「账号串号」）。
+3. **审核收尾**：57 条 pending（全是 `edu-roster`）逐条过后台或 CLI；「辅助报名 / 考试入口 / 作品征集」类服务广告直接 reject。
+4. **库对齐**：本地生产库副本已 50 条，云端仍 33 条 → 走 9.3 的「本地快照 → 云端覆盖」。
+5. 16 条报名冲突逐条裁决（默认保留库内值）；新闻 `LIST_URL` 定下来后补一条 cron。
+### 0.3 五条红线（细节见第四节）
+1. 默认只写 `test_crawl.db`；写 `competitions.db` 必须 `--apply` + `--allow-production` + 写前自动备份成功，三者缺一即拒。
+2. 一律只补 NULL：`reg_*` / `contest_*` / `image_url` / 日期列已有值一律不覆盖（报名时间尤其如此）。
+3. 候选只有 `pending` 能 approve；主表重名拒绝入库；新入库行 `sort_order=9999`（首页不曝光）。
+4. 封面必须过 `image_guard`：二维码/logo/banner、宽高比 >2.6、死链一律不写，阈值不许放宽。
+5. AI 只能走 `ai_jobs` 抢占 + 登录态；不绕过任务表直接写 `full_process_guide`；长文只在详情接口返回。
+### 0.4 数据库快照（2026-11-10 实测）
+| 对象 | 现状 |
 |---|---|
-| 生产库 `competitions.db` | **33** 条赛事（含 id=36）/ **87** 条获奖；有封面 **6** 条（id=6/8/18/22/27/34）；有比赛月份 **8** 条；**候选 82 条（pending 80 / approved 1 / rejected 1）**；**有攻略 7 条（id=1–6、10）**；**ai_jobs 0 条**；孤儿 insights/ideas **已清零**；SHA-256 `3af3af9c2d8fb4f278bff012f96aa4bd9bd878697443d910359f015066f54d73` |
-| 测试库 `test_crawl.db` | **33** 条赛事 / **88** 条获奖 / **82** 候选；**有攻略 9 条**（本轮真机生成 id=21、12）；**ai_jobs 2 条（均已 done）**；SHA-256 `b001887393e2103c2ad22e584de21970528de99063d33e7fc7754aaa6721b0b9` |
-| `competition_candidates` | 2026-11-08 落地并部署生产；`db.py` 建表 + 插入/去重/统计/提拔函数；生产/测试各 **82** 条 |
-| 审核 CLI | `review_candidates.py --list / --approve <id> / --reject <id>`；approve 重新过 `check_image()`、同事务写主表 + 标记 approved |
-| 前端封面兜底 | 已完成；本轮 `npm.cmd run build` 再次通过（7.36s / 115 modules） |
-| 赛氪映射 + 预检 | 已完成：32 条映射（22 精确 / 7 挂主赛 / 1 子赛道占位 / 2 无对应）、16 条报名冲突 |
-| 生产库写入 | 2026-11-08 12:05：5 封面 + 2 条比赛时间 + id=34 报名起始月；备份 `competitions.db.bak-20261108-120553` |
-| 生产候选部署 | 2026-11-08 12:34：62 条目录 + 20 条赛氪；备份 `…bak-20261108-123438` / `…123446` |
-| **AI 攻略链路** | **已完成（2026-11-08 13:15）**：`ai_jobs` 表 + 4 个 `guide_*` 列已上生产；`POST/GET /api/competitions/{id}/generate_guide`（登录 + 异步 + 幂等）；前端详情页「✨ 生成 AI 攻略」按钮 + 轮询；列表接口已剔除长文 |
-| **每日慢刷** | **已完成**：`daily_ai_worker.py`（4 篇攻略 + 2 条灵感/天，预算熔断、3 天失败冷却、自动备份）；测试库真机跑通 2 篇（3378 + 2945 tokens） |
-| **孤儿数据清理** | **已执行（2026-11-08 13:09）**：删除 insights 10 条 / ideas 12 条；备份 `competitions.db.bak-20261108-130926` |
+| `competitions.db`（本地生产库副本） | 赛事 **49**（2026-11-10 晚清理 5 条名录空壳后）/ 获奖 **87** / 候选 **82**（approved 17 · pending 57 · rejected 8）/ 攻略 **7** / `short_name` 全覆盖 / `ai_jobs` **0** |
+| `test_crawl.db`（测试库） | 赛事 **33** / 获奖 **88** / 候选 **82**（全 pending）/ 攻略 **9** / `ai_jobs` 2（均 done）；**schema 落后**，缺 `*_date` 四列，需 `db.init_db('test_crawl.db')` 补列后再跑日期类脚本 |
+| 云端 `competitions.db` | 2026-11-08 迁移后 33 / 87 / 82 / 攻略 7 / ai_jobs 0，SHA `297e17df…`；本地新数据尚未同步 |
+| 候选来源 | `edu-roster` 62 / `saikr` 20，`UNIQUE(source, source_key)` 零重复 |
 
-**本轮新决策（不要擅自推翻）：**
-
-1. **写生产库时，报名时间只填补 NULL，禁止覆盖已有值**。赛氪给的是平台报名窗口，与库内官方口径可能不同（16 条冲突清单见第六节第 15 条），已有值一律保留。
-2. **封面仍执行方案 C**：宽高比 >2.6 一律拒收；无图交给前端渐变首字兜底，详情页也不放宽 banner。
-3. **本轮赛氪抓取只做存量 32 条**：低频、小批量、测试级；不扩到 5172 条全量、不商用；`robots.txt` 明确 `Disallow: /api/`，合规风险已知。**新赛事发现另立方案**，方案评审通过前不写生产库。
-4. **往年届次护栏**：赛氪页面报名结束超过 400 天视为陈旧，整条跳过（id=2/4/17/26/30 已跳过）。
-5. **新赛事发现一律先进候选/审核**：发现源只负责产出 `competition_candidates`，人工审核后才 INSERT `competitions`，不允许自动写生产库（见第九节）。
-6. **候选表 POC 已定稿（2026-11-08 12:35）**：`discover_university.py`（84 项目录，剔除 2 条非比赛，写入 62 条）+ `discover_saikr.py`（前 2 页 × 10 = 20 条/天，3~5 秒延迟）均已跑通；赛氪当天重复 `--apply` 会被每日守卫拦截，需 `--force`。
-7. **审核机制已落地（2026-11-08 12:36）**：`review_candidates.py` 已就绪；approve 会**重新过 `check_image()`**，在同一事务里 INSERT `competitions`（`sort_order=9999`）+ 候选标记 `approved` + 回填 `competition_id`；reject 只改候选状态。
-8. **AI 生成必须登录 + 预算闸门（2026-11-08 定）**：攻略接口依赖 `get_current_user`，不允许匿名；全站每日 8 个任务、队列 5、失败冷却 30 分钟；`ai_jobs` 唯一部分索引保证同赛事同时只有 1 个活跃任务。**不要绕过它直接调模型写库**。
-9. **攻略只在详情接口返回**：列表接口已移除 `full_process_guide`（30+ 条长文会让列表响应多出上百 KB）；前端列表只展示卡片信息。
-10. **孤儿 insights/ideas 直接删除（已执行）**：`competition_id` 为空/悬空的数据在按赛事隔离的接口下永远读不到，不回填、不保留。
-
-**下一步安排（按优先级）：**
-
-1. **《云端部署手册》已执行（2026-11-08）**：见 `CLOUD_DEPLOYMENT_GUIDE.md`；实际采用原地升级，完整记录见 12.5。后续按 12.5 的回滚路径维护。
-2. **Crontab 已挂（2026-11-08）**：5 条任务（02:30 备份 / 04:10 候选 / 04:40 AI / 周日 05:20 补全 / 05:40+05:50 清理）；**新闻采集暂缓**，`LIST_URL` 确定后单独加一条。
-3. **并行人工审核**：生产库 80 条 pending 继续用 `review_candidates.py` 审核；服务/广告类（「辅助报名」「考试入口」）直接 `--reject`。
-
-> ⚠️ 生产库现在**允许写**（用户 2026-11-07 明确授权），但每次写库前必须自动备份，且所有脚本默认 dry-run —— 见第四节红线。
+> 数字随审核变化，以 `PRAGMA` / `COUNT` 实测为准。11-08 里程碑值：33 赛事 / 87 获奖 / 82 候选（80 pending）/ 攻略 7 条。
+### 0.5 里程碑
+| 时间 | 事件 |
+|---|---|
+| 11-06 | 首个生产库快照备份 |
+| 11-07 | 新闻/赛事采集器落地、封面闸门、合并 id=34/35 |
+| 11-08 12:05 / 12:34 | 赛氪补全首次写生产库（10 字段成功，备份 `…120553`）；候选表上线（82 条） |
+| 11-08 13:09–13:15 | `ai_jobs` + 4 个 `guide_*` 列、孤儿清理、攻略接口上线 |
+| 11-08 14:33 / 15:29 | 云端上线 / crontab 生效 |
+| 11-08 19:56 / 20:14 | 详情三列 + AI 提纯（`077dce0` / `d685432`） |
+| 11-08 22:30 | P0 账号串号修复（sessionStorage）、搜索框定宽 240px |
+| 11-09 | 管理后台、双轨制日期、两字简称、批量审核 |
+| 11-10 | 修「审核通过即空壳」：通过后自动补简称 + 赛氪详情/日期/封面；晚间再修名录匹配：名称 → 赛氪本地索引（`saikr_match.py`），清理 5 条空壳，详情页隐藏名录目录链接 |
 
 ---
-
-## 零·补、待处理 Bug（2026-11-08 21:50 交接）
-
-> **2026-11-08 22:30 更新：两个 Bug 已修复并本地验证。**
->
-> - **P0 账号串号根因（前端）**：`access_token` 存在 `localStorage`，同一浏览器的所有标签页/窗口（含同一无痕会话的多个无痕窗口）共享同一个 token。A 登录后，B 新开窗口会直接读到 A 的 token，`/api/auth/me` 返回 A，页面就“登入 A 的账号”。后端鉴权链路本身正确：无 token / 空 token / 畸形 token / 错签名均 401，不存在“兜底返回第一个用户”；也没有硬编码测试 Token。已改为 **`sessionStorage` 按标签页隔离**，启动时强制清理旧 `localStorage` token（全员重新登录），并新增 `test_auth_isolation.py`（10 例）回归。
-> - **次级泄露**：备赛计划 `plan_${cid}`、灵感收藏 `prep_favorites_v1` 未按用户分区，A/B 同浏览器会串数据；已改为 `plan_v2_${uid}_${cid}` / `prep_favorites_v1_${uid}`，启动时清理旧 key。
-> - **缓存防线**：后端 `/api/*` 统一加 `Cache-Control: no-store, private`，`decode_access_token` 强制要求 `exp` / `sub` claim，防止中间缓存或畸形 token 造成身份复用。
-> - **搜索框**：`.header-search-box { width: 240px; min-width: 240px; flex-shrink: 0; }`，不再随分辨率拉伸。
-> - 前端 `dist` 已重新构建（`index-D73TAMiS.js`）；云端需上传新 `dist` 并重启后端。
-
-### Bug 1｜P0：账号串号（越权访问）
-
-| 项 | 内容 |
-|---|---|
-| 严重级别 | **P0（安全 / 上线阻断）** |
-| 状态 | **已定位并修复（2026-11-08 22:30）** |
-| 反馈时间 | 2026-11-08 21:50（Asia/Shanghai） |
-| 现象 | **不同设备、不同 IP**：用户 A 登录后，用户 B 过一段时间访问站点，未登录却直接进入 A 的账号 |
-| 影响 | 认证与会话隔离失效，可能泄露 A 的用户资料、备赛计划、收藏、AI 配额；属于越权访问与隐私事故 |
-| 关键线索 | 跨设备、跨 IP，基本排除“同一浏览器 `localStorage` 串用”作为唯一原因；需重点排查服务端会话/JWT、全局用户态、反向代理或 CDN 缓存了鉴权响应 |
-
-**建议排查顺序（先取证，再改动）：**
-
-1. **固定证据**：记录 A/B 的设备、时间、访问 URL、完整响应头；在 B 的浏览器 DevTools 确认是否带上了 A 的 `Authorization` / Cookie；同时保留 Nginx access log 与后端日志，先备份再清理。
-2. **后端鉴权链路**：检查 `security.py::get_current_user`、`routers/auth.py` 的登录与 token 签发；排查是否存在模块级全局 `current_user`、单例缓存、默认用户兜底、多 worker 共享错误状态；确认 JWT `sub` / 用户 ID 与校验逻辑一致。
-3. **反向代理 / CDN 缓存**（跨设备症状高度可疑）：检查 Nginx/CDN 是否缓存 `/api/*` 或 SPA HTML；鉴权接口是否缺少 `Cache-Control: private, no-store`；是否存在 `proxy_cache`、运营商/浏览器中间缓存。
-4. **前端鉴权状态**：检查 `frontend/src/services/api.js` 的 token 注入、401 清理、登录态广播；排查是否存在默认 token、演示账号或跨标签页同步逻辑。跨设备问题仍需服务端给出解释。
-5. **临时止血（评估后再做）**：轮换 `JWT_SECRET_KEY` 使全部已签发 token 失效、强制重新登录；清理 Nginx/CDN 缓存；对近期访问日志做越权审计。操作前先备份数据库与配置，避免破坏取证现场。
-6. **验收标准**：设备 1 登录 A、设备 2 登录 B，B 反复刷新/重新访问始终是 B；不带 token 的请求返回 `401`；A 的 token 不能在 B 的环境中被复用；清缓存后鉴权响应不再被共享缓存；补充双账号并发/串行回归用例。
-
-### Bug 2｜P1：顶部搜索框在不同分辨率下拉长变形
-
-| 项 | 内容 |
-|---|---|
-| 严重级别 | P1（UI / 布局） |
-| 状态 | **已修复（2026-11-08 22:30）：固定 240px + flex-shrink: 0** |
-| 现象 | 顶部搜索框在**不同分辨率/窗口宽度**下被拉长、挤压或高度变形，破坏 Header 布局 |
-| 影响 | 导航与搜索可用性下降，移动端/窄屏观感明显；不影响数据链路 |
-
-**建议排查起点：**
-
-- `frontend/src/components/Header.vue` 的搜索框容器与 flex 布局；
-- `frontend/src/assets/main.css` 中 Header / 搜索框相关断点与宽度规则；
-- 重点检查 flex 子项是否缺少 `min-width: 0`、是否使用固定 `width` / `flex: 1` 导致过度拉伸、是否有 `max-width` 与响应式断点缺失。
-
-**验收标准**：在 360 / 768 / 1024 / 1440 px 宽度下，搜索框高度稳定、无溢出、无明显拉伸；桌面与移动端 Header 对齐一致；切换主题与暗色模式不回归。
-
----
-
-## 一、架构说明
-
-### 1. 高校新闻获奖采集器
-
-**文件：`crawler_news.py`**（由 `crawler_demo.py` 重命名而来，旧文件名已不存在）
-
-核心作用：
-
-- 单页新闻抓取：`requests` + `BeautifulSoup` 提取正文，调用 `llm.py` 抽取获奖信息；
-- 列表页批量：解析列表页详情链接、自动识别“下一页”、支持显式分页规则；
-- 逐条写入 `awards` 表，`source_url` 保存原文链接；
-- 去重：入库前按 `source_url` 查重，入库时由 `content_hash` 唯一索引兜底；
-- 非获奖新闻过滤：列表标题粗筛 + 正文关键词粗筛 + 大模型 `is_award_news` 判定；
-- 孤立记录处理：赛事匹配不到 `competitions` 时自动创建占位赛事，保证 `competition_id` 不为 NULL；
-- 生产库红线：真实写库必须传 `--db-path`，生产库默认拒绝，需 `--allow-production` 手动解除。
-
-关键函数：
-
-| 函数 | 作用 |
-|---|---|
-| `fetch_detail_links(list_url)` | 传入列表页 URL，返回详情页 URL 列表 |
-| `extract_detail_links(html, list_url)` | 纯解析版，传入 HTML + 列表页 URL |
-| `find_next_page_url(html, page_url)` | 自动判断下一页 |
-| `build_page_urls(list_url, pages, page_url)` | 生成显式翻页 URL |
-| `_run_batch(args)` | 批量采集主控，逐条异常隔离 |
-| `ensure_competition()` | 未知赛事自动建占位 |
-| `save_award()` | 调 `db.create_award` 写库 |
-
-### 2. 赛事基础数据采集器
-
-**文件：`crawler_competitions.py`**
-
-核心作用：
-
-- 抓取单个赛事详情/通知页；
-- 提取 `<head>` 的 `og:image`（没有则回退正文首图，只存 URL，不下载图片）；
-- 调用 `llm.py` 抽取赛事字段；
-- 按名称匹配 `competitions`：命中则 UPDATE，未命中则 INSERT；
-- 更新/插入后回读目标库并打印关键字段；
-- 支持 `--competition-id` 强制更新占位赛事，支持 `--force-insert` 测插入路径；
-- 生产库红线同 `crawler_news.py`。
-
-### 3. 共享依赖
-
-| 文件 | 作用 |
-|---|---|
-| `llm.py` | 大模型 JSON 抽取封装（`chat_json` / `safe_json` / 重试） |
-| `db.py` | SQLite 数据访问层、建表/迁移、awards/competitions CRUD |
-| `config.py` | 读取 `.env`（DeepSeek、JWT、CORS 等） |
-| `verify_crawl.py` | 读回并校验 awards 写入结果，拒绝查询生产库 |
-
-### 4. 生产库数据工具（本轮新增）
-
-| 文件 | 作用 |
-|---|---|
-| `merge_test_competitions.py` | 把测试库里生产库没有的赛事/获奖并入生产库（name + content_hash 去重，写前备份） |
-| `batch_update_competitions.py` | 遍历缺失字段的赛事 -> 抓入口页 -> 大模型抽取 -> **只填空**；限流/重试/失败跳过/封面质量闸门 |
-| `migrate_production.py` | 生产库体检 + 备份 + `db.init_db()` 补列（默认只读体检，`--apply` 才动） |
-| `url-map.json` | 覆盖采集入口页的映射 `{"赛事id": "通知页URL"}`，用于官网首页抓不到内容时改指通知页 |
-
-**`batch_update_competitions.py` 的关键行为（改它之前务必先读这段）：**
-
-- **只填空**：`FILLABLE = (image_url, contest_start_month, contest_end_month, official_url, intro, summary, category, level_label)`，只有库里当前为空才写；`name` 默认不动，`reg_*_month` 也不动（人工/种子数据优先）。
-- **采集溯源**：无论是否命中，都会写 `discover_source` + `last_checked_at`，但这两个字段不算「有新信息」，不会让一条无产出记录被计为 updated。
-- **封面质量闸门** `check_image()`：HTTP 200 + `Content-Type: image/*` + 从文件头解析宽高（PNG/JPEG/GIF/WebP，无三方依赖）→ 宽 ≥300、高 ≥150、宽高比 ≤2.6、反向 ≤2.2；不合格**宁可不写**。逐张试候选（og:image 优先，正文图其次，最多 4 张）。
-- **入口**：优先 `official_url`，可用 `--url-map` 覆盖；`--ids` 指定时忽略 `--filter`。
-
-### 5. 赛氪数据源预检（2026-11-08 新增，只读）
-
-**文件：`pipeline_update.py` + `saikr_map.json`**
-
-- 赛氪是 Vue SPA，HTML 只有 4.6 KB 空壳，必须走内部 JSON API：
-  - 列表：`GET https://apiv4buffer.saikr.com/api/pc/contest/lists?page=&limit=&sort=&class_id=&level=`
-  - 详情：`GET https://apiv4buffer.saikr.com/api/pc/contest/info?contest_id=<id>`
-  - 匿名可调，无 Token/签名/强制 Cookie；`acw_tc` 是阿里云 WAF 被动标记。
-- `pipeline_update.py` 链路：赛氪详情 → 封面过 `check_image()` + 报名月份 → 通知页/官网抓正文 → 大模型抽比赛月份 → 逐条汇总（**只读，不写库**）。
-- 护栏：往年届次（报名结束 >400 天）整条跳过；正文 <300 字不调模型；赛氪 3~5 秒、通知页 5~10 秒限速。
-- `saikr_map.json`：32 条赛事 ↔ 赛氪 contest_id 映射（22 精确 / 7 省级或分赛区挂全国主赛 / 2 无对应 / 9 条标了 needs_review）。
-- **`--apply` 已实现（2026-11-08）**：生产库必须 `--allow-production`；写前用 sqlite backup API 自动备份并校验；`build_ops()` 只补 NULL（逐字段），`apply_ops()` 的 UPDATE 再带一次 `IS NULL` 闸门；封面写前重新 `check_image()` 复检；`--from-report` 可复用预检报告，避免重复联网/烧模型额度。
-
----
-
-## 二、文件清单与改动点
-
-### 新增文件
-
-| 文件 | 改动点 |
-|---|---|
-| `crawler_news.py` | 原 `crawler_demo.py` 重命名；新增 `--allow-production`；真实写库必须先指定测试库；批量/单页能力保留 |
-| `crawler_competitions.py` | 新增赛事采集器：正文/og:image 提取、AI 抽取、competitions upsert、回读验证 |
-| `verify_crawl.py` | 新增 awards 读回校验脚本：按 `source_url/award_grade/competition_id/year` 做断言，拒绝生产库 |
-| `test_crawler_units.py` | 新增单测（pytest）：覆盖 `extract_image_url`（og:image/首图回退/logo 过滤）与 `_normalize_level`，19 例全绿，不连网不写库 |
-| `migrate_production.py` | 新增生产迁移脚本：默认只读体检，`--apply` 才先备份 `competitions.db.bak`、校验备份、再 `db.init_db()` 补列；未在真实生产库执行过 |
-| `batch_update_competitions.py` | 新增批量补全脚本：遍历 `image_url` 为空的赛事 -> 抓官网 -> 大模型抽取 -> **只填空**；5~10 秒随机延迟、单条重试、失败跳过、写前备份、封面图质量闸门（可达性 + 尺寸/宽高比，挡 banner 与死链）；支持 `--ids / --limit / --filter / --url-map` |
-| `merge_test_competitions.py` | 新增合并脚本：把 `test_crawl.db` 里生产库没有的赛事/获奖按 name + content_hash 去重后并入生产库，写前自动备份 |
-| `url-map.json` | 新增：把 5 条老赛事的入口页改指到高校通知页（id=1/2/10/12/13），供 `--url-map` 使用 |
-| `pipeline_update.py` | 新增（2026-11-08）：赛氪 + 通知页统一清洗脚本；默认只读预检，`--apply` 才写库；`--from-report` 复用预检报告；`--ids/--limit/--skip-saikr/--skip-notice/--saikr-delay/--notice-delay` |
-| `saikr_map.json` | 新增（2026-11-08）：32 条赛事 ↔ 赛氪 `contest_id` 映射草案（含 `match_type / needs_review / note`），写库前需人工过一遍 9 条待裁决 |
-| `discover_common.py` | 新增（2026-11-08）：候选表发现公共层——目标库保护/生产库备份、`ensure_candidates_table`、入库循环、去重统计、类别猜测 |
-| `discover_university.py` | 新增（2026-11-08）：高校 84 项目录页发现器；支持文本行/表格、序号变体、无 scheme 官网、过滤非比赛词，默认 dry-run |
-| `discover_saikr.py` | 新增（2026-11-08）：赛氪列表前 2 页（≤20 条/天）增量发现；3~5 秒延迟、往年届次跳过、每日守卫 |
-| `review_candidates.py` | 新增（2026-11-08）：候选审核 CLI；`--list/--approve/--reject`，approve 重新过封面闸门并在同一事务写主表 |
-| `ai_content.py` | 新增（2026-11-08）：AI 生成核心——v2 攻略 Prompt（注入月份 + 获奖作品，禁止编造）、`generate_guide_for()`、`generate_inspiration()`、输入指纹 `guide_input_hash()` |
-| `ai_jobs_runner.py` | 新增（2026-11-08）：任务编排层——单线程池、预算/队列/冷却、`run_guide_job` / `run_inspiration_job`、按需 `request_guide()` |
-| `daily_ai_worker.py` | 新增（2026-11-08）：每日慢刷（默认 dry-run）；选片、预算熔断、3 天冷却、自动备份、JSON 报告 |
-| `cleanup_orphan_ai.py` | 新增（2026-11-08）：孤儿 insights/ideas 清理（默认 dry-run，写生产需 `--allow-production` + 自动备份） |
-| `test_ai_guide.py` | 新增（2026-11-08）：16 例单测/接口测试（ai_jobs、幂等、409/429、列表瘦身、Prompt、孤儿清理），全部 mock 大模型 |
-| `AI_AUTOMATION_PLAN.md` | 新增（2026-11-08）：AI 生成与自动化方案评审稿（调研 + 设计 + crontab 链） |
-| `backup_db.py` | 新增（2026-11-08）：SQLite 在线备份（backup API，WAL 安全，单文件 DELETE 模式，integrity + 行数校验，按天/份数保留）；供 crontab 02:30 调用 |
-| `test_crawler_boundaries.py` | 新增（2026-11-08）：上云边界测试 20 例——Timeout/ConnectionError 不中断批量、残缺 JSON `safe_json` 兜底、空网页 `extract_page` 抛可预期 `CrawlError` 且批量继续 |
-| `test_enrich_saikr.py` | 新增（2026-11-08）：详情补充器 11 例——AI 输出规范化/50 字上限、40 字照抄拦截、一次调用提纯、backfill/daily 选片、只补空字段、approve 自动补全 |
-| `CLOUD_DEPLOYMENT_GUIDE.md` | 新增（2026-11-08）：《云端部署手册》——阿里云 Ubuntu 依赖、代码拉取、`.env`、DB 快照/WAL、systemd、Nginx、crontab 链、验收与回滚 |
-| `CRAWLER_HANDOVER.md` | 本交接文档 |
-
-### 修改文件
-
-| 文件 | 改动点 |
-|---|---|
-| `crawler_competitions.py` | ① `SYSTEM_PROMPT` 增加「比赛时间 ≠ 报名/提交截止」红线，无依据必须 null（2026-11-07，影响单页与批量两个入口）；② `SCHEMA_HINT` 同步加注；③ `fetch_competition_page()` 额外把原始 HTML 挂到 `page["html"]`，供批量脚本在封面不合格时重挑候选图而不必二次抓取 |
-| `db.py` | `_AWARD_WRITABLE_FIELDS` 补 `competition_raw`/`award_grade`；`_AWARD_EMBEDDING_FIELDS` 同步；`_MIGRATION_COLUMNS` 新增 `image_url / contest_start_month / contest_end_month / discover_source / last_checked_at / is_active`；`update_competition` 白名单补这些字段；`list_preparations` 的 JOIN 补出 `image_url / contest_*_month` 并对缺列老库降级为 NULL；**2026-11-08 新增**：`CANDIDATES_DDL`、`init_db(db_path=None)` 建候选表、`normalize_competition_name / find_duplicate_candidate / add_candidate / query_candidates / candidate_stats / update_candidate_status / ensure_candidates_table / promote_candidate`；`find_duplicate_candidate` 支持 `include_candidates=False`（审核时只查主表） |
-| `schema_v2.sql` | `competitions` 建表新增图片、比赛时间、采集溯源、上下架字段（新库直接带列） |
-| `models/schemas.py` | `Competition` 新增 `image`、`contest_start_month`、`contest_end_month` |
-| `routers/competitions.py` | `_row_to_competition` 把 DB 的 `image_url` 映射为 API 的 `image`，并输出比赛月份 |
-| `requirements.txt` | 新增爬虫依赖 `requests==2.34.2`、`beautifulsoup4==4.13.4`、`lxml==5.4.0`；末尾新增「开发/测试专用」段：`pytest==9.2.0`、`ruff==0.17.4`、`pyflakes==4.1.0`（部署镜像可不装） |
-| `db.py`（2026-11-08 13:00 追加） | 新增 `AI_JOBS_DDL` + `ensure_ai_jobs_table`；`_MIGRATION_COLUMNS` 补 `guide_generated_at / guide_model / guide_prompt_ver / guide_input_hash`；`save_generated_guide`；`claim_ai_job`（`BEGIN IMMEDIATE` 原子抢占）/`start/finish/fail/skip`/`get_guide_state`/`select_guide_candidates`/`select_inspiration_candidates`/`count_orphan_ai_content`/`delete_orphan_ai_content`/`guide_coverage` |
-| `routers/competitions.py`（2026-11-08 13:00 追加） | 新增 `POST/GET /api/competitions/{id}/generate_guide`（登录、202/409/429、幂等）；详情返回 `guide_status/guide_generated_at`；列表不再返回长文 |
-| `models/schemas.py`（2026-11-08 13:00 追加） | `Competition` 移除 `full_process_guide`；`CompetitionDetail` 新增 `full_process_guide / guide_status / guide_generated_at` |
-| `config.py`（2026-11-08 13:00 追加） | 新增 `AI_GUIDE_DAILY_LIMIT=8` / `AI_GUIDE_QUEUE_MAX=5` / `AI_GUIDE_FAIL_COOLDOWN_MIN=30` |
-| `generate_guides.py`（2026-11-08 13:00 重写） | 改为调用 `ai_content`（v2 Prompt）；新增 `--db-path / --allow-production / --max-tokens`；`--dry-run` 不再执行 `init_db()`；写生产前自动备份 |
-| `migrate_production.py`（2026-11-08 13:00 追加） | `TARGET_COLUMNS` 补 4 个 `guide_*`；体检/复检新增 `ai_jobs` 表检查 |
-| `frontend/src/services/api.js` | 新增 `requestGuide / getGuideStatus`；错误对象补 `status`，供按钮区分 401/409/429 |
-| `frontend/src/views/CompetitionDetailView.vue` | 攻略为空时显示「✨ 生成 AI 攻略」按钮 + 登录引导 + 轮询（3s→10s）+ 生成时间展示 |
-
-### 前端封面兜底（2026-11-08 完成）
-
-| 文件 | 改动点 |
-|---|---|
-| `frontend/src/utils/coverFallback.js` | 新增：赛事名哈希 → 稳定色相（0-359）+ 首字提取（跳过引号/括号） |
-| `frontend/src/assets/main.css` | 新增 `.cover-fallback` / `.cover-fallback__glyph` / `.cover-fallback--hero`，含 `.dark` 暗色适配 |
-| `frontend/src/components/CompetitionCard.vue` | 无图或 `@error` 加载失败 → 渐变首字；容器仍 `aspect-[4/3]`，**布局尺寸不变**；换图自动重试 |
-| `frontend/src/views/CompetitionDetailView.vue` | 详情页 `h-64` 大图位同样兜底，替换原灰色虚线空盒 |
-| `frontend/dist` | 已重新 `npm.cmd run build` 通过（2026-11-08 复验 8.37s / 115 modules）；PowerShell 里必须用 `npm.cmd`，`npm.ps1` 会被执行策略拦截 |
-
-验证截图：`backend/workspace/cover-light.png`、`cover-dark.png`、`cover-detail.png`。
-
-### 详情页真实数据修复（2026-11-08 18:30，前端；历史记录 + 19:10 修正）
-
-**结论：后端无 bug，前端有“硬编码套话”bug。**
-
-| 核查项 | 结论 |
-|---|---|
-| `GET http://112.126.90.252/api/competitions/10` | 200，返回 `official_url=http://jsjds.blcu.edu.cn/`、`reg 4-5`、`contest 7-8`、`full_process_guide`（5082 字）、`guide_status=ready` |
-| `GET .../api/competitions/1` | 200，官网 `https://cy.ncss.cn/`、`reg 5-8`、`contest 3-7`、攻略完整 |
-| 后端映射 | `routers/competitions.py::_row_to_detail` 正常，`models/schemas.py::CompetitionDetail` 字段齐全 |
-| 前端字段名 | 与后端一致：`reg_*_month`、`contest_*_month`、`official_url`、`full_process_guide` 均读对 |
-| 真正原因 | `CompetitionDetailView.vue` 的 4 段「竞赛详情」+ 3 张卡片是**写死的中文文案且无条件 v-for 渲染**；真实官网/月份/攻略在它们下面，线上旧缓存时更像“只有套话” |
-
-**改动（`frontend/src/views/CompetitionDetailView.vue`）：**
-
-1. 删除 `sections` / `featureCards` / `cardTones` 三组静态数据及对应模板（不再有任何编造的“时间安排、参赛对象、内容范围、考试安排、作品提交要求”）。
-2. 新增数据驱动的「赛事档案」：官网（可点击 + 域名）、赛事级别、赛事类别、报名时间、比赛时间、赛事简介（`intro` + `summary` 去重）、涉及技术栈。字段为空时该块/该行自动隐藏（`hasArchive`）。
-3. 攻略渲染保持原逻辑（`full_process_guide` → marked + DOMPurify），为空时仍显示「✨ 生成 AI 攻略」按钮；不再被静态文案遮挡。
-4. 时间拼接、`resolveImage`、外链安全校验、轮询逻辑均未改动。
-
-**验证（headless Chrome + CDP，本地 `vite build` 产物 + 线上 API）：**
-
-- `/competition/10`：`hasGuide=true`、`hasArchive=true`、`hasBoilerplate=false`、console 0 error、`docScrollWidth==innerWidth`；
-- `/competition/1`：官网 `https://cy.ncss.cn/`、攻略正常；
-- `/competition/11`（无攻略）：只显示真实档案 + 诚实的空攻略状态，不再出现假文案。
-- 截图：`backend/workspace/detail10_after.png`、`detail10_mobile_after.png`；对比图 `detail10_before.png`。
-
-> **2026-11-08 19:10 补充（云端旧版根因）**：18:30 这次上传到 `/opt/kuao/frontend/dist` 的构建**没有生效**。线上实际返回 `index-DbqXR3xu.js` + `CompetitionDetailView-PUdWNMzm.js`（chunk 里仍含“将在官方日程公布后同步更新”等旧套话），`Last-Modified=2026-11-08 14:07:17 CST`；本机 18:46 / 19:06 的 `index-C8mrSLYM.js` / `index-BLl1Vlbq.js` 请求回来是 `text/html`（SPA fallback），说明文件没进 Web 根。`workspace/kuao-cutover.sh` 第 91–94 行与 12.5 证明 Nginx `root` 是 **`/var/www/html`**；线上响应没有 `Cache-Control` / `Expires`，只有 `ETag` / `Last-Modified`，不是强缓存。**正确目录是 `/var/www/html`，不是 `/opt/kuao/frontend/dist`，也不是 `/root/KuAo/frontend/dist`。**
-
-**部署（只改前端，后端不用重启；2026-11-08 19:10 修正）：**
-
-```powershell
-cd D:\agent-lab\KuAo-Platform\frontend
-npm.cmd run build
-# 先确认本次构建哈希（应与服务器上解压后的 index.html 一致）
-Select-String -Path dist\index.html -Pattern 'assets/index-'
-tar -czf dist.tar.gz -C dist .
-scp .\dist.tar.gz root@112.126.90.252:/tmp/dist.tar.gz
-```
-
-```bash
-ssh root@112.126.90.252
-set -euo pipefail
-WEB_ROOT=/var/www/html                 # 以 nginx -T 里的 root 为准
-TS=$(date +%Y%m%d-%H%M%S)
-mkdir -p /root/kuao-backups
-tar -czf "/root/kuao-backups/frontend-$TS.tar.gz" -C "$WEB_ROOT" .
-mv "$WEB_ROOT" "/var/www/html.bak-$TS"
-mkdir -p "$WEB_ROOT"
-tar -xzf /tmp/dist.tar.gz -C "$WEB_ROOT"
-chmod -R a+rX "$WEB_ROOT"
-nginx -t
-systemctl reload nginx
-# 本机自检：输出应与上面本机 dist/index.html 的哈希一致
-grep -o 'assets/index-[^"]*' "$WEB_ROOT/index.html"
-curl -s http://127.0.0.1/ | grep -o 'assets/index-[^"]*'
-```
-
-浏览器验收务必 **Ctrl + F5 / Cmd + Shift + R 强刷**；若仍是旧页面，先 `curl -s http://112.126.90.252/ | grep -o 'assets/index-[^"]*'` 确认引用的是新哈希。**如果 `nginx -T` 显示的 root 不是 `/var/www/html`，把 `WEB_ROOT` 改成实际路径即可；不要再用 `/opt/kuao/frontend/dist`。**
-
-### 测试库与产物（非源码）
-
-| 路径 | 说明 |
-|---|---|
-| `test_crawl.db` | 测试库；`*.db` 已被 `.gitignore` 忽略 |
-| `workspace/crawl_demo_result.json` | 默认新闻页真实抽取记录 |
-| `workspace/crawl_demo_math.json` | 数学建模页真实抽取记录 |
-| `workspace/batch_report.json` | 列表批量测试报告 |
-| `workspace/competition_insert_edu_robot.json` | 中国教育机器人大赛插入记录 |
-| `workspace/competition_update_robot.json` | 中国机器人大赛占位更新记录 |
-| `workspace/batch_competitions_*.json` | 批量补全每次运行的完整报告（含大模型原始 JSON、封面候选判定、写入前后）；按时间戳命名 |
-| `workspace/pipeline_report.json` | 2026-11-08 赛氪 + 通知页 32 条预检原始记录（测试库基线） |
-| `workspace/pipeline_report_prod.json` | 同一批结果按生产库只读基线重算的预期写入结果 |
-| `workspace/pipeline_report.md` | 可读版预检报告（总览 + 32 条明细 + 16 条报名冲突） |
-| `workspace/pipeline_apply_20261108-120553.json` | 写生产库完整记录：10 个字段的将写/跳过清单、备份路径、写入前后覆盖、SHA-256 |
-| `workspace/saikr_catalog.json` | 赛氪 5172 条目录缓存（列表 API 原始字段，3.9 MB；新赛事发现可直接复用，勿重复拉取） |
-| `workspace/cover-light.png` / `cover-dark.png` / `cover-detail.png` | 前端封面兜底验证截图 |
-| `url-map.json` | 赛事 id -> 通知页 URL 的覆盖映射（当前 5 条） |
-| `competitions.db.bak-*` | 每次写生产库前的自动备份（见下方快照） |
-
-### 当前快照（2026-11-08 13:15，AI 链路落地 + 生产库迁移后）
-
-| 库 | 记录数 | 说明 |
-|---|---|---|
-| `competitions.db`（生产） | competitions=**33**，awards=**87**，candidates=**82**，insights=**3**，ideas=**4**，ai_jobs=**0** | 已迁移 `ai_jobs` + 4 个 `guide_*` 列；id=36 由赛氪候选 82 审核通过（`category='待确认'`、无官网、`sort_order=9999`）；候选 **pending 80 / approved 1 / rejected 1**；**有攻略 7 条**；孤儿数据已清零；`integrity_check=ok`；SHA-256 `3af3af9c2d8fb4f278bff012f96aa4bd9bd878697443d910359f015066f54d73` |
-| `test_crawl.db`（测试） | competitions=**33**，awards=**88**，candidates=**82**，ai_jobs=**2** | 已迁移新表/新列；**有攻略 9 条**（本轮真机生成 id=21、12）；两条 ai_jobs 均 `done`；SHA-256 `b001887393e2103c2ad22e584de21970528de99063d33e7fc7754aaa6721b0b9` |
-| `competition_candidates` | 生产 **82** / 测试 **82** | 两边均零重复（`norm_name`/`source_key` 双查）；生产 `approved 1 / pending 80 / rejected 1` |
-
-生产库覆盖率：**有图 6/33｜有比赛月份 8/33｜报名月份完整 31/33｜攻略 7/33**。
-
-当前**有比赛月份**的 8 条（生产库，格式 `id: 起始-结束`）：
-
-```
-1: 3-7   （中国国际大学生创新大赛，来源：长沙理工校赛通知）
-2: 9-     （挑战杯，来源：华中师大院赛通知“暂定9月中旬”）
-9: 6-11  （学创杯，来源：官网/通知页，模型置信度仅 0.45，待复核）
-10: 7-8  （中国大学生计算机设计大赛，来源：官网首页推断，置信度较低）
-12: 4-4  （蓝桥杯，来源：北科大通知“4月11/12/25日省赛”）
-23: 7-8  （计算机设计大赛省级赛，来源：通知页）
-34: 8-8  （中国机器人大赛，来源：重庆交大新闻页）
-35: 11-11（中国教育机器人大赛，来源：搜狐新闻页）
-```
-
-生产库 2026-11-08 12:05 写入（备份 `competitions.db.bak-20261108-120553`，32 行、integrity ok）：
-
-- 封面 5 条：id=6（1920×800）、8（670×346）、18（1680×715）、22（995×416）、27（995×416，与 22 同图）；
-- 比赛时间 2 条：id=9（6-11）、id=23（7-8）；
-- 报名：id=34 仅补 `reg_start_month=3`；`reg_end_month=7` 原值保留 → **3-7 为混合来源，待人工复核**；
-- 16 条赛氪报名冲突**全部保留库内值**；写入后 diff 校验：仅上述 10 个字段变化，awards 仍 87 条。
-
-测试库 2026-11-08 的赛氪试跑写入（**仅测试库**，备份 `test_crawl.db.bak-20261108-000326`）：
-
-- 报名月份：id=3（4-6）、6（4-9）、8（4-6）、10（4-4）、12（10-4，cross=1）、22（4-6）；
-- 封面：id=6（1920×800）、8（670×346）、22（995×416）；id=10/12/3 因 banner/无图未写；
-- `contest_*` 全部未动。
-
-备份链（写库前自动生成，**永不覆盖**；按时间顺序）：
-
-| 备份 | 对应节点 |
-|---|---|
-| `competitions.db.bak-20261106-115044` | 最原始快照（未迁移列，`d007a8f7…422fcb`） |
-| `competitions.db.bak-20261107-232917` | 合并 id=34/35 **之前**（30 条赛事 / 84 获奖） |
-| `competitions.db.bak-20261107-233310` | 第一轮首页抓取试水**之前**（该轮坏数据已整体回滚） |
-| `competitions.db.bak-20261107-233523` | 第二轮（带闸门）试水**之前** |
-| `competitions.db.bak-20261107-233909` | 清空 id=35 死链封面**之前** |
-| `competitions.db.bak-20261107-234010` | 5 条通知页批量补全**之前** |
-| `competitions.db.bak-20261107-234143` | 回滚 id=13 误读月份**之前** |
-| `competitions.db.bak-20261108-120553` | **本轮写赛氪补全之前**（32 赛事 / 87 获奖，SHA `45ccfea1…`） |
-| `competitions.db.bak-20261108-123438` | **候选表建表 + 84 项目录导入之前**（32 赛事 / 87 获奖，SHA `cdab55f5…`） |
-| `competitions.db.bak-20261108-123446` | **赛氪 20 条候选导入之前**（32 赛事 / 87 获奖 / 62 候选） |
-| `competitions.db.bak` | **AI 迁移之前**（33 赛事 / 87 获奖，SHA `db77ac…`；`migrate_production.py --apply` 生成） |
-| `competitions.db.bak-20261108-130926` | **清理孤儿 insights/ideas 之前**（insights 13 / ideas 16） |
-
-注意：
-- 生产库**已经**具备 `image_url / contest_start_month / contest_end_month` 列（2026-11-07 23:23 你启动后端时 `startup_init_db()` 已自动补列并回填 `summary`）。
-- 33 条里仍有 **26 条无攻略**、**26 条无封面**、**24 条无比赛月份**——这是待办，不是 bug；无图走前端兜底，无攻略可点按钮生成。
-- **2026-11-08 状态**：赛氪补全已写入生产库，写库策略为「image_url 只补空、reg_* 逐字段只补 NULL、contest_* 只填空」，详见第四节 13-15 条。
-- **AI 迁移（13:09）后**：新增 `ai_jobs` 表 + 4 个 `guide_*` 列；孤儿数据清零；生产 SHA `3af3af9c…`。
-- 恢复某个节点：先删 `competitions.db-wal` / `-shm`，再 `Copy-Item <备份> .\competitions.db -Force`。
-
----
-
-## 三、运行命令（backend 目录）
-
-### 0. 从生产库复制测试库
-
-```powershell
-cd D:\agent-lab\KuAo-Platform\backend
-
-# 没有后端服务在写库时可直接复制
-Copy-Item .\competitions.db .\test_crawl.db -Force
-```
-
-若后端正在运行（WAL 可能未 checkpoint），建议用 SQLite backup API 生成测试库，避免拿到不一致快照。
-
-### 1. 新闻单页：dry-run（不写库）
-
-```powershell
-.\venv\Scripts\python.exe crawler_news.py `
-  --db-path .\test_crawl.db `
-  --dry-run `
-  --show-raw `
-  --url "https://cise.hunnu.edu.cn/info/1165/7066.htm"
-```
-
-### 2. 新闻单页：真实写测试库
-
-```powershell
-.\venv\Scripts\python.exe crawler_news.py `
-  --db-path .\test_crawl.db `
-  --url "https://cise.hunnu.edu.cn/info/1165/7066.htm"
-```
-
-### 3. 新闻列表：批量抓取 + 自动翻页
-
-```powershell
-.\venv\Scripts\python.exe crawler_news.py `
-  --list-url "https://cise.hunnu.edu.cn/news_more_list.jsp?urltype=tree.TreeTempUrl&wbtreeid=1165&a1070851t=43&a1070851c=10&a1070851p=12" `
-  --db-path .\test_crawl.db `
-  --max-pages 4 `
-  --max-items 10 `
-  --report .\workspace\batch_report.json
-```
-
-显式翻页模板：
-
-```powershell
-.\venv\Scripts\python.exe crawler_news.py `
-  --list-url "https://x.edu/list" `
-  --page-url "https://x.edu/list?p={page}" `
-  --pages 1-3 `
-  --db-path .\test_crawl.db `
-  --max-items 8
-```
-
-### 4. 赛事采集：插入新赛事
-
-```powershell
-.\venv\Scripts\python.exe crawler_competitions.py `
-  --url "https://www.sohu.com/a/1091484812_122595727" `
-  --db-path .\test_crawl.db `
-  --save-json .\workspace\competition_insert_edu_robot.json
-```
-
-### 5. 赛事采集：更新指定占位赛事
-
-```powershell
-.\venv\Scripts\python.exe crawler_competitions.py `
-  --url "http://smve.cqjtu.edu.cn/info/1037/6028.htm" `
-  --db-path .\test_crawl.db `
-  --competition-id 34 `
-  --save-json .\workspace\competition_update_robot.json
-```
-
-### 6. 赛事采集：只抽取不写库
-
-```powershell
-.\venv\Scripts\python.exe crawler_competitions.py `
-  --url "https://www.sohu.com/a/1091484812_122595727" `
-  --db-path .\test_crawl.db `
-  --dry-run `
-  --show-raw
-```
-
-### 7. awards 读回校验
-
-```powershell
-.\venv\Scripts\python.exe verify_crawl.py `
-  --db-path .\test_crawl.db `
-  --award-id 86 87 88 89
-```
-
-### 8. 语法/编译检查（不连网、不写库）
-
-```powershell
-.\venv\Scripts\python.exe -m py_compile crawler_news.py crawler_competitions.py db.py models\schemas.py routers\competitions.py verify_crawl.py
-.\venv\Scripts\python.exe -m pytest test_crawler_units.py -q     # 19 passed
-.\venv\Scripts\python.exe -m pyflakes crawler_news.py crawler_competitions.py db.py
-```
-
-### 9. 批量补全：演练（不写库，但会花大模型额度）
-
-```powershell
-# 单条看效果
-.\venv\Scripts\python.exe batch_update_competitions.py --ids 10 --allow-production
-
-# 5 条通知页（用 url-map 覆盖入口）
-.\venv\Scripts\python.exe batch_update_competitions.py `
-  --ids 1,2,10,12,13 --url-map .\url-map.json --allow-production --show-raw
-```
-
-### 10. 批量补全：真实写库（自动备份）
-
-```powershell
-# 验证 Prompt 修复后重跑这 5 条
-.\venv\Scripts\python.exe batch_update_competitions.py `
-  --ids 1,2,10,12,13 --url-map .\url-map.json --apply --allow-production
-
-# 扫尾：只跑"比赛月份为空"的赛事
-.\venv\Scripts\python.exe batch_update_competitions.py `
-  --filter months --limit 22 --apply --allow-production
-
-# 只跑封面为空的（注意：通知页几乎无图，多数会因闸门不写）
-.\venv\Scripts\python.exe batch_update_competitions.py --filter image --apply --allow-production
-```
-
-> 每次 `--apply` 都会先自动备份 `competitions.db.bak-<时间戳>`，并输出汇总 + 报告路径 `workspace/batch_competitions_*.json`。
-> 想跑单条但库里已有值（比如想覆盖 id=13 的月份），用 `--ids` 可以绕开 filter，但**仍然只填空**——想改已有值必须手工 SQL 或加 `--update-name` 之类的开关。
-
-### 11. 测试库 -> 生产库合并
-
-```powershell
-# 演练
-.\venv\Scripts\python.exe merge_test_competitions.py
-
-# 真正合并（自动备份）
-.\venv\Scripts\python.exe merge_test_competitions.py --apply
-
-# 连占位赛事一起合并（默认跳过 category='待确认'）
-.\venv\Scripts\python.exe merge_test_competitions.py --apply --include-placeholders
-```
-
-### 12. 生产库体检 / 迁移（一般用不到，后端启动会自动 init_db）
-
-```powershell
-.\venv\Scripts\python.exe migrate_production.py            # 只读体检
-.\venv\Scripts\python.exe migrate_production.py --apply    # 备份 + 补列
-```
-
-### 13. 赛氪映射 + 统一清洗（2026-11-08：默认只读，`--apply` 写库）
-
-```powershell
-# 全量 32 条预检（约 10 分钟；会花大模型额度；不写库）
-.\venv\Scripts\python.exe pipeline_update.py `
-  --db-path .\test_crawl.db `
-  --saikr-delay 3,5 --notice-delay 5,10
-
-# 只跑指定赛事
-.\venv\Scripts\python.exe pipeline_update.py --ids 3,6,8 --db-path .\test_crawl.db
-
-# 只跑赛氪、不抓通知页（快速看封面/报名）
-.\venv\Scripts\python.exe pipeline_update.py --skip-notice --db-path .\test_crawl.db
-
-# 复用已保存的预检报告（不联网、不调模型）先看写入计划
-.\venv\Scripts\python.exe pipeline_update.py `
-  --from-report .\workspace\pipeline_report_prod.json --db-path .\competitions.db
-
-# 真正写生产库（自动备份 + 生产库拦截 + 只填 NULL + 封面复检）
-.\venv\Scripts\python.exe pipeline_update.py `
-  --from-report .\workspace\pipeline_report_prod.json `
-  --db-path .\competitions.db --apply --allow-production
-```
-
-- 预检报告写到 `workspace/pipeline_report.json`；生产基线对比报告见 `workspace/pipeline_report_prod.json` 与 `workspace/pipeline_report.md`。
-- `--apply` 写库前会打印「将写 / 将跳过」清单并自动备份；写后输出覆盖率、SHA-256 与 `workspace/pipeline_apply_<时间戳>.json`。
-- 不加 `--from-report` 时 `--apply` 会重新联网+调模型；**补数量验证优先复用报告，避免重复烧额度**。
-
-### 14. 赛氪 -> 测试库小批量试跑（2026-11-08 已执行 6 条）
-
-```powershell
-# 只写 image_url / reg_start_month / reg_end_month / reg_cross_year；自动备份 test_crawl.db
-.\venv\Scripts\python.exe .\workspace\saikr_apply.py `
-  --ids 3,6,8,10,12,22 --db-path .\test_crawl.db --apply
-```
-
-> 该脚本在 `workspace/` 下，属一次性工具；策略与红线一致：往年届次跳过、封面过闸门、`contest_*` 不动。生产库不要直接用它。
-
-### 15. 新赛事发现：候选表 POC（2026-11-08，默认 dry-run）
-
-```powershell
-# ① 84 项目录（默认山东农业工程学院；不写库，只出预览）
-.\venv\Scripts\python.exe discover_university.py --db-path .\test_crawl.db
-
-# 换华南师大页面（同一套解析）
-.\venv\Scripts\python.exe discover_university.py `
-  --url "http://aol.scnu.edu.cn/a/20241021/899.html" `
-  --preview scnu_preview.json --db-path .\test_crawl.db
-
-# 真正写候选表（自动建 competition_candidates）
-.\venv\Scripts\python.exe discover_university.py --db-path .\test_crawl.db --apply
-
-# ② 赛氪前 2 页 / 20 条（不写库）
-.\venv\Scripts\python.exe discover_saikr.py --db-path .\test_crawl.db
-
-# 真正写候选表；当天第二次会被守卫拦截，需 --force 才重跑
-.\venv\Scripts\python.exe discover_saikr.py --db-path .\test_crawl.db --apply
-.\venv\Scripts\python.exe discover_saikr.py --db-path .\test_crawl.db --apply --force
-```
-
-- 预览：`workspace/roster_preview.json`、`workspace/scnu_preview.json`、`workspace/saikr_preview.json`。
-- 每日守卫状态：`workspace/saikr_daily_state.json`（仅 `--apply` 成功后写）。
-- 候选表统计（只读）：
-
-```powershell
-.\venv\Scripts\python.exe -c "import db; print(db.candidate_stats('test_crawl.db'))"
-```
-
-> 2026-11-08 实测：84 项页解析 84 条 / 过滤 2 条 / 5 条缺官网 → 82 条候选，其中 62 条新增、20 条命中主表；赛氪 20 条全部新增。两个脚本重复跑均为 0 新增。
-
-### 16. 审核 CLI：候选 -> 主表（2026-11-08）
-
-```powershell
-# 列出待审（ID / 来源 / 级别 / 名称）
-.\venv\Scripts\python.exe review_candidates.py --list --db-path .\test_crawl.db
-.\venv\Scripts\python.exe review_candidates.py --list --db-path .\competitions.db --limit 50
-
-# 通过：先查主表重名 -> 封面重新过 check_image -> 同事务写主表 + 标记 approved
-.\venv\Scripts\python.exe review_candidates.py --approve 1 --db-path .\test_crawl.db
-
-# 拒绝：只改候选状态，不动主表
-.\venv\Scripts\python.exe review_candidates.py --reject 2 --db-path .\test_crawl.db
-
-# 生产库（写前自动备份 + integrity_check；必须 --allow-production）
-.\venv\Scripts\python.exe review_candidates.py `
-  --approve 1 --db-path .\competitions.db --allow-production
-```
-
-- `--approve` 行为：候选必须 `pending`；主表已有同名/高相似 -> 拒绝；封面不合格 -> 仍入库但 `image_url=NULL`；新赛事固定 `sort_order=9999`，首页不曝光。
-- **`--approve` 成功后自动补详情（2026-11-08 20:05）**：抓赛氪详情 → AI 提纯 `participants/content_scope/exam_schedule` → 只写空字段；失败只告警，不影响已入库。离线/应急可加 `--skip-enrich`。
-- `--reject` 行为：候选必须 `pending`；只写 `status='rejected'`、`reviewed_at`，不碰主表。
-- 已在 `workspace/review_test.db` 副本实测：approve -> competitions id=36、候选标记 approved；reject -> 候选标记 rejected；重复 approve 被拒。
-- **注意（2026-11-08 13:00 核对）**：生产库实际已有 `id=36`（候选 82 approve）+ 1 条 reject，候选状态为 `80 pending / 1 approved / 1 rejected`；交接文档此前记录「主表未动」已过期。
-
-### 17. AI 攻略 / 灵感（2026-11-08 新增）
-
-```powershell
-# ① 每日慢刷演练（不写库、不调模型，只看候选与预估 token）
-.\venv\Scripts\python.exe daily_ai_worker.py --db-path .\competitions.db
-
-# ② 测试库真跑（2 篇攻略 + 1 条灵感；会消耗模型额度，约 3~30K tokens）
-.\venv\Scripts\python.exe daily_ai_worker.py `
-  --db-path .\test_crawl.db --limit 2 --idea-limit 1 --apply
-
-# ③ 生产库（cron 用；自动备份 + 生产库闸门）
-.\venv\Scripts\python.exe daily_ai_worker.py `
-  --db-path .\competitions.db --apply --allow-production `
-  --limit 4 --idea-limit 2 --budget-tokens 300000
-
-# ④ 人工单条补跑 / 重刷（兼容旧 CLI，内部已是 v2 Prompt）
-.\venv\Scripts\python.exe generate_guides.py --only-missing --db-path .\test_crawl.db
-.\venv\Scripts\python.exe generate_guides.py --id 21 --db-path .\test_crawl.db --dry-run
-.\venv\Scripts\python.exe generate_guides.py --id 21 --db-path .\competitions.db --allow-production
-```
-
-- 按需接口（必须登录，`Authorization: Bearer <token>`）：
-  - `POST /api/competitions/{id}/generate_guide` → 202 `{status: queued, job_id, poll_after_ms}`；已有攻略 200；失败冷却 409；预算/队列 429。
-  - `GET  /api/competitions/{id}/generate_guide` → `{status, job_id, attempts, guide_length, generated_at}`。
-- 详情接口返回 `full_process_guide` + `guide_status`；**列表接口不再返回长文**。
-- 数据表：`ai_jobs`（kind/status/attempts/tokens/error）+ `competitions.guide_generated_at / guide_model / guide_prompt_ver / guide_input_hash`。
-- 报告：`workspace/ai_worker_<时间戳>.json`；失败任务状态与错误在 `ai_jobs.error`（不回传前端）。
-
-### 18. 孤儿 AI 数据清理（一次性，2026-11-08 已执行）
-
-```powershell
-# 只统计（默认 dry-run）
-.\venv\Scripts\python.exe cleanup_orphan_ai.py --db-path .\competitions.db
-
-# 真正删除（自动备份；生产库必须 --allow-production）
-.\venv\Scripts\python.exe cleanup_orphan_ai.py `
-  --db-path .\competitions.db --apply --allow-production
-```
-
-- 2026-11-08 13:09 实测：生产库 `insights` 删 10 条 / `ideas` 删 12 条，剩余孤儿 0；主表 33/87 不变，备份 `competitions.db.bak-20261108-130926`。
-- 只删 `competition_id IS NULL` 或指向不存在赛事的行；有归属的一律保留（见 `test_ai_guide.py`）。
-
----
-
-## 四、开发红线
-
-> **状态变更（2026-11-07 23:27）**：用户已明确授权本阶段可以写生产库 `competitions.db`。
-> 但「可以写」不等于「随便写」——下面 1~4 条是**写库前置条件**，一条都不能省。
->
-> **2026-11-08 补充**：赛氪补全已写入生产库（12:05）；生产候选表已部署（12:34，SHA `80092384…`）；写库策略（报名只补 NULL）见 13-15 条。
-
-1. **测试仍优先 `--db-path .\test_crawl.db`**；只有批量补全/合并这类明确针对生产库的任务才写 `competitions.db`。
-2. **写生产库必须同时满足**：脚本支持 `--apply`（默认 dry-run）+ 显式 `--allow-production` + **写前自动备份成功**。三者缺一，脚本必须拒绝执行。
-3. **批量模式在 `db.init_db()` 之前就拦截生产库**；`migrate_production.py` 的只读体检模式不得改成写连接，不要绕过。
-4. **不要为了"看效果"随手启动后端**：`main.py` 启动会执行 `db.init_db()`（幂等补列 + 回填 summary/tech_stack）。生产库已迁移过，现在启动是安全的，但它会改库文件字节（SHA 变），排查问题时容易误判。
-5. **禁止对生产库手工 `DROP` / `DELETE` / 重建表**。需要改数据时先备份，再用 `UPDATE` 精确改字段。
-6. **每次写库前先看目标路径**：脚本都会打印 `[目标库] ...`，先确认这一行再往下看。
-7. `verify_crawl.py` 会拒绝查询生产库；要校验 awards 请指向测试副本。
-8. **图片只保存 URL，严禁下载图片到本地**（批量脚本会为校验封面而"读取"图片字节做尺寸判断，但不落盘、只读前 3MB）。
-9. **抓取遵守目标站点 robots.txt 与转载规定**；批量补全已有 **5~10 秒**随机延迟，**严禁调小**（早期新闻批量是 2~5 秒，赛事补全更慢）。
-10. **封面宁缺毋滥**：`check_image()` 判定不合格就不要写，绝不允许为了"有图"而放宽宽高比阈值塞 banner。
-11. **比赛时间宁缺毋滥**：Prompt 已规定「报名/材料提交截止不算比赛时间」，若发现模型仍误读，**回滚该字段**并记录，不要将错就错。
-12. 生产库当前 SHA-256 见第二节「当前快照」；每次写库后更新它。历史快照 `d007a8f779c16c7a06fb5847fc1bebec9c690847bcea762e53799da066422fcb` 仅用于识别最老版本备份。
-13. **赛氪写入策略（2026-11-08 定，重要）**：写生产库时 `reg_start_month / reg_end_month` **只填 NULL，禁止覆盖已有值**；`image_url` 只补空且必须过 `check_image()`（宽高比 ≤2.6）；`contest_*` 仍只填空。16 条报名冲突见第六节第 15 条。
-14. **赛氪抓取只做低频小批量**：`robots.txt` 明确 `Disallow: /api/`、`Disallow: /*?*`、`Crawl-delay: 10`；只对存量 32 条做测试级抓取，**不扩全量、不商用**；请求间隔不低于 3 秒。新赛事发现另立方案评审，不在本轮范围。
-15. **生产库已于 2026-11-08 12:05 写入赛氪补全**（备份 `competitions.db.bak-20261108-120553`，SHA `cdab55f5…`）。后续任何写库仍必须：自动备份 + `--allow-production` + 先打印「将写 / 将跳过」清单；`pipeline_update.py --apply` 已内置这三件套，**不要绕过脚本手写 UPDATE**。
-16. **候选表红线（2026-11-08 新增）**：发现脚本只写 `competition_candidates`（`status=pending`），**禁止自动 INSERT/UPDATE `competitions`**；审核入库前人工核对名称/官网/类别，赛氪封面必须重新过 `check_image()`。赛氪每日上限 **2 页 / 20 条**，请求间隔 **3~5 秒**（robots `Crawl-delay: 10`，扩量/商用前必须重新做合规评估）。
-17. **生产库候选表已部署（2026-11-08 12:34，13:00 复核）**：`competitions.db` 候选 **82 条（pending 80 / approved 1 / rejected 1）**；主表 **33 赛事 / 87 获奖**（id=36 由候选 82 approve 入表，`category='待确认'`、无官网，需人工补）；SHA 以第二节快照为准（`3af3af9c…`）。后续提拔/拒绝**必须走 `review_candidates.py`**，禁止手写 INSERT/UPDATE；approve 会自动备份、查主表重名、复检封面。
-18. **AI 生成只能走统一链路（2026-11-08 新增）**：攻略生成必须经 `ai_content` + `ai_jobs` 抢占；**禁止绕过 `ai_jobs` 直接写 `full_process_guide`**（否则并发会重复烧钱、失败无冷却、预算失控）。按需接口必须保留 `Depends(get_current_user)`，不允许改回匿名。
-19. **AI 写入不做“覆盖式重刷”**：`claim_ai_job` 在拿写锁后会再查一次攻略是否为空，非空直接返回 `exists`；`--force` 只允许人工单条使用，**cron 永不带 `--force`**。
-20. **攻略长文只在详情接口返回**：不要把 `full_process_guide` 加回 `Competition`（列表）模型；前端列表不依赖它。
-21. **孤儿数据清理只删无归属行**：`cleanup_orphan_ai.py` 固定条件 `competition_id IS NULL OR NOT IN (SELECT id FROM competitions)`；不要扩大成“按日期删”或手工 DELETE。
-
----
-
-## 五、省 Token 军规（后续 AI 必须遵守）
-
-1. **严禁全量 print 长文本 HTML**。  
-   需要看页面时，只打印 `<title>`、目标容器文本前 500~1500 字符、meta 的 key/content；HTML 原文落盘后按行读。
-
-2. **严禁全量重写大文件**。  
-   `db.py`、`crawler_news.py`、`crawler_competitions.py` 都很大；改动必须先 `read` 指定 offset/limit，再用 `edit` 做局部替换，不要整体覆盖。
-
-3. **看代码只看指定行数**。  
-   先用 `grep` 定位函数/关键字，再 `read` 只读该函数前后 40~120 行；不要从头读到尾。
-
-4. **所有 JSON 输出必须截断**。  
-   大模型原始 JSON 只打印关键字段，或 `--save-json` 落盘后读摘要；批量报告只看 `inserted/failed/skipped` 计数和前 1~2 条示例。
-
-5. **禁止 `SELECT *` 全量打印 `competitions`**。  
-   `full_process_guide` 字段非常长，打印整行会爆上下文；查询必须显式列字段，例如：
-   `SELECT id,name,category,level,official_url,image_url,contest_start_month,contest_end_month FROM competitions WHERE id=?`。
-
-6. **不要为验证去重复调用大模型**。  
-   优先读取 `workspace/*.json` 中已保存的 `raw_llm_json`；只有代码/数据源变化时才重新调用。
-
-7. **命令输出先过滤再展示**。  
-   PowerShell 用 `Select-String`、`Select-Object -First N`、`Tee-Object` 落盘；不要把完整日志贴回对话。
-
-8. **改完先 `py_compile`**，再跑最小化测试；不要一上来跑全量批量。
-
-9. **一次只验证一个假设**：先 dry-run，再写测试库，再读回；不要同一步混入多个远端页面/多个写库动作。
-
-10. **上下文接近上限时**，先更新本文件，再开新窗口；新窗口先读本文件，不要重读全部历史。
-
----
-
-## 六、当前已知问题 / 前端接入提示
-
-1. 前端卡片封面读取的是 API 的 `image` 字段，后端已映射 `image_url`，封面可直接显示。
-2. 【已完成 2026-11-07】`HomeView.vue` / `CompetitionsView.vue` / `PreparationView.vue` 已接入 `image` 与 `contest_start_month / contest_end_month`：
-   - 新增 `formatContest(item)`：同月 -> `11 月`；跨月 -> `10 月 - 11 月`；跨年 -> `12 月 - 次年 1 月`；缺值 -> `待定`；
-   - 新增 `resolveImage(item)`：只接受 `http(s)` 绝对地址，其余回落卡片占位图；
-   - 后端 `db.list_preparations()` 的 JOIN 同步补出 `image_url / contest_start_month / contest_end_month`（老库缺列时以 NULL 占位，不会清空备赛清单）。
-3. 【已完成 2026-11-07】`CompetitionDetailView.vue` 的 `signUpTime / contestTime` 改为由 `reg_*_month`、`contest_*_month` 前端拼接（老的 `data.contest_time / sign_up_time` 仅作兼容兜底，后端并不返回这两个字段）；`image` 统一走 `resolveImage()`。
-4. 【已完成 2026-11-07】`PreparationWorkspaceView.applyDetail()` 的「比赛时间」同样改为月份拼接（保留旧字段兜底），封面走 `resolveImage()`；级别显示本来就由 `zhLevel()` 处理，无需改。
-5. 【已删除 2026-11-07】`frontend/src/services/competitionMapper.js` 整份文件无任何引用（`mapToCard` 只是其中一部分），已整体删除；其 `toMonth / formatSignUp` 与各视图内代码重复，历史版本可用 `git checkout -- frontend/src/services/competitionMapper.js` 取回。
-6. 遗留的重复代码（未处理）：`toMonth / formatSignUp / formatContest / resolveImage` 目前在 5 个视图里各有一份，建议生产迁移完成后再抽成 `services/competitionFormat.js`，冻结期不做。
-7. **封面策略 = C（2026-11-08 前端落地）**：接受大部分赛事没有封面，无图/破图交前端优雅兜底，不再为封面死磕通知页。
-   - **已完成**：`frontend/src/utils/coverFallback.js` + `assets/main.css` 的 `.cover-fallback`，无图或 `@error` 时显示「名称哈希色相渐变 + 赛事首字」，深色模式同步；详情页 `h-64` 大图位同样兜底。
-   - 验证：`npm.cmd run build` 通过；截图 `workspace/cover-light.png` / `cover-dark.png` / `cover-detail.png`。
-   - 仍不建议放宽 `check_image()` 阈值去接受 banner（4:3 裁切后观感更差）。
-8. **采集入口的经验结论（血泪）**：
-   - ✅ **新闻/宣传详情页**（高校新闻、搜狐等）：有 og:image 或正文配图，封面能过闸门，时间也常写在正文里 —— 34/35 就是这么采到的。
-   - ✅ **高校教务处通知页**（`/info/xxxx/xxxxx.htm` 这类 VSB CMS 页）：正文够长、时间准确（蓝桥杯 4 月、挑战杯 9 月都验证过），但**基本没有配图**。
-   - ❌ **赛事官网首页**：多是门户/SPA，正文只有几百到一千字导航文案，封面是 banner（855×200 那种），时间靠模型硬猜 —— 已弃用。
-   - ❌ **PDF 型通知**（"如果您无法在线浏览此 PDF"）：正文只有 236 字，直接跳过。
-   - ❌ **证书域名不匹配的站点**（如 `jwc.hncu.net`）：HTTPS 校验失败且 http 也强制跳转，抓不了。
-9. **模型误读模式已记录**：通知页里"作品提交截止 6月30日"曾被模型当成比赛时间（id=13，已回滚）。Prompt 已加红线；重跑时请重点看这类页面。
-10. 占位赛事更新默认保留原 `name`，只替换官网/时间/图片/类别/简介；如需改名用 `--update-name`。
-11. 重庆交大页没有 `og:image`，id=34 的封面走正文首图回退，且是 `http://`（328×470 竖图，`object-cover` 裁切后可接受）；上云/HTTPS 后需处理混合内容。
-12. 新插入赛事 `id=35` 的 `full_process_guide` 为空；攻略生成是后续独立任务。
-13. crawled awards 的 `review_status='pending'`、`embedding_state='stale'`；语义检索只索引 `approved + ok`，需要审核/同步。
-14. 前端 `HomeView` 首页只取前 8 条（按"计算机类优先 -> 国家级优先 -> sort_order -> id"排序），**新增赛事（sort_order=9999）排在最后，首页看不见**，要去"竞赛列表"页或直接访问 `/competition/34`。
-15. **赛氪预检结论（2026-11-08，生产基线重算）**：
-    - 封面：**5 条可新增**（id=6/8/18/22/27），1 条已有（id=34），**14 条 banner/过小被拒**（方案 C），26 条仍无图。
-    - 比赛时间：**2 条可新增**（id=9 学创杯 6-11 月、id=23 计算机设计省赛 7-8 月），8 条已有，24 条仍缺。
-    - 赛氪状态：25 条成功、5 条往年届次（2/4/17/26/30）、2 条无对应（25/35）。
-    - **16 条报名时间冲突**（赛氪窗口 vs 库内值），完整清单见 `workspace/pipeline_report.md` 第三节；**写库时一律保留库内值，只填 NULL**。
-16. **赛氪接口与合规**：`apiv4buffer.saikr.com/api/pc/contest/{lists,info}` 匿名可调（无 Token/签名/强制 Cookie），但 `robots.txt` 明确 `Disallow: /api/`、`Disallow: /*?*`、`Crawl-delay: 10`；只做存量 32 条低频测试，不做全量抓取/商用。
-17. **低置信/需复核**：id=9 比赛时间 6-11 月（置信度 0.45）；id=2 只给出「9 月起」；id=27 与 id=22 共用同一张封面（同赛事家族，会出现重复图）。
-18. **赛氪页面两类质量**：赛氪自家商业赛图多、时间全；榜单赛事（我们要的）多为官方通知原文 + banner 封面 + 比赛时间为 0，和高校通知页同源问题，**所以 `crawler_competitions.py` 仍需保留**。
-19. **2026-11-08 12:05 写库结果**：成功 10/10 字段，0 失败；`--from-report` 复用预检报告（未重复联网/调模型）。写后 diff 只有计划内字段变化，`integrity_check=ok`，awards 未动。
-20. **id=34 报名月份为混合来源**：仅补了 `reg_start_month=3`（赛氪），`reg_end_month=7`（原值）保留，赛氪原窗口是 3-4 → 需人工确认到底取 3-7 还是 3-4；这是「只补 NULL」策略的已知边界。
-21. **16 条报名冲突全部保留库内值**，清单在 `workspace/pipeline_report.md` 第三节；后续想采用赛氪值必须单条人工确认，不允许批量覆盖。
-22. **前端 build 复验通过（2026-11-08 12:04）**：`npm.cmd run build` 8.37s / 115 modules，无编译错误；PowerShell 必须用 `npm.cmd`。
-23. **候选表 POC 结果（2026-11-08 12:35）**：`test_crawl.db` 新增 **82** 条 pending（edu-roster 62 / saikr 20），`norm_name` 与 `source_key` 均零重复；主表仍 33 赛事 / 88 获奖，**未写主表**。12:34 生产库同批部署 **82** 条 pending，主表仍 32/87。
-24. **去重口径已实测**：归一化名相同 -> 跳过；相似度 ≥0.9 且官网同域（或任一方无官网）-> 跳过；地域标记（全国/省/赛区/选拔赛…）不同 -> 不自动合并。84 项目录有 20 条命中现有主表（挑战杯/ACM/服外包等）被正确跳过；重复跑脚本 0 新增。
-25. **赛氪列表特征（2026-11-08 实测）**：`sort=2` 前 2 页多为英语/翻译/才艺类商业赛，名称常带 `【最后14天】` 等营销前缀（归一化时已剥离）；20 条中 19 条有 `contest_*` 月份、3 条跨年；`image_url` 存的是 `thumb_pic` 原图 URL，**审核入库前必须重跑 `check_image()`**。
-26. **审核 CLI 实测（2026-11-08，临时副本）**：approve 候选 1 -> `competitions id=36`、候选 `approved` 且回填 `competition_id=36`；reject 候选 2 -> `rejected`；再次 approve 同一候选被拒（状态守卫）。临时库 `workspace/review_test.db` 已删除，测试库未污染。
-27. **生产候选内容需要人工过一遍**：赛氪前 2 页会混入「辅助报名」「考试入口」「作品征集」等服务/广告类条目（例如 `2027年美赛（MCM/ICM）辅助报名`），审核时直接 `--reject`，不要因为“能抓到”就提拔。
-28. **生产库已不是 32 条（2026-11-08 13:00 核对）**：`id=36` 已由赛氪候选 82 approve 入主表（`category='待确认'`、无官网、`sort_order=9999`，首页不曝光）；候选状态 `80 pending / 1 approved / 1 rejected`。旧的「主表未动」记录已过期。
-29. **攻略生成是“安全但通用”的**：v2 Prompt 已注入报名/比赛月份与获奖作品；实测两篇（id=21、12）分别 2104 / 2543 字，会明确写“未公布”，不编造日期。但**模型仍可能把“报名截止”误读成比赛时间**，抽检时优先看这类句子。
-30. **前端按钮的登录态**：`CompetitionDetailView` 点击按钮前用 `isLoggedIn()` 判断，未登录直接 `openAuthModal('login')`；token 失效时接口 401，拦截器会清本地凭证并广播 `auth:unauthorized`。**不要改成匿名接口**。
-31. **生成耗时可接受但需轮询**：单篇 15–60s（deepseek-flash 含 reasoning）；前端 3s×20 → 10s×18，总上限约 4 分钟；超时会提示刷新，不会重复触发。
-32. **`ai_jobs` 的 15 分钟租约**：进程被 kill 后，下一次抢占会把 `running` 超过 15 分钟的任务标 failed，不会永久卡死；排查生成问题先看 `ai_jobs.error`。
-33. **测试库已有真机生成的攻略**：`test_crawl.db` 的 id=21、12 是本轮真机产物（2 条 ai_jobs done）；不要再把它们当“空攻略”用例，需要空攻略请另建临时库。
-34. **列表响应瘦身是破坏性变更**：`GET /api/competitions` 不再返回 `full_process_guide`；前端列表本来就不读该字段（已 grep 确认），若后续有调用方依赖，必须改用详情接口。
-35. **已知小 bug（上云前未修，待评估）**：`frontend/src/services/api.js` 的 `submitFeedback()` 调的是 `api.post('/api/feedback')`，而 axios 实例 `baseURL` 已是 `/api`，实际请求会变成 `/api/api/feedback`。正确写法应为 `api.post('/feedback')`。不影响爬虫/AI/部署主链路，反馈功能抽检时若 404 可先按此修。
-
----
-
-## 七、下一步 TODO
-
-### 本轮已完成（2026-11-08）
-
-- [x] **Prompt 修复验证**：id=13（作品提交截止页）单页 `--dry-run`，`contest_start_month/contest_end_month` 均保持 `NULL`。
-- [x] **赛氪映射 + 预检**：`saikr_map.json` 32 条；`pipeline_update.py` 全量 dry-run（测试库），并用生产库只读基线重算；报告 `workspace/pipeline_report.md`。
-- [x] **前端封面兜底**：`coverFallback.js` + `.cover-fallback`，`npm.cmd run build` 通过；截图 `workspace/cover-*.png`。
-- [x] **赛氪试跑**：6 条（3/6/8/10/12/22）写入 `test_crawl.db`，仅 image_url + reg_*，自动备份 `test_crawl.db.bak-20261108-000326`。
-- [x] **生产库写入**：`pipeline_update.py --from-report … --apply --allow-production`，10/10 字段成功，自动备份 `competitions.db.bak-20261108-120553`；覆盖率 18.8% / 25.0%，SHA `cdab55f5…`。
-- [x] **前端 build 复验**：`npm.cmd run build` 8.37s / 115 modules，无编译错误。
-- [x] **新赛事发现调研**：赛氪列表 API 字段核对 + 2 个高校 84 项目录页实测（结论见第九节）。
-- [x] **候选表落地**：`db.py` 建表 + 插入/去重/统计函数；`discover_common.py` 公共层；`test_crawl.db` 建表成功。
-- [x] **84 项目录 POC**：`discover_university.py` 解析 84 条 / 过滤 2 条 / 5 条缺官网，写入 62 条，20 条命中主表跳过；华南师大页零改动复用。
-- [x] **赛氪每日 POC**：`discover_saikr.py` 前 2 页 / 20 条，3~5 秒延迟，写入 20 条；每日守卫生效；重复跑 0 新增。
-- [x] **审核 CLI**：`review_candidates.py --list/--approve/--reject`；临时副本实测通过（approve -> 主表 id=36 + 候选 approved；reject 正常；重复 approve 被拒）。
-- [x] **生产库候选部署**：候选表建表 + 84 项目录 62 条 + 赛氪 20 条，共 **82 条 pending**；主表仍 32/87；备份 `…123438` / `…123446`；SHA `80092384…`。
-- [x] **AI 生成链路（2026-11-08 13:15）**：`ai_content.py`（v2 Prompt + 指纹）、`ai_jobs_runner.py`（线程池 + 预算 + 冷却）、`daily_ai_worker.py`（慢刷）、`cleanup_orphan_ai.py`（孤儿清理）。
-- [x] **按需攻略接口**：`POST/GET /api/competitions/{id}/generate_guide`（登录、202/409/429、幂等）；前端详情页按钮 + 轮询；列表接口瘦身。
-- [x] **生产库迁移**：`migrate_production.py --apply` 建 `ai_jobs` + 4 个 `guide_*` 列；备份 `competitions.db.bak`（SHA `db77ac…`），迁移后 SHA `ced3268…`。
-- [x] **孤儿数据清理**：删 insights 10 / ideas 12，剩余 0；备份 `…130926`。
-- [x] **测试**：`test_ai_guide.py` 16 例 + 既有 91 例（共 107 passed / 2 skipped）；测试库真机生成 2 篇攻略（3378 + 2945 tokens）。
-- [x] **前端 build**：`npm.cmd run build` 7.36s / 115 modules 通过。
-
-### 下一阶段重点：上云部署 + Crontab（按顺序，新 Agent 直接照做）
-
-#### ① 上云部署（先做，阻塞定时任务）
-
-- [ ] **运行环境**：Linux + Python 3.11 venv，`pip install -r requirements.txt`；`.env` 只放服务器（DeepSeek/JWT/CORS），不进仓库。
-- [ ] **数据迁移**：停服务后 `sqlite3 competitions.db ".backup '/tmp/competitions.db'"`（或复制时一并处理 `-wal/-shm`）→ 上传 → `PRAGMA integrity_check` + 行数校验（**33 赛事 / 87 获奖 / 82 候选 / 7 攻略 / ai_jobs 0**）→ 记录 SHA-256 `3af3af9c…`。
-- [ ] **服务化**：FastAPI 用 `uvicorn/gunicorn + systemd` 常驻，Nginx 反代 + HTTPS；`frontend/dist` 静态托管；仅开放必要端口。**建议 `--workers 1`**（SQLite + 单机足够；多 worker 时 ai_jobs 仍安全，但线程池会按进程放大并发）。
-- [ ] **权限与路径**：DB 目录/日志目录归服务用户可写；`competitions.db` 与 `-wal/-shm` 同目录；禁止放临时盘。
-- [ ] **备份上云**：每日 `sqlite3 .backup` 到对象存储（保留 30 天）；写库脚本的本地 `.bak-*` 同步一份；每月恢复演练。
-- [ ] **验收**：健康检查 / 首页 / 列表 / 详情；候选 `review_candidates.py --list` 只读；一次登录态下的攻略按钮端到端（生成 1 条 + 轮询到 ready）；测试库完成一次 approve + reject 演练。
-
-#### ② 服务器定时任务（Crontab，上云后配置）
-
-> 时区统一 `Asia/Shanghai`（**Debian/Ubuntu 的 cron 不支持 `CRON_TZ`，必须设系统时区**）；所有任务加 `flock -n`；日志按天切分；非 0 退出码触发告警。
-
-```cron
-SHELL=/bin/bash
-PATH=/usr/local/bin:/usr/bin:/bin
-MAILTO=""
-
-# 0) 每天 02:30 生产库备份（本地 + 对象存储；保留 30 天）
-30 2 * * * cd /opt/kuao/backend && flock -n /var/lock/kuao_backup.lock ./venv/bin/python backup_db.py --db competitions.db --keep-days 30 >> logs/backup-$(date +\%F).log 2>&1
-
-# 1) 每周一/周四 03:00 高校新闻获奖批量（写 awards / 占位赛事）
-0 3 * * 1,4 cd /opt/kuao/backend && flock -n /var/lock/kuao_news.lock ./venv/bin/python crawler_news.py --list-url "<LIST_URL>" --db-path competitions.db --max-pages 4 --allow-production >> logs/news-$(date +\%F).log 2>&1
-
-# 2) 每天 04:10 新赛事发现（只写候选表；不加 --force，每日守卫防重复）
-10 4 * * * cd /opt/kuao/backend && flock -n /var/lock/kuao_saikr.lock ./venv/bin/python discover_saikr.py --db-path competitions.db --apply --allow-production >> logs/discover-$(date +\%F).log 2>&1
-
-# 3) 每天 04:40 AI 慢刷（攻略 4 篇 + 灵感 2 条；token 预算熔断）
-40 4 * * * cd /opt/kuao/backend && flock -n /var/lock/kuao_ai.lock ./venv/bin/python daily_ai_worker.py --db-path competitions.db --apply --allow-production --limit 4 --idea-limit 2 --budget-tokens 300000 >> logs/ai-$(date +\%F).log 2>&1
-
-# 4) 每周日 05:10 存量补全（会调模型，限 20 条）
-10 5 * * 0 cd /opt/kuao/backend && flock -n /var/lock/kuao_pipeline.lock ./venv/bin/python pipeline_update.py --db-path competitions.db --apply --allow-production --limit 20 >> logs/pipeline-$(date +\%F).log 2>&1
-
-# 5) 每天 05:30 日志清理（保留 7 天；只清 logs/，绝不碰 backups/）
-30 5 * * * find /opt/kuao/backend/logs -type f -name '*.log*' -mtime +7 -delete >> /opt/kuao/backend/logs/cleanup.log 2>&1
-
-# 6) 每周日 05:40 本地备份清理（对象存储成功后再删本地 30 天前备份）
-40 5 * * 0 find /opt/kuao/backend/backups -type f -name 'competitions.db.bak-*' -mtime +30 -delete >> /opt/kuao/backend/logs/cleanup.log 2>&1
-```
-
-- [ ] **先手动逐条执行**，确认退出码 0、日志无异常，再挂 cron；`crontab -l` 留档。
-- [ ] **顺序不能反**：备份（02:30）在所有写库之前 → 新闻（03:00）可能建占位赛事 → 发现（04:10）只写候选 → AI（04:40）吃当天结果 → 周度补全（05:10）与 AI 错开 → 清理（05:30）最后。
-- [ ] `discover_university.py` **不挂日任务**：84 项名单年度更新时人工跑一次（`--apply --allow-production`）。
-- [ ] 监控：失败 webhook/邮件；连续失败 2 次暂停任务并告警；每周核对候选增量与审核积压。
-- [ ] 限速不变：赛氪 3~5 秒 / 2 页 20 条；`pipeline` 5~10 秒；新闻 2~5 秒。
-- [ ] **日志与备份分目录**：现有 `.bak-*` 与源码混在 `backend/` 根目录，上云时统一挪到 `backups/`，否则 7 天日志清理的 `find` 容易误伤。
-
-#### ③ 审核收尾（可与上云并行）
-
-- [ ] **处理 16 条报名冲突**：默认保留库内值，按 `workspace/pipeline_report.md` 第三节逐条裁决。
-- [ ] **复核低置信条目**：id=9（学创杯 6-11 月，置信度 0.45）；id=34（报名 3-7 混合来源）；id=27/id=22 封面重复。
-- [ ] **生产候选 80 条待审**：按 `review_candidates.py --list` 逐条 approve/reject；服务/广告类直接拒绝；id=36 已 approve 但 `category='待确认'`，需人工补类别/官网。
-
-### 后续（不急）
-
-- [ ] **后台审核列表**：把 `review_candidates.py` 的 CLI 能力接到管理后台（列表/筛选/批量 approve/reject/审核备注）；当前 CLI 已覆盖人工操作。
-- [ ] **占位赛事治理**：`test_crawl.db` 里 id=33「华为杯」仍是 `category='待确认'` 的占位记录（用户明确要求**保留在测试库当用例**，不要合并进生产）；生产侧后续需要人工审核/合并入口。
-- [ ] **反爬与限速**：统一 UA、重试、随机延迟、robots 检查；目前赛事补全 5~10 秒、新闻批量 2~5 秒、赛氪 3~5 秒（robots 建议 10，扩量前复审）。
-- [ ] **数据质量**：`official_url` 有效性校验（HEAD/域名白名单）、赛事名归一化与人工复核；补充 `build_page_urls`、dry-run 不写库、生产库拦截、competitions upsert 幂等 的单测。
-- [ ] **图片 CDN/代理**：目前只存 URL；上云后评估是否接 CDN/代理，避免混合内容与源站防盗链。
-- [ ] **清理 workspace 产物**：`workspace/*.json` 与 `competitions.db.bak-*` 可按日期归档，避免仓库/磁盘膨胀（当前已有 10 个备份文件、`saikr_catalog.json` 3.9 MB）。
-
----
-
-## 八、快速定位
-
-```text
-新闻采集入口：      crawler_news.py  (main / _run / _run_batch)
-赛事采集入口：      crawler_competitions.py (main / _run / save_competition / extract_image_url / SYSTEM_PROMPT)
-赛事批量补全：      batch_update_competitions.py (main / process_one / build_patch / check_image / pick_checked_cover)
-测试库->生产库合并： merge_test_competitions.py (main / build_plan / apply_plan / make_backup)
-生产库体检/迁移：   migrate_production.py (inspect / make_backup / apply_migration)
-入口页覆盖映射：    url-map.json
-赛氪映射：          saikr_map.json（32 条；含 match_type / needs_review）
-赛氪统一预检：      pipeline_update.py（默认只读；--apply / --from-report）
-赛氪详情补充：      enrich_saikr_details.py（--backfill / --daily-update；AI 提纯；enrich_competition）
-详情补充测试：      test_enrich_saikr.py（11 例：规范化/防照抄/一次调用/双模式/审核联动）
-预检报告：          workspace/pipeline_report.md / pipeline_report_prod.json
-写库记录：          workspace/pipeline_apply_20261108-120553.json
-赛氪目录缓存：      workspace/saikr_catalog.json（5172 条）
-新赛事发现（公共）： discover_common.py (prepare_target / backup_db / ingest / guess_category)
-高校目录发现：      discover_university.py (main / extract_roster / extract_line_entries / build_candidates)
-赛氪每日发现：      discover_saikr.py (main / fetch_list_page / build_candidate / check_daily_guard)
-候选审核 CLI：      review_candidates.py (main / cmd_list / cmd_approve / cmd_reject / verify_cover)
-候选表 DDL/CRUD：   db.py (CANDIDATES_DDL / ensure_candidates_table / add_candidate / find_duplicate_candidate / candidate_stats / promote_candidate)
-AI 生成核心：        ai_content.py (build_guide_prompt / generate_guide / generate_guide_for / generate_inspiration / guide_input_hash)
-AI 任务编排：        ai_jobs_runner.py (request_guide / run_guide_job / run_inspiration_job / _EXECUTOR)
-AI 任务表/查询：     db.py (AI_JOBS_DDL / claim_ai_job / start|finish|fail|skip_ai_job / get_guide_state / select_guide_candidates / select_inspiration_candidates)
-每日慢刷：          daily_ai_worker.py (build_parser / run / save_report)
-兼容攻略 CLI：      generate_guides.py（调用 ai_content；--db-path / --allow-production）
-孤儿清理：          cleanup_orphan_ai.py（count/delete_orphan_ai_content）
-每日备份：          backup_db.py（make_backup / _prune / main；WAL 安全，单文件）
-上云边界测试：      test_crawler_boundaries.py（20 例：网络异常 / 残缺 JSON / 空网页）
-部署手册：          CLOUD_DEPLOYMENT_GUIDE.md（依赖 / DB 迁移 / systemd / Nginx / crontab）
-AI 测试：            test_ai_guide.py（16 例；ai_jobs / 幂等 / 409 / 429 / 列表瘦身 / Prompt）
-攻略接口：          routers/competitions.py (POST/GET /api/competitions/{id}/generate_guide)
-攻略模型：          models/schemas.py (CompetitionDetail.full_process_guide / guide_status / guide_generated_at)
-前端攻略按钮：      frontend/src/views/CompetitionDetailView.vue（guideBusy / onGenerateGuide / pollGuideStatus）
-前端接口封装：      frontend/src/services/api.js（requestGuide / getGuideStatus）
-数据库连接/迁移：   db.py (get_conn / init_db / _MIGRATION_COLUMNS / update_competition / list_preparations)
-赛事 API 映射：     routers/competitions.py (_row_to_competition)
-赛事 API 模型：     models/schemas.py (Competition)
-读回校验：          verify_crawl.py
-单测：              test_crawler_units.py (extract_image_url / _normalize_level，19 例)
-测试库：            test_crawl.db（33 赛事 / 88 获奖 / 9 攻略 / 2 个已完成的 ai_jobs / 82 候选）
-生产库：            competitions.db（33 赛事 / 87 获奖 / 7 攻略 / ai_jobs 0 / 82 候选，写前必须备份）
-前端卡片：          frontend/src/components/CompetitionCard.vue（无图/破图 -> 渐变首字兜底）
-前端兜底工具：      frontend/src/utils/coverFallback.js + assets/main.css (.cover-fallback)
-前端详情页：        frontend/src/views/CompetitionDetailView.vue（h-64 大图位同样兜底）
-前端时间映射：      frontend/src/views/{HomeView,CompetitionsView,PreparationView,CompetitionDetailView,PreparationWorkspaceView}.vue
-```
-
----
-
-## 九、新赛事批量发现方案（2026-11-08 调研 + POC 落地）
-
-### 9.1 结论
-
-| 路线 | 产出量 | 字段质量 | 合规/成本 | 建议 |
-|---|---|---|---|---|
-| ① 赛氪列表（每日 2 页 = 20 条） | 20/天，可持续 | 名称/级别/报名窗口/封面 URL 结构化；比赛时间大多为 0 | robots 禁 `/api/`、Crawl-delay 10；低频不商用风险可控但≠授权 | **做增量候选源，不直接入库** |
-| ② 高校 84 项榜单目录（一次性） | 84 条种子 | 名称 + 官网 URL；无级别/报名时间 | 公开名单，风险低 | **先做，解决「库里只有 32 条」** |
-| ③ 教务处通知/新闻列表（已有爬虫） | 每周几条 | 正文最准（时间/级别），图少 | 已合规运行 | **主源，继续用** |
-
-**推荐组合**：② 一次性铺 84 条底表 → ③ 持续补详情 → ① 每日 20 条做增量发现；全部先进 `competition_candidates`，人工审核后入 `competitions`。
-
-> **2026-11-08 用户已拍板**：以**高校目录页为主源**（84 项种子 + 教务处通知/新闻），**赛氪极低频（≤20 条/天）仅作补充**；所有发现先进候选表，人工审核后才入生产库。
-
-### 9.2 赛氪路线：每日 20 条是否可控
-
-接口（匿名、无 Token）：`GET https://apiv4buffer.saikr.com/api/pc/contest/lists?page=1&limit=10&sort=2`（`sort=2` = 最近更新）。
-列表直接可用字段（已从 5172 条缓存核对）：
-
-| 字段 | 说明 |
-|---|---|
-| `contest_id` / `contest_name` | 赛氪 ID + 赛事名 |
-| `contest_url` | slug，详情页 `https://www.saikr.com/vse/<slug>`；调详情 API 时**不要带 `vse/`** |
-| `level_name` | 国家级/省级…（原文） |
-| `organiser` / `enter_range` | 主办方 / 参赛范围 |
-| `regist_start_time` / `regist_end_time` | **Unix 秒**；0 表示无 |
-| `contest_start_time` / `contest_end_time` | Unix 秒；多数为 0（拿不到比赛时间） |
-| `time_status` / `time_name` | 报名中 / 未开始… |
-| `thumb_pic` | 封面小图 CDN；详情 `web_pic_big` 才是大图 |
-| `contest_class_first` / `contest_class_second(_id)` | 学科大类 / 子类 |
-| `labels` / `rank` / `is_new` | 标签、热度、是否新上架 |
-
-- 20 条/天 = 每天 **2 次列表请求**，间隔 ≥10 秒，符合 `Crawl-delay: 10`；不抓详情/正文时成本几乎为零。
-- **风险判断**：robots 明确 `Disallow: /api/`、`Disallow: /*?*` → 技术上违反 robots，**不是「合规」而是「低风险」**；民事/刑事风险低（公开数据、不绕过反爬、不破坏系统），主要风险是 IP 封禁 + ToS 违约 + 商用转载版权。
-- **可控前提**：不商用/不转售、署名并回链、只存 ID+名称+URL（正文仍回官方源）、1 次/10 秒、每日 ≤2 页、触发 429/验证码即 kill switch、优先发邮件或找商务拿授权。
-
-### 9.3 高校目录路线：实测两个真实页面
-
-| 页面 | 形态 | 实测结果 |
-|---|---|---|
-| [山东农业工程学院教务处《全国普通高校学科竞赛排行榜（2024）》](https://www.sdaeu.edu.cn/jwc/info/1047/2528.htm) | 纯 HTML 文本列表（`<p>` 分行，无 `<table>`） | requests+bs4 **81/84 自动配对名称+官网**；缺 3 条因名称不含「大赛/竞赛」（如「年会展示」「作品展」「演讲比赛」） |
-| [华南师范大学美术学院《最新84项赛事…（附链接）》](http://aol.scnu.edu.cn/a/20241021/899.html) | 同上 | 同样 81/84，代码零改动可复用 |
-| 反例：湖北二师 / 内江师范 / 河海大学 | 正文是**图片或 PDF**（`<table>` 数为 0） | requests+bs4 提不到结构化数据，需 PDF 解析/OCR |
-
-关键代码（两页都适用，实测 3 秒内跑完）：
-
-```python
-import re, requests
-from bs4 import BeautifulSoup
-
-def extract_roster(url):
-    r = requests.get(url, timeout=25, headers={"User-Agent": "Mozilla/5.0 ..."})
-    r.encoding = r.apparent_encoding
-    soup = BeautifulSoup(r.text, "lxml")
-    for t in soup(["script", "style"]):
-        t.decompose()
-    lines = [x.strip() for x in soup.get_text("\n").split("\n") if x.strip()]
-    # 从「…竞赛目录…网址」标题之后开始，避免把备注/观察目录算进来
-    start = next(i for i, x in enumerate(lines)
-                 if "竞赛目录" in x and ("网址" in x or "赛事" in x))
-    num = re.compile(r"^(\d{1,2})\s*[、.．]\s*(.+)$")
-    out = {}
-    for i in range(start, len(lines)):
-        m = num.match(lines[i])
-        if not m:
-            continue
-        idx, name = int(m.group(1)), m.group(2).strip()
-        if idx in out:          # 后半段「观察目录」会重新编号，取第一次出现
-            continue
-        url_ = next((lines[j] for j in range(i + 1, min(i + 4, len(lines)))
-                     if lines[j].startswith("http")), "")
-        out[idx] = (name, url_)
-    return out          # 84 条，约 81 条带官网；剩余用搜索/人工补
-```
-
-> 难度评估：**84 项榜单页 = 简单**（1 次请求 + 30 行代码）；**各校认定目录 = 中等**（多为 PDF/Excel/图片，要 PDF 解析或人工导入）。所以先做「84 项种子」，不要逐个学校爬。
-
-### 9.4 入库映射（原始信息 → `competitions`）
-
-先落候选表，再审核入库（现有表没有审核字段，直接 INSERT 会污染线上列表）：
-
-> **权威实现**：`db.py` 的 `CANDIDATES_DDL`；`init_db(db_path)` 与 `ensure_candidates_table(db_path)` 都可幂等建表。下面是与代码等价的结构。
-
+## 一、架构、数据契约与文件清单
+### 1.1 三条数据流
+- **新闻获奖**：`crawler_news.py` 抓列表/详情 → `llm.chat_json` 抽奖 → 写 `awards`（按 `source_url` 去重，`content_hash` 唯一索引兜底；匹配不到赛事自动建占位）。
+- **赛事主数据**：`crawler_competitions.py` 单页 upsert → `batch_update_competitions.py` 批量补全，全部**只填空**。
+- **新赛事发现**：`discover_*` 只写 `competition_candidates` → 人工/后台/CLI 审核 → `promote_candidate()` 同事务写 `competitions` + 标记 approved → 自动补简称与详情。
+### 1.2 数据表与关键常量
+- **DB 路径**：`db.DB_PATH` 硬编码 `competitions.db`，即 `os.path.join(os.path.dirname(os.path.abspath(__file__)), "competitions.db")`。带 `db_path` 参数的函数优先用传入值；CLI 一律用 `--db-path` 切库，**不要靠改 DB_PATH**。
+- **双轨制日期（2026-11-09 起）**：
+  - 月份轨 `reg_start_month / reg_end_month / reg_cross_year / contest_start_month / contest_end_month`：老数据，**永不删**；
+  - 日期轨 `reg_start_date / reg_end_date / contest_start_date / contest_end_date`：`'YYYY-MM-DD'` 或 `'MM-DD'`；只有原文出现「日」才写，没有就留 NULL，**绝不拿月份凑日期**；
+  - `db._HAS_DATE_SQL` 用日期轨算「正在报名 / 尚未开始 / 已过期」排序，前端 `services/timeFormat.js` 按有无日期决定展示粒度。
+- **`competition_candidates`**（`db.CANDIDATES_DDL`；`init_db(db_path)` 或 `ensure_candidates_table()` 均幂等建表）：
 ```sql
 CREATE TABLE IF NOT EXISTS competition_candidates (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1054,509 +87,525 @@ CREATE TABLE IF NOT EXISTS competition_candidates (
   reviewed_at TEXT,
   UNIQUE(source, source_key)
 );
-
-CREATE INDEX IF NOT EXISTS idx_candidates_status
-  ON competition_candidates (status, id);
-CREATE INDEX IF NOT EXISTS idx_candidates_norm_name
-  ON competition_candidates (norm_name);
-CREATE INDEX IF NOT EXISTS idx_candidates_source
-  ON competition_candidates (source);
 ```
+  配套索引：`(status, id)` / `(norm_name)` / `(source)`；候选池另有 `reg_start_date` 等四列，由 `backfill_candidates_date.py` 补。
 
-| `competitions` 字段 | 映射来源 | 规则 |
-|---|---|---|
-| `name` | `contest_name` / 目录名称 | 去序号、去届次年份（2024/2025）、全角转半角、压缩空白；保留官方全称 |
-| `category` | `contest_class_second` / 目录分组 | 映射到现有 7 类（创新创业、程序设计、数学建模…），未知填 `待确认` |
-| `level` / `level_label` | `level_name` | 国家级→`national`、省级→`provincial`；国际级现有枚举没有，先落 `national` + label 原文 |
-| `official_url` | 详情正文外链 / 目录 URL | 只收 http(s) 且非 saikr/百科/公众号域名；无合格外链留空 |
-| `image_url` | `thumb_pic` / `web_pic_big` | 候选表可先存原图 URL；**审核 approve 前必须重过 `check_image()`**，banner（比例 >2.6）/过小不写 |
-| `reg_start_month` / `reg_end_month` / `reg_cross_year` | `regist_*` Unix 秒 | 只取月份；跨年 `cross=1`；0 视为空 |
-| `contest_start_month` / `contest_end_month` | `contest_*` / 通知页 LLM | `0`、`-0001` 一律 NULL；**不猜** |
-| `intro` / `summary` | 详情 `content` 正文 | 复用 `crawler_competitions.py` 的抽取，写候选表不直接入库 |
-| `discover_source` | 固定 | `saikr:list` / `edu:roster` / `edu:notice` |
-| `last_checked_at` | 运行时间 | 每次扫描都更新 |
-| `is_active` | `time_status` | 报名截止 >400 天视为陈旧，不新增 |
-
-**审核入库（`review_candidates.py --approve`）**：`name` 去营销标签/年份/届次后写主表；`level` 映射 national/provincial；`sort_order=9999`（首页不曝光）；`discover_source=saikr:list / edu:roster`；封面不合格时仍入库但 `image_url=NULL`。主表 INSERT 与候选 `approved` 标记在 `db.promote_candidate()` 的同一事务内完成。
-
-**去重（已实现）**：`norm_name` 去序号/年份/届次/营销标签/标点 + 官网域名双键；归一化名相同 -> 跳过；相似度 ≥0.9 且官网同域（或任一方无官网）-> 跳过；名称里的地域/赛区标记（全国/省/赛区/选拔赛…）不同时**不自动合并**，避免把「挑战杯」与「挑战杯省赛」、「世界技能大赛」与「…中国选拔赛」合并。
-
-### 9.5 实施顺序（2026-11-08 更新）
-
-1. ✅ 建候选表 + 84 项目录导入脚本（dry-run 输出 `workspace/roster_preview.json`）；
-2. ⬜ 人工抽 10 条审核 → 入 `competitions`（`sort_order=9999`，首页不曝光）；
-3. ✅ 接赛氪每日 20 条增量（只写候选表）+ 失败/限速监控（每日守卫生效）；
-4. ✅ 审核入口先用 CLI（`review_candidates.py --list/--approve/--reject`），后台待审列表可后续再做；
-5. ⬜ 观察两周：新增有效率、重复率、字段完整率，再决定是否扩量。
-
-### 9.6 已落地实现（2026-11-08 12:36，生产 + 测试各 82 条）
-
-| 项 | 实现 |
+- **`ai_jobs`**（`db.AI_JOBS_DDL`）：`kind / competition_id / trigger / status / attempts / tokens / error / requested_by / request_ip`；关键索引 `UNIQUE(kind, competition_id) WHERE status IN ('queued','running')` → 同赛事同类只有 1 个活跃任务，跨进程/多 worker 都安全。
+- **`competitions` 关键列**：`participants / content_scope / exam_schedule`（详情三卡）、`guide_generated_at / guide_model / guide_prompt_ver / guide_input_hash`、`short_name`、`discover_source / last_checked_at / is_active`。
+- **常量**：`AI_GUIDE_DAILY_LIMIT=8`、`AI_GUIDE_QUEUE_MAX=5`、`AI_GUIDE_FAIL_COOLDOWN_MIN=30`；`image_guard`：`IMAGE_MIN_WIDTH=300`、`IMAGE_MIN_HEIGHT=150`、`IMAGE_MAX_ASPECT=2.6`、`IMAGE_MIN_ASPECT=0.45`、`IMAGE_MAX_BYTES=3MB`。
+- **`saikr_map.json`**：32 条 `competition_id ↔ saikr_contest_id` 静态映射（exact 22 / parent 7 / approx 1 / none 2，`needs_review` 9），带 `saikr_url / saikr_level / match_type / note`。它是**存量映射**，新入库赛事不在其中（见第七节 `no_mapping` 降级）。
+- **`url-map.json`**：`{"赛事id": "通知页URL"}` 覆盖采集入口，当前 5 条（1/2/10/12/13）。
+### 1.3 文件清单
+| 文件 | 一句话职责 |
 |---|---|
-| 建表 | `db.CANDIDATES_DDL`；`init_db(db_path=None)` 自动建表；`ensure_candidates_table()` 只建候选表（不跑全量 schema） |
-| 写入 | `db.add_candidate()`：先查重，再 INSERT；`UNIQUE(source, source_key)` 兜底 |
-| 去重 | `db.normalize_competition_name()` + `db.find_duplicate_candidate()`（候选表 + 主表；审核时可只查主表） |
-| 查询 | `query_candidates(status/source/limit/offset)`、`get_candidate(id)`、`candidate_stats()`、`count_candidates()` |
-| 审核 | `review_candidates.py --list/--approve/--reject`；`db.promote_candidate()` 同事务 INSERT 主表 + 标记 approved |
-| 84 项目录 | `discover_university.py`：文本行/表格、`15、` 换行、`41“大唐杯”` 无分隔符、裸域名补 `http://`、过滤 `年会展示/作品展` |
-| 赛氪 | `discover_saikr.py`：`page=1..2&limit=10&sort=2`，3~5 秒延迟，每日一次守卫，往年届次（>400 天）跳过 |
-| 生产保护 | 默认 `test_crawl.db`；写生产必须 `--apply --allow-production`（审核 CLI 为 `--allow-production`），自动 SQLite backup + `integrity_check` |
-
-**实测计数**：84 项页 -> 解析 84 / 过滤 2 / 缺官网 5 -> 候选 82 -> 新增 62、命中主表 20；赛氪 -> 20 条全部新增。生产/测试各 **82 条 pending**（edu-roster 62 / saikr 20），`norm_name` 与 `source_key` 零重复；主表生产 32/87、测试 33/88 均未动。生产部署后 SHA-256 `8009238456d1304991c698e3773184a63398cf2c74938d34312a16cce9204c02`。**（以上为 12:36 时点；13:00 后生产已 approve 1 / reject 1，新增 id=36，候选变为 80 pending，见第二节快照）**
+| `llm.py` | DeepSeek 封装：`chat()` / `chat_json()`（清洗 + 修复 + 重试）/ `ping()` / `LLMError` |
+| `crawler_news.py` | 新闻获奖采集（单页 / 列表批量 / 自动翻页 / 非获奖过滤 / 未知赛事建占位） |
+| `crawler_competitions.py` | 单赛事采集：正文 + `og:image` 提取、AI 抽字段、upsert、回读验证 |
+| `batch_update_competitions.py` | 存量赛事批量补全：抓官网 → 抽字段 → 只填空；限速/重试/封面闸门 |
+| `merge_test_competitions.py` | 测试库 → 生产库合并（name + `content_hash` 去重，写前备份） |
+| `pipeline_update.py` | 赛氪 + 通知页统一预检/清洗；默认只读，`--apply` 写库，`--from-report` 复用报告 |
+| `enrich_saikr_details.py` | 赛氪详情补充：抓 `content` → 章节抽取 → AI 提纯 → 写三卡；`--backfill` / `--daily-update`；`fill_dates_and_cover()` |
+| `backfill_dates.py` | 主表精确日期补全探测：抽日期 + 逐条核对原文，默认只读，只补 NULL |
+| `backfill_candidates_date.py` | 候选池日期补全：赛氪候选走 `raw_json`（零网络），其余走模型 + 原文核对 |
+| `cleanup_bad_covers.py` | 清理主表垃圾封面（重过 `image_guard`，不合格置 NULL，transient 待复查） |
+| `discover_common.py` | 发现公共层：目标库保护/备份、建候选表、入库循环、去重统计、类别猜测 |
+| `discover_university.py` | 84 项高校竞赛目录页解析（文本行/表格/序号变体），默认 dry-run |
+| `discover_saikr.py` | 赛氪列表前 2 页（≤20 条/天）增量发现，3–5 秒延迟，每日守卫，往年届次跳过 |
+| `review_candidates.py` | 审核 CLI（`--list/--approve/--reject`）：重过封面闸门 + 同事务写主表 + 自动补简称/详情 |
+| `saikr_match.py` | 赛氪「名称 -> contest_id」解析：抓全量列表建本地索引（100/页 × 52 页，1.2s 间隔 ≈80s）+ 归一化相似度匹配；CLI `--build / --query / --stats` |
+| `cleanup_directory_shells.py` | 清理教育部门名录空壳赛事：识别「已通过但详情全空」→ 退回候选 pending（默认 dry-run，`--apply` 写库，已有 awards/收藏的行跳过保护） |
+| `bulk_approve.py` | 批量审核「带精确日期」的 pending 候选（同 `--approve` 逻辑）；`--with-ai` 才补详情 |
+| `promote_admin.py` | 管理员标记：`--list` / `--revoke`，只改 `users.is_admin` |
+| `ai_content.py` | AI 生成核心：v2 攻略 Prompt（注入月份 + 获奖作品、禁编造）、`generate_guide_for()`、`generate_inspiration()`、`guide_input_hash()` |
+| `ai_jobs_runner.py` | 任务编排：单线程池、预算/队列/冷却、`request_guide()`、`run_guide_job` / `run_inspiration_job` |
+| `daily_ai_worker.py` | 每日慢刷：选片、预算熔断、3 天冷却、自动备份、JSON 报告、退出码 0/2/3/4 |
+| `generate_guides.py` | 兼容用的攻略批量 CLI（内部已是 v2 Prompt，`--only-missing / --id`） |
+| `analyzer.py` | 灵感生成唯一实现（`insights` + `ideas`，单条手动），被 `generate_inspiration()` 复用 |
+| `cleanup_orphan_ai.py` | 清理孤儿 `insights/ideas`（`competition_id` 空或悬空），默认 dry-run |
+| `generate_short_names.py` | 批量生成两字简称（AI，默认只补空，`--force` 覆盖） |
+| `short_names.py` | 赛事名 → 两字简称（只算不写库，落库由调用方完成） |
+| `db.py` | 数据层：建表/迁移、CRUD、候选表、ai_jobs 抢占、日期排序 SQL |
+| `models/schemas.py` | Pydantic 模型（列表模型不含长文，详情模型含攻略/三卡/日期） |
+| `routers/competitions.py` | 赛事列表/详情/攻略接口、`_row_to_competition` 字段映射 |
+| `routers/admin.py` | 管理后台接口（候选/反馈），approve 后自动补全 |
+| `routers/auth.py` | 注册/登录/`me`，`UserInfo.is_admin` |
+| `main.py` | FastAPI 入口、CORS、启动时 `db.init_db()` |
+| `security.py` | 口令/JWT/依赖注入（`get_current_user`、`get_current_admin`） |
+| `config.py` | 配置单一读取点（DeepSeek / JWT / CORS / AI 限额） |
+| `migrate_production.py` | 生产库体检 + 备份 + 补列（`TARGET_COLUMNS` 含三卡与 `guide_*`） |
+| `migrate_awards.py` | awards 表幂等补列迁移（只加列不动数据） |
+| `schema_v2.sql` | 全新建库 DDL（图片、比赛时间、采集溯源、上下架、三卡、日期、简称） |
+| `backup_db.py` | 每日备份（crontab 02:30），WAL 安全 + integrity/行数校验 |
+| `verify_crawl.py` | awards 读回校验（拒绝生产库） |
+| `image_guard.py` | 封面闸门（采集/补全/清理共用） |
+| `embedder.py` / `retriever.py` | 检索内核：在线 Embedding API + Chroma 两段检索（索引可重建） |
+| `CLOUD_DEPLOYMENT_GUIDE.md` | 云端部署手册（依赖、迁移、systemd、Nginx、crontab、验收、回滚） |
+| `saikr_map.json` | 赛氪 contest_id 映射（32 条，按 `competition_id`；新赛事走 `saikr_index.json` 名称匹配） |
+| `saikr_index.json` | 赛氪全量赛事名称索引（5164 条，`saikr_match.py --build` 生成，14 天过期自动重建，勿手工编辑） |
+| `test_crawler_units.py` / `test_crawler_boundaries.py` | 单测（19 例：`extract_image_url`、`_normalize_level`）/ 上云边界（20 例：网络异常、残缺 JSON、空网页） |
+| `test_ai_guide.py` | AI 链路：ai_jobs、幂等、409/429、列表瘦身、Prompt、孤儿清理（16 例） |
+| `test_enrich_saikr.py` | 详情补充器（11 例：规范化、防照抄、双模式、审核联动） |
+| `test_auth_isolation.py` | 账号隔离回归（10 例） |
+| `test_api_boundaries.py` / `test_image_guard.py` / `test_embedder.py` | 接口边界 / 封面闸门 / 向量层 |
+### 1.4 目录与产物
+- `workspace/`：预检报告与截图。常看 `pipeline_report.json/.md`（32 条赛氪预检 + 16 条报名冲突）、`pipeline_apply_*.json`、`saikr_catalog.json`（5172 条目录缓存 3.9 MB，**别重复拉**）、`batch_competitions_*.json`、`ai_worker_*.json`、`cover-*.png`、`roster/scnu/saikr_preview.json`、`saikr_daily_state.json`。**能复用报告就别再联网烧额度。**
+- 备份：本地 `backend/*.db.bak-*`，云端 `backups/`。每次写库前自动生成、永不覆盖。恢复：**先删 `-wal/-shm`**，再 `Copy-Item <备份> .\competitions.db -Force`。
 
 ---
-
-## 十、AI 内容生成与自动化（2026-11-08 落地）
-
-### 10.1 旧脚本的真实定位（调研结论，勿再误解）
-
-| 脚本 | 触发 | 写入 | 结论 |
-|---|---|---|---|
-| `analyzer.py` | **单条手动**，`--competition-id` 必填，无批量 | `insights`（experience/trend/gap）+ `ideas`，**不碰** `competitions` | 仍是灵感生成的唯一实现；`ai_content.generate_inspiration()` 复用它的 `generate()` |
-| `generate_guides.py` | 旧版全表扫描；**已重写**为 `ai_content` 的批量 CLI | `competitions.full_process_guide`，**不碰** `ideas` | 老命令可用；**日常自动生成改用 `daily_ai_worker.py`** |
-
-两者的旧版都写死 `db.DB_PATH`、无备份/生产库闸门/预算/任务状态，**不能直接挂 cron**；现在已由新链路接管。
-
-### 10.2 数据模型
-
-`ai_jobs`（2026-11-08 上生产，`db.AI_JOBS_DDL`）：
-
-| 列 | 说明 |
-|---|---|
-| kind / competition_id | `guide` / `inspiration` + 赛事 ID |
-| trigger | `on_demand` / `daily` / `manual` |
-| status | `queued → running → done / failed / skipped` |
-| attempts / tokens / error | 重试次数 / token 记账 / 失败原因（≤500 字，不回传前端） |
-| requested_by / request_ip | 触发用户（匿名预留） |
-
-关键索引：`UNIQUE(kind, competition_id) WHERE status IN ('queued','running')` —— 同一赛事同类任务同时只能有 1 个活跃任务，**跨进程/跨 worker 都安全**。
-
-`competitions` 新增 4 列：`guide_generated_at / guide_model / guide_prompt_ver / guide_input_hash`（写入在 `db.save_generated_guide()`）。
-
-### 10.3 按需接口
-
-| 场景 | 状态码 | 返回 |
-|---|---|---|
-| 未登录 | 401 | 由 `get_current_user` 统一处理 |
-| 已有攻略 | 200 | `{status: ready, guide_length}` |
-| 首次触发 / 已在跑 | 202 | `{status: queued|running, job_id, poll_after_ms}`（幂等，同一 job） |
-| 失败冷却（30 分钟） | 409 | `{status: failed, reason: cooldown}` + `Retry-After` |
-| 日预算 / 队列满 | 429 | `{status: throttled, reason: daily_budget|queue_full}` + `Retry-After` |
-| 赛事不存在 | 404 | — |
-
-- 执行体：`ai_jobs_runner._EXECUTOR`（单线程）→ `ai_content.generate_guide_for()`；进程内串行，避免一次点开多个详情页同时烧钱。
-- **竞态修复（实测踩过）**：`claim_ai_job` 用 `BEGIN IMMEDIATE` 拿写锁后再判“攻略是否为空”，否则「读空 → 另一线程写完 → 插入新任务」会产生一个注定跳过的任务。
-- 僵尸回收：`running` 超过 15 分钟 → 下一次抢占标 `failed`（`stale`）。
-- 前端：`CompetitionDetailView` 空攻略 → 「✨ 生成 AI 攻略」；未登录先弹登录；生成中骨架屏；3s×20 → 10s×18 轮询；成功自动刷新详情。
-
-### 10.4 定时慢刷
-
-```bash
-python daily_ai_worker.py --db-path competitions.db --apply --allow-production \
-  --limit 4 --idea-limit 2 --budget-tokens 300000 --cooldown-days 3
-```
-
-- 选片口径（`db.select_guide_candidates`）：上架 + `level='national'` + 有官网 + 攻略为空 + 无活跃任务 + 失败冷却 3 天；排序 `获奖数 DESC → sort_order（NULL 最后）→ id`。
-- 灵感（`db.select_inspiration_candidates`）：同口径 + 获奖 ≥ `--min-awards`(3) + insights<3 或 ideas<4。
-- 每条先 `claim` 再执行；token 达到 `--budget-tokens` 立即停；报告写 `workspace/ai_worker_<时间戳>.json`。
-- 退出码：`0` 全绿 / `2` 有失败 / `3` 预算在开始前耗尽 / `4` 参数或目标库错误。
-- 一次性补齐 17 条空攻略约 7 万 tokens；5 条 ≥3 获奖的灵感约 8–13.5 万；跑完自动空转（0 成本）。
-
-### 10.5 实测成本（deepseek-flash，含 reasoning）
-
-| 任务 | 实测 |
-|---|---|
-| 攻略 id=21 | 2104 字，3378 tokens，约 19s |
-| 攻略 id=12 | 2543 字，2945 tokens，约 16s |
-| 灵感（未真机跑） | 预估 2.5–3 万 tokens/条（3 insight + 2 idea 批） |
-
-### 10.6 已执行的生产操作（可回溯）
-
-| 时间 | 操作 | 备份 / 结果 |
-|---|---|---|
-| 13:09 前 | `migrate_production.py --apply` | 备份 `competitions.db.bak`（SHA `db77ac…`）；建 `ai_jobs` + 4 列；迁移后 SHA `ced3268…` |
-| 13:09 | `cleanup_orphan_ai.py --apply --allow-production` | 备份 `competitions.db.bak-20261108-130926`；删 insights 10 / ideas 12；主表 33/87 不变 |
-| 13:15 | 复核 | SHA `3af3af9c…`；`integrity_check=ok`；候选 80/1/1；攻略 7；ai_jobs 0 |
-
-### 10.7 验证清单（本轮已跑）
-
+## 二、运行命令
+### 2.1 从生产库复制测试库
 ```powershell
-.\venv\Scripts\python.exe -m pytest test_ai_guide.py test_api_boundaries.py test_crawler_units.py -q
-# 107 passed, 2 skipped
-.\venv\Scripts\python.exe -m pyflakes ai_content.py ai_jobs_runner.py daily_ai_worker.py generate_guides.py cleanup_orphan_ai.py db.py routers\competitions.py
-# 无输出（干净）
-cd ..\frontend; npm.cmd run build   # 7.36s / 115 modules
+cd D:\agent-lab\KuAo-Platform\backend
+# 没有后端服务在写库时可直接复制
+Copy-Item .\competitions.db .\test_crawl.db -Force
 ```
-
-### 10.8 故障排查顺序
-
-1. `SELECT id,kind,status,attempts,error,created_at FROM ai_jobs ORDER BY id DESC LIMIT 10;` —— 先看状态与错误。
-2. 前端一直“生成中”：查 `get_guide_state()` 的 `status`；若 `running` 且 `started_at` 很旧，等 15 分钟租约回收或手工 `UPDATE ai_jobs SET status='failed'`。
-3. 429 `daily_budget`：当天任务数已到 `AI_GUIDE_DAILY_LIMIT`（默认 8），第二天零点自动恢复；`queue_full` 等任务跑完即可。
-4. 生成质量：抽检 `full_process_guide` 是否出现库里没有的具体日期；若有，回滚该条并按 `CRAWLER_HANDOVER.md` 第四节第 11 条记录，必要时调 Prompt。
-5. 接口 401：`Authorization: Bearer <token>` 是否带上；token 失效会被拦截器清掉。
-
----
-
-## 十一、本轮交付清单（2026-11-08 13:15）
-
-| 类型 | 文件 |
-|---|---|
-| 新增 | `ai_content.py`、`ai_jobs_runner.py`、`daily_ai_worker.py`、`cleanup_orphan_ai.py`、`test_ai_guide.py`、`AI_AUTOMATION_PLAN.md` |
-| 修改 | `db.py`、`routers/competitions.py`、`models/schemas.py`、`config.py`、`generate_guides.py`、`migrate_production.py`、`frontend/src/services/api.js`、`frontend/src/views/CompetitionDetailView.vue` |
-| 数据 | 生产库 `ai_jobs` + 4 列；孤儿 insights/ideas 清零；测试库真机 2 篇攻略 |
-| 未做（下一步） | 服务器实机部署、crontab 实机挂载、17 条空攻略的正式回填（等上云后由 worker 分批跑） |
-
----
-
-## 十二、上云前安全检查 / 边界测试 / 部署手册（2026-11-08）
-
-### 12.1 Git 安全存档
-
-- `.gitignore` 已补：`*.db.bak` / `*.db.bak-*` / `*.db-wal` / `*.db-shm` / `workspace/` / `.pytest_cache/` / `.ruff_cache/`。
-- 已执行 `git rm --cached backend/competitions.db.bak-20261106-115044`，停止跟踪遗留的本地备份库。
-  - 注意：该文件仍存在于旧提交历史（`41dde0b`）中；本轮只停止跟踪，**未重写历史**。若确认历史里含敏感数据，再用 `git filter-repo` 清理并强推。
-- 敏感信息扫描：
-  - 源码/文档无 `sk-*` 硬编码（`git grep` 只命中 README 占位符与 `config.py` 的 dev JWT 占位常量）；
-  - `.env` 未被跟踪；
-  - `config.py` 的 `_DEV_JWT_SECRET` 只是 fail-fast 哨兵，不是真实密钥。
-- 本地存档 commit：**`c64cb8ae6caa14364326ba8e4ca8b308aba50afa`**（`chore: 上云前安全存档…`）。打完后 `git status` 干净。
-- 遗留（未动，避免影响 RAG 首启）：`chroma_db/` 仍被 Git 跟踪（约 5 MB，可重建索引）。后续可 `git rm -r --cached chroma_db` + 加入 `.gitignore`，并在部署时用 `retriever.sync_awards_to_chroma(rebuild=True)` 重建。
-
-### 12.2 爬虫上云边界测试（20 例全绿）
-
-新增 `test_crawler_boundaries.py`，全部离线（不连网、不写真实库、不调模型），覆盖：
-
-| 场景 | 用例 | 断言 |
-|---|---|---|
-| `requests.Timeout` / `ConnectionError` | `test_fetch_html_wraps_network_error_as_crawl_error`（2 参数） | 按 `retries` 重试；最终包装成 `CrawlError`，信息含底层原因 |
-| 单条网络失败不中断批量 | `test_batch_loop_survives_timeout_and_connection_error` | 3 条候选（2 失败 / 1 正常）→ `rc=0`、`attempted=3`、`failed=2`，正常条继续处理 |
-| 残缺 / 非标准 JSON | `test_safe_json_truncated_json_falls_back_without_raising`、`test_safe_json_repairs_truncated_and_nonstandard_json` | 修不了返回 fallback（不抛异常）；截断对象/数组/代码围栏能修复 |
-| 任意垃圾输入 | `test_safe_json_never_raises_for_garbage`（8 参数） | 默认模式永不抛异常；`strict=True` 才抛 `LLMError` |
-| 空网页 | `test_extract_page_empty_html_raises_crawl_error_not_crash`（4 参数） | 空串/空 HTML/空白 body/空容器 → 可预期 `CrawlError`，不是 `AttributeError` |
-| 清洗边界 | `test_clean_text_handles_none_and_blank` | `None` / 空白 / 零宽字符 → `""` |
-| 空网页不中断批量 | `test_batch_loop_survives_empty_page` | 空页记 `crawl/llm` 失败，后续正常条继续 |
-
-运行结果：
-
+后端在跑（WAL 未 checkpoint）时改用 SQLite backup API（`backup_db.py`），避免拿到不一致快照。
+### 2.2 新闻单页：先 dry-run，再真实写测试库
 ```powershell
-.\venv\Scripts\python.exe -m pytest test_crawler_boundaries.py -q
-# 20 passed in 1.84s
-
-.\venv\Scripts\python.exe -m pytest -q
-# 127 passed, 2 skipped, 3 warnings in 12.19s
+# 只看抽取结果，不写库
+.\venv\Scripts\python.exe crawler_news.py `
+  --db-path .\test_crawl.db `
+  --dry-run `
+  --show-raw `
+  --url "https://cise.hunnu.edu.cn/info/1165/7066.htm"
+# 去掉 --dry-run 即真实写测试库
+.\venv\Scripts\python.exe crawler_news.py `
+  --db-path .\test_crawl.db `
+  --url "https://cise.hunnu.edu.cn/info/1165/7066.htm"
 ```
-
-### 12.3 每日备份脚本 `backup_db.py`
-
-- 用 `sqlite3.Connection.backup()`（不是 `cp`），把一个**包含已提交 WAL** 的一致性快照写成单文件；备份文件 `PRAGMA journal_mode=DELETE`，恢复时不依赖 `-wal/-shm`。
-- 备份后自动 `PRAGMA integrity_check` + 统计 `competitions / awards / competition_candidates / ai_jobs` 行数；支持 `--keep-days` / `--keep-count` / `--label` / `--json`。
-- 实测（WAL 未 checkpoint 写入一条新数据后立刻备份）：备份内行数包含该条，`integrity=ok`，备份旁无 `-wal`。
-- 对生产库只读冒烟：`competitions=33 / awards=87 / competition_candidates=82 / ai_jobs=0`，`integrity=ok`。
-
-```bash
-./venv/bin/python backup_db.py --db competitions.db --backup-dir backups --keep-days 30 --label daily
-```
-
-> 备份文件 SHA 与线上库 SHA 不同是正常的（页布局/日志模式被重写）；验收看 `integrity_check` + 行数。
-
-### 12.4 《云端部署手册》
-
-文件：**`CLOUD_DEPLOYMENT_GUIDE.md`**（约 1410 行），包含：
-
-1. 部署蓝图、目录/端口规划、维护窗口；
-2. 服务器初始化（时区、用户、Swap、UFW + 阿里云安全组）；
-3. 依赖安装（Ubuntu 22.04 deadsnakes / 24.04 默认 Python、venv、Node 可选）；
-4. 代码拉取（HTTPS / Deploy Key）与 `.env` 模板、JWT 生成、权限；
-5. **数据库迁移**：本地 `sqlite3.backup()` 快照 → SHA/行数校验 → scp → 服务器落库 → `migrate_production.py` 体检/迁移 → WAL 问答 → 恢复与回滚；
-6. systemd 服务（`--workers 1`、`127.0.0.1:8000`、加固项）；
-7. 前端 `dist` 上传 + Nginx（`/api` 反代、SPA fallback、HTTPS/certbot、混合内容提醒）；
-8. **crontab 链**：02:30 备份 → 03:00 新闻（周一/四）→ 04:10 赛氪候选 → 04:40 AI 慢刷 → 05:20 周度补全 → 05:40 日志清理 → 05:50 备份清理；含 `flock`、`%` 转义、时区、失败告警、常见坑；另附可选 OSS 异地备份。
-9. 上线验收清单、回滚预案、故障排查表；
-10. 附录：`.env`、校验 SQL、crontab、systemd/Nginx 路径、本地快照命令。
-
-**已于 2026-11-08 在服务器执行（原地升级，见 12.5）**；首次部署按第 1~8 节顺序完成，回滚与后续维护以 12.5 记录为准。
-
-### 12.5 上云记录（2026-11-08 已完成）
-
-| 项 | 值 |
-|---|---|
-| 发布 commit | `81e768633e420163982bda692239e8dd590760af`（`test+docs: 上云边界测试、WAL 安全备份脚本与云端部署手册`） |
-| 部署时间 | 2026-11-08 14:33（切换完成）/ 15:29（cron + 验收完成，Asia/Shanghai） |
-| 服务器 | 阿里云 Ubuntu 24.04.2 LTS · `112.126.90.252` · 1.6 GiB RAM（+2 GiB Swap） |
-| 部署方式 | **原地升级** `/root/KuAo`：未按手册新建 `/opt/kuao` + `kuao` 用户；systemd 以 `root` 运行（与既有部署一致） |
-| 迁移后 DB SHA-256 | `297e17df05ffda4f63ba14e0136599a7f9575ea6c38816471699b4e2b859b486` |
-| 迁移后行数 | competitions **33** / awards **87** / candidates **82** / guides **7** / ai_jobs **0**（`integrity_check=ok`） |
-| 服务 | systemd `kuao-backend`（`127.0.0.1:8000`，`--workers 1`）+ Nginx `:80` 反代 `/api/`；前端静态目录 `/var/www/html` |
-| 每日备份路径 | `/root/KuAo/backend/backups/`（`backup_db.py`，保留 30 天） |
-| 切换前备份 | `/root/kuao-backups/20261108-143324/`（旧库 / `.env` / nginx 配置 / 旧前端） |
-| crontab 生效时间 | 2026-11-08 15:29 CST；5 条任务：02:30 备份 / 04:10 候选 / 04:40 AI / 周日 05:20 补全 / 05:40+05:50 清理 |
-| 新闻采集 | **未挂**：`LIST_URL` 待定；确定后单独加一条（模板见手册 7.4） |
-| 首次验收 | 用户人工验收：crontab / systemd / 端口 / 健康 / 行数 / 权限 / 时区全部通过 |
-| 回滚 | `bash /root/kuao-rollback.sh 20261108-143324`；代码回退 `git checkout 3ee9dd5`；库回退用上述备份目录的 `competitions.db` |
-
-> 与手册 0.2 的差异：主库仍在 `/root/KuAo/backend/competitions.db`，未迁到 `/opt/kuao`；因此所有 cron、systemd、备份路径都按 `/root/KuAo` 配置。后续若迁移到 `/opt/kuao`，必须同步改 systemd `WorkingDirectory`、cron 的 `cd`、日志/备份路径，并先停服务、删 `-wal/-shm` 再移库。
-
----
-
-## 十三、赛氪详情补充器（2026-11-08，本地测试库已跑通）
-
-> **当前进展（2026-11-08 20:05 重构后）**：已引入 AI 提纯（防版权）、`--backfill` / `--daily-update` 双模式，并接到 `review_candidates.approve`；本地测试库真机验证通过（1 条 / 483–540 tokens）。
-
-**核心原则（2026-11-08 20:05 定，勿推翻）**
-
-- 赛氪原始文本**绝不写库**：每次抓取后必须调用一次 `llm.chat_json`，把需要补的字段一起改写为「1. 短句」列表（每条 ≤50 字、≤8 条）。
-- AI 失败、输出为空、或与原文连续重合 ≥40 字 → 该字段保留 NULL；**不得回落写原文、不得编造**。
-- `--no-llm` 只允许 dry-run；`--apply --no-llm` 直接拒绝。
-- 仍只补 NULL/空串；已有值一律保留；生产库仍 `--apply --allow-production` + 写前自动备份。
-
-**双模式**
-
-| 模式 | 选片口径 |
-|---|---|
-| `--backfill`（默认） | 目标库所有三字段有空值的赛事（存量 33 条） |
-| `--daily-update` | 仅 `created_at` 在最近 `--days`（默认 7）天内、且有空字段的赛事 |
-
-**review_candidates.approve 自动补全**
-
-- `promote_candidate()` 成功后自动调用 `enrich_saikr_details.enrich_competition()`：
-  - saikr 候选直接取 `source_key = saikr:<contest_id>`；
-  - 其它来源按 `saikr_map.json` / 名称相似度兜底；
-  - 只写空字段；失败只告警，不回滚已入库赛事；`--skip-enrich` 可离线跳过。
-
-**实测（`test_crawl.db`，2026-11-08 20:02）**
-
-| 项 | 结果 |
-|---|---|
-| id=1 真机 | 赛氪 contest_id=59836 → AI 提纯 `content_scope` 为 3 条短句（82 字 / 540 tokens；首次 7 条 / 483 tokens）→ 写库成功 |
-| 备份 | `test_crawl.db.bak-20261108-200526`（最新一次真机） |
-| 测试 | `pytest test_enrich_saikr.py -q` → 11 passed；全量 `pytest -q` → 138 passed / 2 skipped |
-| 预览 | `workspace/saikr_enrich_ai_test3.json` |
-| 每日模式冒烟 | 33 条中仅 1 条在 7 天内、17 条窗口外、2 条无映射，符合预期 |
-
-**生产同步（2026-11-08 定稿；按顺序执行，生产库当前仍未迁移/未写入）**
-
-> 前置：`cd D:\agent-lab\KuAo-Platform\backend`；停掉本地 uvicorn，避免 SQLite 写锁竞争。云端覆盖是单向操作，4.0 行数对比异常时立即停止。
-
-**① 本地生产库迁移（补三列）**
-
+### 2.3 新闻列表：批量抓取 + 自动翻页
 ```powershell
-.\venv\Scripts\python.exe migrate_production.py --db-path .\competitions.db
-.\venv\Scripts\python.exe migrate_production.py --db-path .\competitions.db --apply
-
-.\venv\Scripts\python.exe -c "import sqlite3; c=sqlite3.connect('competitions.db'); print('cols=', [r[1] for r in c.execute('PRAGMA table_info(competitions)') if r[1] in ('participants','content_scope','exam_schedule')]); print('integrity=', c.execute('PRAGMA integrity_check').fetchone()[0]); print('competitions=', c.execute('SELECT COUNT(*) FROM competitions').fetchone()[0]); c.close()"
+.\venv\Scripts\python.exe crawler_news.py `
+  --list-url "https://cise.hunnu.edu.cn/news_more_list.jsp?urltype=tree.TreeTempUrl&wbtreeid=1165&a1070851t=43&a1070851c=10&a1070851p=12" `
+  --db-path .\test_crawl.db `
+  --max-pages 4 `
+  --max-items 10 `
+  --report .\workspace\batch_report.json
 ```
-
-预期：三列齐全、`integrity=ok`、`competitions=33`；备份为 `competitions.db.bak`（已有则自动轮转）。
-
-**② 本地生产库存量回填**
-
+显式翻页模板：
 ```powershell
+.\venv\Scripts\python.exe crawler_news.py `
+  --list-url "https://x.edu/list" `
+  --page-url "https://x.edu/list?p={page}" `
+  --pages 1-3 `
+  --db-path .\test_crawl.db `
+  --max-items 8
+```
+### 2.4 赛事采集
+```powershell
+# 插入新赛事
+.\venv\Scripts\python.exe crawler_competitions.py `
+  --url "https://www.sohu.com/a/1091484812_122595727" `
+  --db-path .\test_crawl.db `
+  --save-json .\workspace\competition_insert_edu_robot.json
+# 更新指定占位赛事
+.\venv\Scripts\python.exe crawler_competitions.py `
+  --url "http://smve.cqjtu.edu.cn/info/1037/6028.htm" `
+  --db-path .\test_crawl.db `
+  --competition-id 34 `
+  --save-json .\workspace\competition_update_robot.json
+# 只抽取不写库
+.\venv\Scripts\python.exe crawler_competitions.py `
+  --url "https://www.sohu.com/a/1091484812_122595727" `
+  --db-path .\test_crawl.db `
+  --dry-run `
+  --show-raw
+```
+### 2.5 awards 读回校验
+```powershell
+.\venv\Scripts\python.exe verify_crawl.py `
+  --db-path .\test_crawl.db `
+  --award-id 86 87 88 89
+```
+### 2.6 语法/编译检查（不连网、不写库）
+```powershell
+.\venv\Scripts\python.exe -m py_compile crawler_news.py crawler_competitions.py db.py models\schemas.py routers\competitions.py verify_crawl.py
+.\venv\Scripts\python.exe -m pytest test_crawler_units.py -q     # 19 passed
+.\venv\Scripts\python.exe -m pyflakes crawler_news.py crawler_competitions.py db.py
+```
+### 2.7 批量补全：演练（不写库，但花大模型额度）
+```powershell
+# 单条看效果
+.\venv\Scripts\python.exe batch_update_competitions.py --ids 10 --allow-production
+# 5 条通知页（用 url-map 覆盖入口）
+.\venv\Scripts\python.exe batch_update_competitions.py `
+  --ids 1,2,10,12,13 --url-map .\url-map.json --allow-production --show-raw
+```
+### 2.8 批量补全：真实写库（自动备份）
+```powershell
+# 验证 Prompt 修复后重跑这 5 条
+.\venv\Scripts\python.exe batch_update_competitions.py `
+  --ids 1,2,10,12,13 --url-map .\url-map.json --apply --allow-production
+# 扫尾：只跑"比赛月份为空"的赛事
+.\venv\Scripts\python.exe batch_update_competitions.py `
+  --filter months --limit 22 --apply --allow-production
+# 只跑封面为空的（注意：通知页几乎无图，多数会因闸门不写）
+.\venv\Scripts\python.exe batch_update_competitions.py --filter image --apply --allow-production
+```
+> 每次 `--apply` 先自动备份 `competitions.db.bak-<时间戳>`，再输出汇总 + `workspace/batch_competitions_*.json`。
+> `--ids` 可以绕开 `--filter`，但**仍然只填空**；要改已有值只能手工 SQL。
+### 2.9 测试库 → 生产库合并 / 生产库体检（一般用不到，后端启动会自动 init_db）
+```powershell
+# 演练
+.\venv\Scripts\python.exe merge_test_competitions.py
+# 真正合并（自动备份）
+.\venv\Scripts\python.exe merge_test_competitions.py --apply
+# 连占位赛事一起合并（默认跳过 category='待确认'）
+.\venv\Scripts\python.exe merge_test_competitions.py --apply --include-placeholders
+# 生产库体检（只读）/ 补列（备份 + 补列）
+.\venv\Scripts\python.exe migrate_production.py            # 只读体检
+.\venv\Scripts\python.exe migrate_production.py --apply    # 备份 + 补列
+```
+### 2.10 赛氪映射 + 统一清洗（默认只读，`--apply` 写库）
+```powershell
+# 全量 32 条预检（约 10 分钟；会花大模型额度；不写库）
+.\venv\Scripts\python.exe pipeline_update.py `
+  --db-path .\test_crawl.db `
+  --saikr-delay 3,5 --notice-delay 5,10
+# 只跑指定赛事
+.\venv\Scripts\python.exe pipeline_update.py --ids 3,6,8 --db-path .\test_crawl.db
+# 只跑赛氪、不抓通知页（快速看封面/报名）
+.\venv\Scripts\python.exe pipeline_update.py --skip-notice --db-path .\test_crawl.db
+# 复用已保存的预检报告（不联网、不调模型）先看写入计划
+.\venv\Scripts\python.exe pipeline_update.py `
+  --from-report .\workspace\pipeline_report_prod.json --db-path .\competitions.db
+# 真正写生产库（自动备份 + 生产库拦截 + 只填 NULL + 封面复检）
+.\venv\Scripts\python.exe pipeline_update.py `
+  --from-report .\workspace\pipeline_report_prod.json `
+  --db-path .\competitions.db --apply --allow-production
+```
+- 预检报告写 `workspace/pipeline_report.json`；生产基线对比见 `pipeline_report_prod.json` 与 `pipeline_report.md`。
+- `--apply` 前打印「将写 / 将跳过」清单并自动备份，写后输出覆盖率、SHA-256、`workspace/pipeline_apply_<时间戳>.json`。
+- 不带 `--from-report` 时 `--apply` 会重新联网 + 调模型。**补数量验证优先复用报告。**
+### 2.11 新赛事发现：候选表 POC（默认 dry-run）
+```powershell
+# ① 84 项目录（默认山东农业工程学院；不写库，只出预览）
+.\venv\Scripts\python.exe discover_university.py --db-path .\test_crawl.db
+# 换华南师大页面（同一套解析）
+.\venv\Scripts\python.exe discover_university.py `
+  --url "http://aol.scnu.edu.cn/a/20241021/899.html" `
+  --preview scnu_preview.json --db-path .\test_crawl.db
+# 真正写候选表（自动建 competition_candidates）
+.\venv\Scripts\python.exe discover_university.py --db-path .\test_crawl.db --apply
+# ② 赛氪前 2 页 / 20 条（不写库）
+.\venv\Scripts\python.exe discover_saikr.py --db-path .\test_crawl.db
+# 真正写候选表；当天第二次会被守卫拦截，需 --force 才重跑
+.\venv\Scripts\python.exe discover_saikr.py --db-path .\test_crawl.db --apply
+.\venv\Scripts\python.exe discover_saikr.py --db-path .\test_crawl.db --apply --force
+```
+- 预览：`workspace/roster_preview.json`、`workspace/scnu_preview.json`、`workspace/saikr_preview.json`；每日守卫状态在 `workspace/saikr_daily_state.json`（仅 `--apply` 成功后写）。
+- 候选表统计（只读）：
+```powershell
+.\venv\Scripts\python.exe -c "import db; print(db.candidate_stats('test_crawl.db'))"
+```
+### 2.12 候选审核：候选 → 主表
+```powershell
+# 列出待审（ID / 来源 / 级别 / 名称）
+.\venv\Scripts\python.exe review_candidates.py --list --db-path .\test_crawl.db
+.\venv\Scripts\python.exe review_candidates.py --list --db-path .\competitions.db --limit 50
+# 通过：先查主表重名 -> 封面重新过 check_image -> 同事务写主表 + 标记 approved
+.\venv\Scripts\python.exe review_candidates.py --approve 1 --db-path .\test_crawl.db
+# 拒绝：只改候选状态，不动主表
+.\venv\Scripts\python.exe review_candidates.py --reject 2 --db-path .\test_crawl.db
+# 生产库（写前自动备份 + integrity_check；必须 --allow-production）
+.\venv\Scripts\python.exe review_candidates.py `
+  --approve 1 --db-path .\competitions.db --allow-production
+```
+- `--approve`：候选必须 `pending`；主表已有同名/高相似 → 拒绝；封面不合格 → 仍入库但 `image_url=NULL`；新赛事固定 `sort_order=9999`；成功后自动补两字简称 + 赛氪详情/日期/封面（失败只告警，不回滚），离线可加 `--skip-enrich`。
+- `--reject`：只写 `status='rejected'` 与 `reviewed_at`。
+- 批量（同逻辑，只处理带精确日期的 pending）：
+```powershell
+.\venv\Scripts\python.exe bulk_approve.py --dry-run
+.\venv\Scripts\python.exe bulk_approve.py `
+  --db-path .\competitions.db --allow-production
+```
+### 2.13 详情补充 / 日期补全 / 简称 / 封面清理
+```powershell
+# 赛氪详情：存量回填（AI 提纯，约 25 次 LLM，5–10 分钟）/ 每日增量（只碰最近 7 天入库）
 .\venv\Scripts\python.exe enrich_saikr_details.py --backfill --apply --allow-production --db-path .\competitions.db --preview saikr_enrich_prod_backfill.json
-
-.\venv\Scripts\python.exe -c "import sqlite3; c=sqlite3.connect('competitions.db'); print('filled=', c.execute('SELECT SUM(length(participants)>0), SUM(length(content_scope)>0), SUM(length(exam_schedule)>0) FROM competitions').fetchone()); c.close()"
+.\venv\Scripts\python.exe enrich_saikr_details.py --daily-update --apply --allow-production --db-path .\competitions.db
+# 精确日期：先探测（不写库），再加 --apply 只补 NULL
+.\venv\Scripts\python.exe backfill_dates.py --limit 5
+.\venv\Scripts\python.exe backfill_dates.py --ids 13,12,2,1,35
+.\venv\Scripts\python.exe backfill_dates.py --limit 5 --apply --allow-production
+# 候选池日期（赛氪候选走 raw_json，零网络）/ 两字简称（AI，只补空）/ 垃圾封面清理
+.\venv\Scripts\python.exe backfill_candidates_date.py --apply
+.\venv\Scripts\python.exe generate_short_names.py --db-path .\competitions.db --allow-production
+.\venv\Scripts\python.exe cleanup_bad_covers.py --db-path .\competitions.db --allow-production --apply
 ```
-
-- 约 25 次 LLM、5–10 分钟；写前自动备份 `competitions.db.bak-<时间戳>`。
-- 3 条无映射 / 5 条往年届次 / 页面无对应章节的会保留 NULL，属设计行为。
-- 退出码 1 表示有条目失败：**原命令重跑**即可，已填字段自动跳过。
-
-**③ 生成本地快照并上传**
-
+> `--apply` 才有写动作，写前都自动备份；已有值一律保留。`enrich_saikr_details.py` 退出码 1 表示有条目失败，**原命令重跑**即可，已填字段自动跳过。3 条无映射 / 5 条往年届次 / 页面无对应章节的保持 NULL，属设计行为。
+### 2.14 AI 攻略 / 灵感
 ```powershell
-.\venv\Scripts\python.exe backup_db.py --db .\competitions.db --backup-dir .\backups --label pre-cloud-sync --keep-days 30
-
-$snap = (Get-ChildItem .\backups\competitions.db.bak-*-pre-cloud-sync | Sort-Object LastWriteTime -Descending | Select-Object -First 1).FullName
-if (-not $snap) { throw "未找到快照" }
-Write-Output "SNAPSHOT=$snap"
-Write-Output ("SHA256=" + (Get-FileHash $snap -Algorithm SHA256).Hash.ToLower())
-scp $snap root@112.126.90.252:/tmp/competitions.db.sync
+# ① 每日慢刷演练（不写库、不调模型，只看候选与预估 token）
+.\venv\Scripts\python.exe daily_ai_worker.py --db-path .\competitions.db
+# ② 测试库真跑（2 篇攻略 + 1 条灵感；会消耗模型额度，约 3~30K tokens）
+.\venv\Scripts\python.exe daily_ai_worker.py `
+  --db-path .\test_crawl.db --limit 2 --idea-limit 1 --apply
+# ③ 生产库（cron 用；自动备份 + 生产库闸门）
+.\venv\Scripts\python.exe daily_ai_worker.py `
+  --db-path .\competitions.db --apply --allow-production `
+  --limit 4 --idea-limit 2 --budget-tokens 300000
+# ④ 人工单条补跑 / 重刷（兼容旧 CLI，内部已是 v2 Prompt）
+.\venv\Scripts\python.exe generate_guides.py --only-missing --db-path .\test_crawl.db
+.\venv\Scripts\python.exe generate_guides.py --id 21 --db-path .\test_crawl.db --dry-run
+.\venv\Scripts\python.exe generate_guides.py --id 21 --db-path .\competitions.db --allow-production
 ```
-
-**④ 云端覆盖（必须先停后端）**
-
-```bash
-ssh root@112.126.90.252
+- 按需接口（必须登录，`Authorization: Bearer <token>`）：
+  - `POST /api/competitions/{id}/generate_guide` → 202 `{status: queued, job_id, poll_after_ms}`；已有攻略 200；失败冷却 409；预算/队列 429；未登录 401；赛事不存在 404。
+  - `GET  /api/competitions/{id}/generate_guide` → `{status, job_id, attempts, guide_length, generated_at}`。
+- 详情接口返回 `full_process_guide` + `guide_status` + `guide_generated_at`；**列表接口不返回长文**。
+- 报告：`workspace/ai_worker_<时间戳>.json`；失败原因在 `ai_jobs.error`（不回传前端）。
+### 2.15 孤儿 AI 数据清理（一次性，已执行）
+```powershell
+# 只统计（默认 dry-run）
+.\venv\Scripts\python.exe cleanup_orphan_ai.py --db-path .\competitions.db
+# 真正删除（自动备份；生产库必须 --allow-production）
+.\venv\Scripts\python.exe cleanup_orphan_ai.py `
+  --db-path .\competitions.db --apply --allow-production
 ```
-
-```bash
-set -euo pipefail
-cd /root/KuAo/backend
-TS=$(date +%Y%m%d-%H%M%S)
-
-# 4.0 覆盖前先对比云端行数；与本地快照不一致就停下
-./venv/bin/python - <<'PY'
-import sqlite3
-c = sqlite3.connect('competitions.db')
-for t in ('competitions', 'awards', 'competition_candidates', 'ai_jobs'):
-    print(t, c.execute('SELECT COUNT(*) FROM %s' % t).fetchone()[0])
-c.close()
-PY
-
-# 4.1 停服务
-systemctl stop kuao-backend
-
-# 4.2 云端当前库备份（WAL 安全 + integrity_check）
-./venv/bin/python backup_db.py --db competitions.db --backup-dir backups --label pre-db-sync --keep-days 30
-
-# 4.3 校验上传文件并覆盖；覆盖后必须删旧 -wal/-shm
-sha256sum /tmp/competitions.db.sync
-install -m 644 /tmp/competitions.db.sync competitions.db
-rm -f competitions.db-wal competitions.db-shm
-
-# 4.4 校验
-./venv/bin/python - <<'PY'
-import sqlite3
-c = sqlite3.connect('competitions.db')
-print('integrity=', c.execute('PRAGMA integrity_check').fetchone()[0])
-for t in ('competitions', 'awards', 'competition_candidates', 'ai_jobs'):
-    print(t, c.execute('SELECT COUNT(*) FROM %s' % t).fetchone()[0])
-print('detail_filled=', c.execute(
-    'SELECT SUM(length(participants)>0), SUM(length(content_scope)>0), '
-    'SUM(length(exam_schedule)>0) FROM competitions').fetchone())
-c.close()
-PY
-
-# 4.5 重启 + 验收
-systemctl start kuao-backend
-sleep 2
-systemctl is-active kuao-backend
-curl -fsS http://127.0.0.1:8000/api/health; echo
-curl -fsS http://127.0.0.1:8000/api/competitions/1 | head -c 400; echo
-```
-
-- 预期行数：`competitions=33 / awards=87 / competition_candidates=82 / ai_jobs=0`。
-- 避开凌晨 `02:30–05:50` cron 写库窗口；若必须在该时段操作，先 `crontab -e` 注释写库任务。
-- 回滚：
-
-```bash
-systemctl stop kuao-backend
-CLOUD_BAK=$(ls -1t backups/competitions.db.bak-*-pre-db-sync | head -n 1)
-echo "$CLOUD_BAK"
-cp "$CLOUD_BAK" competitions.db
-rm -f competitions.db-wal competitions.db-shm
-systemctl start kuao-backend
-```
-
-**每日巡检 cron（可选，放在现有 05:10 周度补全之后）**
-
-```cron
-50 5 * * * cd /root/KuAo/backend && flock -n /var/lock/kuao_enrich.lock ./venv/bin/python enrich_saikr_details.py --daily-update --apply --allow-production --db-path competitions.db >> logs/enrich-$(date +\%F).log 2>&1
-```
-
-- 只处理最近 7 天新入库且三字段有空的赛事，通常每天 0–2 条，成本很低；失败退出码 1，次日会重试未补齐的字段。
-
-**目标**：详情页「参赛对象 / 内容范围 / 考试安排」三张卡片此前恒为空，因为库里没有对应列和数据；赛氪详情 API 的 `content`（HTML 通知正文）里有这些章节。
-
-**结构升级（已完成，测试库已迁移）**
-
-| 位置 | 改动 |
-|---|---|
-| `schema_v2.sql` | `competitions` 新增 `participants` / `content_scope` / `exam_schedule`（TEXT，可空） |
-| `db.py` | 加入 `_MIGRATION_COLUMNS`（老库幂等补列）；`_enrich` 统一兜底空串；新增 `fill_competition_detail_text()`（**只填空字段**，可传 `db_path`） |
-| `migrate_production.py` | `TARGET_COLUMNS` 纳入三列，迁移前后体检/复检覆盖 |
-| `models/schemas.py` + `routers/competitions.py` | `CompetitionDetail` 返回三字段（仅详情接口，列表接口不返回） |
-
-**`enrich_saikr_details.py`**
-
-- 赛事清单：**直接读目标库**（`--db-path`，默认 `test_crawl.db`），按 `--backfill` / `--daily-update` 选片；`--source-db` 仅为旧命令兼容，已弃用。
-- contest_id：沿用 `saikr_map.json`；无映射时按名称相似度（≥0.93）兜底；同一 contest_id 只请求一次，父/子赛事复用。
-- 抓取：`GET https://apiv4buffer.saikr.com/api/pc/contest/info?contest_id=<id>`，3–5 秒随机限速、2 次重试。
-- 抽取：HTML → 叶子块 → 标题层级（一、/（一）/1./短标题）→ 按关键词选章节（参赛对象/赛项/赛程）；`participation_detail`、`contest_stage` 作为结构化兜底；带正文质量闸门（参赛对象须含学生/团队等，考试安排须含日期/赛段等）；奖项标题不当作内容范围；去官网/联系方式/页码噪声；单字段 1200 字截断。
-- **AI 提纯**：`purify_fields()` 每个 contest_id 只调一次 `llm.chat_json`；输出「1. 短句」列表（每条 ≤50 字、≤8 条），`_looks_copied()` 拦截与原文连续 ≥40 字的重合；AI 失败/空/疑似照抄一律不写，保留 NULL。`--no-llm` 仅限 dry-run。
-- 护栏：沿用「报名结束超 400 天 = 往年届次」，整条跳过（`--allow-stale` 可强制）；只写 NULL/空串，不覆盖已有值。
-- `review_candidates.py --approve` 在 `promote_candidate()` 成功后自动调用 `enrich_competition()` 补详情；失败只告警，不回滚。
-
-**实跑结果（`test_crawl.db`，2026-11-08 19:51，备份 `test_crawl.db.bak-20261108-195140`）**
-
-| 指标 | 值 |
-|---|---|
-| 生产库赛事清单 | 33 条 |
-| 可定位 contest_id | 30 条（无映射 3 条：id=25 / 35 / 36） |
-| 往年届次跳过 | 5 条（id=2 / 4 / 17 / 26 / 30） |
-| 实际更新 | **23 条赛事 / 58 个字段** |
-| 字段覆盖 | 参赛对象 21 / 内容范围 20 / 考试安排 17 |
-| 仍为空 | id=9（学创杯）、id=19（全球校园 AI 算法）页面正文无可用章节；id=10 缺参赛对象，id=13 缺内容范围，id=21 只有参赛对象 |
-| 校验 | `db.fill_competition_detail_text()` 二次写入返回 `{}`（不覆盖）；详情接口可返回三字段；`pytest` 127 passed / 2 skipped |
-
-**已知质量待评审点**：id=1 的「参赛要求」章节偏项目要求（含年龄/学籍条款）；id=18 参赛对象为平台结构化短句；id=15 内容范围取自「竞赛规则」；id=2/30 等旧届数据被护栏挡掉。预览文件：`workspace/saikr_enrich_applied.json`。
-
-**说明**：上面的 19:51 实跑是**未接 AI 提纯**的旧版本结果，仅用于评估章节抽取质量；重构后的真机结果见本节开头表格。前端卡片如需保留换行，给 `<p>` 加 `whitespace-pre-line`（尚未改；AI 输出为多行编号列表）。
+只删 `competition_id IS NULL` 或悬空行。
 
 ---
+## 三、赛氪数据源事实与合规边界
+- Vue SPA，HTML 只有 4.6 KB 空壳，**必须走内部 JSON API**：列表 `GET https://apiv4buffer.saikr.com/api/pc/contest/lists?page=&limit=&sort=&class_id=&level=`（`sort=2` 最近更新）；详情 `GET https://apiv4buffer.saikr.com/api/pc/contest/info?contest_id=<id>`。匿名可调，无 Token / 签名 / 强制 Cookie；`acw_tc` 只是阿里云 WAF 被动标记。
+- **列表接口没有关键词搜索参数**（只有 page / limit / sort / class_id / level），站点 `/search` 被 robots 禁止 → 无法按名称反查 contest_id，这是「审核后补全」只能降级的前提。
+- `robots.txt`：`Disallow: /api/`、`Disallow: /search`、`Disallow: /*?*`、`Crawl-delay: 10`。技术上违反 robots，定位是「低频、低风险、**非授权**」；前提：不商用、署名回链、只存 ID+名称+URL、间隔 ≥3 秒（建议 10）、每日 ≤2 页 20 条、遇 429/验证码立刻停。结论：只做**存量 32 条补全 + 每日 20 条增量候选**，不做全量抓取。
+- **`image_guard` 三条拒绝规则**（所有写封面入口共用 `check_image()`）：
+  1. **URL 黑名单**：`qr / qrcode / erweima / logo / icon / banner`（子串 + `qr`/`ewm` token 匹配）→ 拒；
+  2. **尺寸与比例**：最小 300×150，宽高比必须在 0.45–2.6；超 2.6 判 banner，超长竖图（高/宽 >2.2）→ 拒；
+  3. **死链 / 非图片**：HTTP 非 200、`Content-Type` 非图片、体积 >3 MB、解析不出尺寸 → 拒；能解出二维码/条码（zxing-cpp）→ 拒。
+  网络超时、5xx 归 `transient`：不删库内已有图，只标「待复查」。
+- 往年届次护栏：报名结束超过 400 天视为陈旧，整条跳过（id=2/4/17/26/30；`--allow-stale` 才强制）。限速：赛氪 3–5 秒、通知页 5–10 秒、新闻批量 2–5 秒，**严禁调小**。
 
-## 十四、管理后台（2026-11-09 落地）
+---
+## 四、使用隔离红线
+1. 测试优先 `--db-path .\test_crawl.db`；只有明确针对生产库的任务（批量补全、合并、审核入库）才写 `competitions.db`。
+2. 写生产库三件套：`--apply`（默认 dry-run）+ 显式 `--allow-production` + **写前自动备份成功**，缺一即拒。
+3. 批量模式在 `db.init_db()` 之前就拦截生产库；`migrate_production.py` 的只读体检不得改成写连接。
+4. 不要为「看效果」随手启后端：`main.py` 启动会 `db.init_db()`（幂等补列 + 回填 summary/tech_stack），会改库文件字节、让 SHA 变，排查时易误判。
+5. 禁止对生产库手工 `DROP` / `DELETE` / 重建表；改数据先备份，再用 `UPDATE` 精确改字段。每次写库前先看脚本打印的 `[目标库] ...`。
+6. `verify_crawl.py` 拒绝查询生产库；校验 awards 请指向测试副本。
+7. **图片只存 URL，不下载落盘**（闸门只读前 3 MB 字节判尺寸）；抓取遵守 robots 与转载规定，延迟不许调小。
+8. 封面宁缺毋滥：闸门不合格就不写，绝不为「有图」放宽宽高比塞 banner。
+9. 比赛时间宁缺毋滥：Prompt 已规定「报名/材料提交截止不算比赛时间」；发现误读就回滚该字段并记录。
+10. 每次写库后更新本文件的 SHA 快照；历史快照只用于识别最老版本备份。
+11. 赛氪写入策略：`reg_*` **只填 NULL**、`image_url` 只补空且过闸门、`contest_*` 只填空。16 条报名冲突一律保留库内值。
+12. 赛氪只做低频小批量（每日 2 页 / 20 条，3–5 秒间隔）；扩量或商用前重新做合规评估。
+13. 发现脚本只写 `competition_candidates`（`status=pending`），**禁止自动 INSERT/UPDATE `competitions`**；入库必须走 `review_candidates.py` / `bulk_approve.py` / 后台，禁止手写 INSERT。
+14. AI 生成只能走 `ai_content` + `ai_jobs` 抢占，**禁止绕过任务表直接写 `full_process_guide`**；按需接口必须保留 `Depends(get_current_user)`，不许改回匿名。
+15. `claim_ai_job` 拿写锁后会再查攻略是否为空，非空直接返回 `exists`；不做覆盖式重刷，`--force` 只在人工单条使用，**cron 永不带 `--force`**。
+16. 攻略长文只留在详情接口：不要把 `full_process_guide` 加回 `Competition`（列表）模型。
+17. 孤儿数据只删无归属行（`competition_id IS NULL OR NOT IN (SELECT id FROM competitions)`），不要扩成「按日期删」。
+18. `.env` 不进仓库；`.db`、`.db.bak-*`、`workspace/` 都是本地产物，不提交。
 
-### 14.1 设计目标与权限模型
-
-把「审核候选赛事」和「处理用户反馈」从命令行搬到网页，管理员不用再登服务器跑 `review_candidates.py`。**双层拦截**：
+---
+## 五、管理后台
+### 5.1 设计目标与权限模型
+把「审核候选赛事」和「处理用户反馈」从命令行搬到网页。**双层拦截**：
 
 | 层 | 位置 | 行为 |
 |---|---|---|
-| 前端守卫 | `frontend/src/router/index.js`，路由 `meta: { requiresAuth: true, requiresAdmin: true }` | 无 token → 弹登录框；有 token 但不是管理员 → `showToast('无权限访问管理后台')` + 跳回 `/`（`return { path: '/' }`） |
-| 前端入口 | `frontend/src/components/Header.vue` | 「管理后台」链接 `v-if="isAdmin"`（`authState.user?.is_admin`），普通用户看不到入口 |
-| 后端 | `backend/security.py` `get_current_admin()` | 每个 admin 接口都挂 `Depends(get_current_admin)`，非管理员抛 403 `{"detail": "需要管理员权限"}`。**前端守卫只是体验层，真正的墙在服务端** |
+| 前端守卫 | `frontend/src/router/index.js`，路由 `meta: { requiresAuth: true, requiresAdmin: true }` | 无 token → 弹登录；有 token 非管理员 → `showToast('无权限访问管理后台')` + 回 `/` |
+| 前端入口 | `frontend/src/components/Header.vue` | 「管理后台」链接 `v-if="isAdmin"`（`authState.user?.is_admin`） |
+| 后端 | `backend/security.py::get_current_admin()` | 每个 admin 接口挂 `Depends(get_current_admin)`，非管理员 403 `{"detail": "需要管理员权限"}`。**前端守卫只是体验层，真正的墙在服务端** |
 
-管理员标记存在 `users.is_admin`（INTEGER DEFAULT 0，`schema_v2.sql` + `db.migrate_user_columns()` 幂等补列，老库启动自动迁移）。`routers/auth.py` 的 `UserInfo.is_admin` 会随登录 / `/api/auth/me` 一起返回，前端只认这个字段。
-
-### 14.2 后端接口（`backend/routers/admin.py`，全部挂在 `/api/admin`）
-
+管理员标记在 `users.is_admin`（INTEGER DEFAULT 0，`schema_v2.sql` + `db.migrate_user_columns()` 幂等补列）；`routers/auth.py` 的 `UserInfo.is_admin` 随登录 / `/api/auth/me` 返回，前端只认这个字段。
+### 5.2 后端接口（`backend/routers/admin.py`，全部挂 `/api/admin`）
 | 方法 | 路径 | 作用 |
 |---|---|---|
-| GET | `/admin/candidates?limit=&offset=` | 候选赛事列表（默认只取 `status='pending'`），返回 `{code, total, items}` |
-| POST | `/admin/candidates/{id}/approve` | 走 `db.promote_candidate()`：重名/`check_image()` 闸门 → 同事务写 `competitions` + 标记 `approved`；返回新赛事 id 与提示语 |
-| POST | `/admin/candidates/{id}/reject` | 只把候选标记 `rejected`，不动主表 |
-| GET | `/admin/feedback?limit=&offset=` | 反馈列表（新的在前）+ `unread` 未读数；`username` 由 `users` 表联查，注销用户回退「已注销用户」 |
+| GET | `/admin/candidates?limit=&offset=` | 候选列表（默认只取 `status='pending'`），返回 `{code, total, items}` |
+| POST | `/admin/candidates/{id}/approve` | 走 `db.promote_candidate()`：重名/`check_image()` 闸门 → 同事务写 `competitions` + 标记 `approved`；**随后同步补 2 字简称 + 赛氪详情/日期/封面（见 5.6）**；返回新赛事 id、`short_name`、`enrich` 结果与提示语 |
+| POST | `/admin/candidates/{id}/reject` | 只标记 `rejected`，不动主表 |
+| GET | `/admin/feedback?limit=&offset=` | 反馈列表（新的在前）+ `unread` 未读数；`username` 由 `users` 联查，注销用户回退「已注销用户」 |
 | PUT | `/admin/feedback/{id}/read` | 标记已读；`busyId` 防重复点击，前端同步减角标 |
 
-约定：候选不存在 → 404，状态不是 `pending` → 400 `"该候选已处理"`；approve 内部复用 CLI 同一套 `_build_competition_data` / `_infer_level` / `_clean_name`，所以网页和 CLI 写库结果一致。`main.py` 的 CORS 已补 `PUT`（否则「标记已读」预检直接挂）。
-
-### 14.3 前端页面（`frontend/src/views/AdminView.vue`，单文件 ~560 行）
-
-- 布局：`Header` + 左侧 220px 侧边栏（候选赛事 / 用户反馈，带待审 / 未读角标）+ 右侧内容区；`lg` 以下自动堆叠，侧边栏变横向 tab。沿用全站 Tailwind 暗色 / 极简风，**未引入 Element Plus 等 UI 库**。
-- 候选赛事：表格列 = 赛事名称（含来源链接）/ 级别 / 来源 / 抓取月份 / 操作。来源 `saikr→赛氪`、`edu-roster→教育部门名录`、`manual→人工录入`，未知值原样显示。
-- 用户反馈：卡片列表，未读整卡高亮蓝底 + 「未读」角标 + 【标记已读】；正文 `whitespace-pre-wrap break-words`，长文本自动换行。
-- **二次确认（2026-11-09 补）**：通过 / 拒绝都会写主库，点按钮先弹轻量弹窗——标题「确认审核通过这个赛事？」/「确认拒绝这个赛事？」，正文带《赛事名》+ 后果说明（通过→立即进正式库，拒绝→只标记不进库），按钮为【取消】/【确认通过】（拒绝态转红 `bg-red-600`），提交中禁用并显示「提交中…」；支持 `Esc` / 点遮罩关闭，弹窗用 `Teleport to="body"` + `Transition` 淡入。
-- 深链：`/admin?tab=feedback` 可直接打开反馈面板，切 tab 时 `router.replace` 同步地址栏（`refresh` 不跳走）。
-- 首屏两个面板的列表都拉一次：侧边栏「待审 / 未读」两个角标需要两份数据。
-- 状态处理：骨架屏、空态（「没有待审核的候选赛事，全部处理完了 🎉」/「还没有用户反馈」）、错误横幅 + 右上角「刷新」、`busyId` 行级 loading。
-
-**踩坑记录（值得保留）**：`main.js` 启动时会调一次 `restoreSession()`，`/admin` 守卫也要调一次；原实现遇到 `loading=true` 直接 `return null`，守卫误判未登录 → 管理员刷新 `/admin` 被弹登录框（后端日志却是 `/api/auth/me` 200）。已改成 **in-flight Promise 去重**（`services/auth.js` 的 `inflightRestore`），所有调用方等同一个真实结果。以后再加「守卫里查登录态」的路由，都走这个函数，别自己发请求。
-
-### 14.4 `promote_admin.py` 用法（授权 / 撤权 / 查看）
-
+约定：候选不存在 → 404，状态不是 `pending` → 400 `"该候选已处理"`；approve 复用 CLI 同一套 `_build_competition_data` / `_infer_level` / `_clean_name`，网页与 CLI 写库结果一致。`main.py` 的 CORS 必须允许 `PUT`，否则「标记已读」预检直接挂。
+### 5.3 前端页面（`frontend/src/views/AdminView.vue`）
+- 布局：`Header` + 左 220px 侧边栏（候选赛事 / 用户反馈，带待审、未读角标）+ 右内容区；`lg` 以下堆叠为横向 tab。沿用全站 Tailwind 暗色/极简风，**未引入 Element Plus 等 UI 库**。
+- 候选赛事表格列：赛事名称（含来源链接）/ 级别 / 来源 / 抓取月份 / 操作；来源映射 `saikr→赛氪`、`edu-roster→教育部门名录`、`manual→人工录入`，未知值原样显示。用户反馈为卡片列表，未读高亮蓝底 + 「未读」角标，正文 `whitespace-pre-wrap break-words`。
+- **二次确认**：通过/拒绝都会写主库，点按钮先弹轻量弹窗（标题「确认审核通过这个赛事？」/「确认拒绝这个赛事？」，正文带《赛事名》+ 后果说明），按钮【取消】/【确认通过】（拒绝态转红 `bg-red-600`）；提交中禁用并显示「提交中…」；支持 `Esc` / 点遮罩关闭；`Teleport to="body"` + `Transition` 淡入。
+- 深链 `/admin?tab=feedback` 直开反馈面板，切 tab 用 `router.replace` 同步地址栏；首屏两个面板各拉一次列表（两个角标需要两份数据）。状态齐全：骨架屏、空态（「没有待审核的候选赛事，全部处理完了 🎉」/「还没有用户反馈」）、错误横幅 + 「刷新」、`busyId` 行级 loading。
+- **踩坑（保留）**：`main.js` 启动调一次 `restoreSession()`，`/admin` 守卫也要调；原实现遇 `loading=true` 直接 `return null`，守卫误判未登录 → 管理员刷新 `/admin` 被弹登录框（后端日志却是 `/api/auth/me` 200）。现改为 `services/auth.js` 的 **in-flight Promise 去重 `inflightRestore`**。以后新增「守卫里查登录态」的路由都走它，别自己发请求。
+### 5.4 `promote_admin.py` 用法（授权 / 撤权 / 查看）
 ```powershell
 cd D:\agent-lab\KuAo-Platform\backend
-
 # 查看当前所有管理员
 venv\Scripts\python.exe promote_admin.py --list
-
 # 授权（按用户名；用户必须已存在，否则报错退出）
 venv\Scripts\python.exe promote_admin.py xas
-
 # 撤权
 venv\Scripts\python.exe promote_admin.py --revoke xas
 ```
-
-- 只改 `users.is_admin`，**不碰密码**；改完让用户重新登录 / 刷新页面（`/api/auth/me` 会带回新的 `is_admin`）才生效。
-- 支持 `--db-path` 指向别的库（默认 `competitions.db`），测试库演练时用得上。
-- 2026-11-09 现状：`tester_e2e`(id 1)、`xas`(id 4) 是管理员；`alice`(id 2) 保留为**非管理员越权测试账号**（会看到 Toast 并被踢回首页），别顺手提权。
-
-### 14.5 本地验收清单
-
+- 只改 `users.is_admin`，**不碰密码**；改完让用户重新登录或刷新页面才生效（`/api/auth/me` 会带回新 `is_admin`）。
+- 支持 `--db-path` 指向别的库（默认 `competitions.db`）。
+- 现状：`tester_e2e`(id 1)、`xas`(id 4) 是管理员；`alice`(id 2) 保留为**非管理员越权测试账号**，别顺手提权。
+### 5.5 本地验收清单
 ```powershell
 # 0) 服务（两个都要起）
 cd backend; venv\Scripts\python.exe -m uvicorn main:app --host 127.0.0.1 --port 8000
 cd frontend; D:\Tools\node.exe D:\Tools\node_modules\npm\bin\npm-cli.js run dev
 ```
-
-1. `http://localhost:5173`（**必须 localhost**，Vite 不监听 127.0.0.1）用 `xas` 登录 → 头像下拉 → 「管理后台」，或用 `/admin` 直达。
-2. 候选赛事：点【通过】→ 弹确认框 → 【确认通过】→ 该行消失、Toast、`competitions` 多一条；【取消】/`Esc` 不产生任何请求。
+1. `http://localhost:5173`（**必须 localhost**，Vite 不监听 127.0.0.1）用 `xas` 登录 → 头像下拉 →「管理后台」，或 `/admin` 直达。
+2. 候选赛事：点【通过】→ 弹确认框 →【确认通过】→ 该行消失、Toast、`competitions` 多一条；【取消】/`Esc` 不产生任何请求。
 3. 反馈面板：未读角标数字 = 未读条数，点【标记已读】→ 卡片变灰、角标 -1、`feedbacks.is_read=1`。
-4. 越权复验：用 `alice` 登录访问 `/admin` → Toast「无权限访问管理后台」并落在首页；用 `alice` 的 token 直连 `GET /api/admin/candidates` → 403。
-5. 造测试反馈（**只对本地库**）：`.verify\seed_feedback.py` 会插 2 条中文反馈（`xas` / `alice` 各一条，未读）。验收完用 `DELETE FROM feedbacks WHERE id IN (...)` 清掉，别带到生产。
+4. 越权复验：`alice` 登录访问 `/admin` → Toast「无权限访问管理后台」并落回首页；用 `alice` 的 token 直连 `GET /api/admin/candidates` → 403。
+5. 造测试反馈（**只对本地库**）：`.verify\seed_feedback.py` 插 2 条中文反馈（`xas` / `alice` 各一条，未读），验收完 `DELETE FROM feedbacks WHERE id IN (...)` 清掉。
+6. 自动补全复验：点【通过】后按钮保持「提交中…」20~60 秒，同时到后端控制台看 `[审核补全]` 三行日志；完成后 Toast 形如「已通过并入库：XX（简称=机人；详情补全 2 项（另补日期 2 项））」；查库确认 `short_name` / `participants` / `reg_start_date`。看到「详情未补（无赛氪 contest_id）」属**预期降级**（见 5.6）。
 
-**当前数据快照**：生产库本地副本 `competitions.db` 中候选 82 条（pending 80 / approved 1 / rejected 1）、`feedbacks` 2 条未读（仅本地测试数据，生产库为空）。前端改动需 `npm run build` 重新出 `dist/`；后端只需重启 uvicorn。
+**已知边界**：列表暂无分页（`limit=200`，候选过千要加）；反馈无删除/回复；审核结果不能从网页撤销（需 CLI 或改库）。
+### 5.6 审核后自动补全（2026-11-10，修复「审核通过即空壳」）
+**症状**：后台点【通过】后，卡片只显示首字（无两字简称），详情页全空（无参赛对象 / 时间 / 攻略上下文）。
 
-**已知边界**：列表暂无分页（`limit=200`，够用但候选过千要加）；反馈无删除 / 回复功能；审核结果不可从网页撤销（需 CLI 或直接改库）。
+**根因（三条，缺一不可）**：
 
+1. `routers/admin.py` 当初为「点击即响应」**刻意不调用**简称与详情（原 docstring 写着「通过后不自动生成简称 / 不自动抓详情」），而 `review_candidates.py`（CLI，L260/L264）与 `bulk_approve.py`（L134/L135，需 `--with-ai`）都调用了 —— **CLI 改了，API 没跟上**。
+2. `enrich_competition()` 的 `DETAIL_FIELDS` 只有 `participants / content_scope / exam_schedule`，**不含 `image_url` 与双轨制日期**（`reg_start_date` 等），即使调用了它，详情页时间/封面依旧空。
+3. 附带：`saikr_map.json` 是按 `competition_id` 生成的静态映射（32 条存量），新入库赛事不在其中；57 条 pending 全是 `edu-roster`、`raw_json` 无 `contest_id`，名称能对上映射的仅 1 条。
+
+**修复**：
+
+| 文件 | 改动 |
+|---|---|
+| `routers/admin.py` | 新增 `_auto_complete_after_approve()`：① `short_names.extract_short_name()` + `db.save_short_name()`；② `enrich.enrich_competition(contest_id 取自候选 source_key 尾部数字 / raw_json.contest_id)`。异常只 `logger.warning("[审核补全] …")` 并在响应回传原因，**不回滚、不抛 500**（路由是 `def`，FastAPI 放线程池，阻塞期不挡其它请求）；新增 `_auto_complete_summary()` 生成 toast 文案，响应新增 `short_name` / `enrich{status,written,extra,reason}` |
+| `enrich_saikr_details.py` | 新增 `fill_dates_and_cover()`：按 `SAIKR_DATE_KEYS`（`regist_start_time / regist_end_time / contest_*_time`）补空的日期列；按 `SAIKR_COVER_KEYS`（实测字段 `web_pic_big`）取封面且**必须过 `image_guard.check_image()` 闸门**。只补空值，结果放 `extra{dates,cover}` |
+| `db.py` | `update_competition(cid, data, db_path=None)` 支持指定库（原写死模块级 `DB_PATH`，CLI 指定测试库时会写错库） |
+| `frontend/src/services/api.js` | `approveAdminCandidate()` 超时 **60s → 180s**（补全常见 20~60s，默认超时会把已入库成功的请求判成失败） |
+| `frontend/src/views/AdminView.vue` | 审批前先 toast「审批中：正在补全简称与赛氪详情（约 20~60 秒）…」，完成后显示 `data.message` |
+
+**实测**（隔离库 `.verify/approve_api_test.db`，真实 HTTP + Admin Token，未写 `competitions.db`）：
+
+| 候选 | 结果 | 耗时 |
+|---|---|---|
+| 候选 3《全国大学生电子设计竞赛》（无 saikr 映射） | `short_name=电设`；`enrich.status=no_mapping`（原因「无赛氪 contest_id」）；message 明示「详情未补…已入库待补」 | 2.3s |
+| 候选 26《中国机器人大赛暨RoboCup机器人世界杯中国赛》（映射 saikr 58028） | `short_name=机人`；写入 `participants`、`exam_schedule`；`extra.dates=[reg_start_date=2026-03-01, reg_end_date=2026-04-30]` | 5.9s |
+
+后端日志（排障入口）：
+```text
+[审核补全] competition=53 简称=机人
+[审核补全] competition=53 开始抓取赛氪详情（contest_id=58028，约 20~60 秒）
+[审核补全] competition=53 详情已写入 2 项：参赛对象、考试安排
+```
+**封面仍可能为空的真实原因（不是 bug）**：赛氪 `web_pic_big` 直链对任何请求头（裸 / UA / UA+Referer）均返回 **HTTP 404**，`image_guard` 判「死链」拒收 → 保持 NULL，走前端无图兜底。封面正路仍是 `batch_update_competitions.py` 从**官网**抓。
+
+**范围决策已变更（2026-11-10 晚）**：原定「方案 B 只保底、不做名称解析」，但现场确认 57 条 pending **全部**是 `edu-roster`、`source_url` 全指向同一目录页，`no_mapping` 等于永远空壳 → 改为**按名称匹配赛氪**，见 5.7。
+
+**回归与自测脚本**：`pytest test_enrich_saikr.py` → 11 passed（新逻辑只补空值，未破坏原断言）。`.verify/` 下新增 `prep_test_db.py`（复制生产库并选样）、`run_api_patched.py`（用隔离库起服务）、`smoke_approve.py`（POST 审批 + 回读字段）、`find_enrichable_candidate.py`（找可补全样本）。
+
+### 5.7 名录候选按「名称」匹配赛氪（2026-11-10 晚重构）
+
+**问题**：`edu-roster` 候选的 `source_url` 全是同一个目录页 `https://www.sdaeu.edu.cn/jwc/info/1047/2528.htm`，用它当锚点只能得到 404；赛氪列表接口**不认关键词**（实测 `keyword / search / title / name` 全被忽略，`total` 恒为 5164），所以只能自建本地名称索引。
+
+| 组件 | 说明 |
+|---|---|
+| `saikr_match.py` | ① 索引：`/api/pc/contest/lists` 100 条/页 × 52 页、1.2s 间隔（实测 80s，5164 条）→ `saikr_index.json`；② 匹配：名称归一化 + 相似度；CLI `--build / --query <名称> / --stats` |
+| `saikr_index.json` | 索引产物（`contest_id / name / norm / url / level`），14 天过期自动重建；审批时只读本地，**不每次联网** |
+| `enrich_saikr_details.py` | `enrich_competition(..., allow_name_match=True)`：无 contest_id 时先查 `saikr_map`，再按名称匹配；命中记 `match="名称匹配(exact/contains/fuzzy/…)"`，未命中返回 `status="no_match"` + 「通过名称未匹配到赛氪」（CLI 默认仍为 `no_mapping`，行为不变） |
+| `routers/admin.py` | 审批调用改传 `allow_name_match=True`，**明确不使用 `source_url`**（代码注释写明目录页不可当锚点）；日志把 `contest_id` 显示为「待按名称匹配」 |
+
+**归一化与阈值**：剥 `【倒计时4天】` 类前缀、第 X 届、年份、括号补充、标点空格；相似度阈值 0.86，包含关系按长度占比加分；第一名与第二名差 < 0.02 判为歧义**直接放弃**（宁缺毋错，避免把 A 赛事详情写到 B）。
+
+**实测**（隔离库，真实 HTTP）：
+
+| 名称 | 结果 |
+|---|---|
+| 全国大学生统计建模大赛（候选 47） | `contest_id=57763`（exact 1.00，赛氪名「2026年第十二届全国大学生统计建模大赛」）→ 简称「统模」+ `participants` + `exam_schedule` + 4 条日期 + 封面，**6/7 关键字段非空** |
+| 全国大学生电子设计竞赛 / 中国大学生工程实践与创新能力大赛 / 中国机器人及人工智能大赛 / 全国大学生数字媒体科技作品及创意竞赛 / 全国大学生数学建模竞赛 | 全部 exact 命中 |
+| 「挑战杯」中国大学生创业计划大赛 | 未命中（赛氪上是「课外学术科技作品竞赛」，属不同赛事）→ `no_match` 降级 |
+
+**历史空壳清理**：`cleanup_directory_shells.py`（默认 dry-run）识别「`edu-roster` 已通过 + 主表详情全空」，`--apply` 后候选退回 `pending`（`competition_id=NULL`）并删除主表行；已挂 `awards` / `user_preparations` 的行自动跳过。2026-11-10 清理 **5 条**（挑战杯 / 电子设计 / 工程实践 / 机器人及AI / 数字媒体），本地 54 → **49** 行，pending 52 → **57**。
+
+**定时刷新**：`0 4 1,15 * * … saikr_match.py --refresh-if-stale`（详见 9.2）——每月 1 号 / 15 号 04:00，半月一次；索引仍新鲜时脚本 0 请求退出，**不要改成每日**（52 页/次有封 IP 风险）。
+
+**前端**：`CompetitionDetailView.vue` 新增 `isRealOfficialSite()` —— 名录站域名（`sdaeu.edu.cn`）与 CMS 通知页路径（`/info/<数字>/<数字>.htm`）**不渲染「官网」按钮**，改显示纯文本「来源：教育部门名录」；真实官网不受影响（`.verify/check_official_url.js` 7 例全过）。
+
+---
+## 六、前端展示规范（已定稿，勿回退）
+- **列表卡片**（`components/CompetitionCard.vue`）：`cover-media` 固定 `aspect-[16/9]`，图片 `w-full h-full object-cover object-center`——海报式铺满、不留白、不变形；布局 `flex-col sm:flex-row`，桌面端图占 42%、上限 430px。
+- **详情页头图**（`views/CompetitionDetailView.vue`）：不设死高度，`w-full h-auto` + `max-height: 400px` + `object-contain`，容器底色 `#f8f9fa`（暗色 `slate-800/60`）承接留白——**任何情况下不裁掉海报文字**。
+- **无图兜底**：`utils/coverFallback.js` 生成独立渐变层（赛事名哈希 → 稳定色相 0–359，`data-tone` 按学科分色），优先显示 `short_name` 两字简称，缺则取首字（跳过引号/括号）；样式在 `assets/main.css` 的 `.cover-fallback / __mark / --hero`，暗色同步；`@error` 加载失败也走兜底，换图自动重试。
+- **三主题**（`composables/useTheme.js`）：`STORAGE_KEY = 'theme-v2'`，主题 `official`（默认，校园底图 + 半透明白）/ `minimal`（纯白留白）/ `tech`（深色底 + 蓝色高光）；id 同步到 `<html>` 的 `theme-*` class，**tech 额外加 `.dark`** 复用 Tailwind `darkMode: 'class'` 的全部 `dark:` 工具类；旧 `theme` 键的 `dark/light` 一律回落 `official`；`index.html` 内联脚本在 CSS 加载前写 class，防首屏闪白。
+- 时间展示：`services/timeFormat.js` 统一；有日期轨显示到「日」，只有月份轨显示「月」（同月 → `11 月`，跨月 → `10 月 - 11 月`，跨年 → `12 月 - 次年 1 月`，缺值 → `待定`）。封面统一走 `resolveImage()`，只接受 `http(s)` 绝对地址。
+- **详情页「有没有时间」必须查两条轨**：`CompetitionDetailView.vue` 的 `hasRegTime / hasContestTime` 要同时检查 `parseDate(*_date)` 与 `toMonth(*_month)`（11-10 修过一次只查月份的 Bug，表现是「列表卡片有 2026-04-01、详情页却写暂未收录」）；文案统一由 `regTimeText / contestTimeText`（`formatSignUp / formatContest`）产出，模板里不要再直接读 `detail.signUpTime`。
+- 列表接口不返回长文；攻略按钮未登录先 `openAuthModal('login')`，401 由拦截器清凭证并广播 `auth:unauthorized`。
+
+---
+## 七、未完成项与已知边界
+| 问题 | 状态 | 位置 | 备注 |
+|---|---|---|---|
+| 云端代码/前端未同步 | 未处理 | 云端 `/root/KuAo`、`/var/www/html` | 云端只到 `81e7686`，缺详情三列、AI 提纯、简称/日期补全；上传新 `dist` + 拉代码 + `systemctl restart kuao-backend` |
+| 账号串号（P0 越权） | 已修复（本地） | `tokenStore.js`、`auth.js`、`api.js`、`security.py` | token 改 `sessionStorage` 按标签页隔离、启动清旧 `localStorage`、`plan_v2_${uid}_${cid}` / `prep_favorites_v1_${uid}` 按用户分区、`/api/*` 加 `Cache-Control: no-store, private`、`decode_access_token` 强制 `exp`/`sub`；回归 `test_auth_isolation.py` 10 例。云端部署后必须双账号复验 |
+| 顶部搜索框随分辨率变形 | 已修复 | `assets/main.css` `.header-search-box` | `width/min-width: 240px` + `flex-shrink: 0`；云端 dist 更新后按 360/768/1024/1440 复验 |
+| `api.js` 反馈双前缀（`/api/api/feedback`） | 代码已修 | `services/api.js::submitFeedback()` | 已改为 `api.post('/feedback')` 并加注释；**云端旧 dist 未重建时仍会 404**，部署后复验 |
+| 详情三卡多行列表不换行 | 未处理 | `CompetitionDetailView.vue` | AI 输出为「1. 短句」多行，`<p>` 需 `whitespace-pre-line` |
+| 备份未归置 | 未处理 | `backend/*.db.bak-*` | 上云后挪 `backups/`，避免日志清理 `find` 误伤 |
+| 测试库 schema 落后 | 已知 | `test_crawl.db` | 缺 `*_date` 四列；先 `db.init_db('test_crawl.db')` 再跑日期脚本 |
+| 16 条报名时间冲突 | 待裁决 | `workspace/pipeline_report.md` 第三节 | 默认保留库内值，改用赛氪值须单条人工确认 |
+| id=34 报名 3-7 混合来源 | 待确认 | `competitions` id=34 | 赛氪窗口 3-4；现为 `reg_start_month=3`（补）+ `reg_end_month=7`（原值） |
+| 低置信比赛时间 | 待复核 | id=9（6-11 月，置信 0.45）、id=2（只给「9 月起」） | 抽检时优先看 |
+| 新赛事无赛氪映射 | 已缓解 | `saikr_map.json` + `saikr_index.json` | 名录候选改为按名称匹配本地赛氪索引（5.7）；抽样 6/7 exact 命中，「挑战杯」创业计划大赛仍 `no_match`（赛氪上是另一赛事），属正常降级 |
+| 名录空壳赛事 | 已清理 | `cleanup_directory_shells.py` | 11-10 退出 5 条（候选已回 pending），后续新审批走名称匹配不再产生空壳 |
+| 赛氪封面 404 | 非 bug | 赛氪 `web_pic_big` | 任何请求头均 404，闸门判死链；封面正路是官网抓取 |
+| 后台列表无分页 | 已知边界 | `routers/admin.py` | `limit=200`，候选过千要加 |
+| 反馈无删除/回复；审核不可网页撤销 | 已知边界 | `AdminView.vue`、`admin.py` | 需 CLI 或直接改库 |
+| `chroma_db/` 仍被 git 跟踪 | 未处理 | 仓库根 | 约 5 MB、可重建；用 `git rm -r --cached chroma_db` + 重建索引 |
+| 时间格式化重复代码 5 处 | 未处理 | 5 个视图各自的 `toMonth/formatSignUp/formatContest/resolveImage` | 冻结期不动，之后抽 `services/competitionFormat.js` |
+| 占位赛事 id=33「华为杯」 | 保留 | `test_crawl.db` | 用户要求留作测试用例，别并入生产 |
+| 服务/广告类候选 | 待 reject | 候选池 | 「辅助报名」「考试入口」「作品征集」等，能抓到也别提拔 |
+
+---
+## 八、测试与验证
+```powershell
+# 单测（不连网、不写库）
+.\venv\Scripts\python.exe -m pytest test_crawler_units.py -q                 # 19 passed
+.\venv\Scripts\python.exe -m pytest test_crawler_boundaries.py -q            # 20 passed
+.\venv\Scripts\python.exe -m pytest test_ai_guide.py test_api_boundaries.py test_crawler_units.py -q
+.\venv\Scripts\python.exe -m pytest test_enrich_saikr.py -q                  # 11 passed
+.\venv\Scripts\python.exe -m pytest -q                                       # 11-08 20:02：138 passed / 2 skipped（之后新增的 test_image_guard 等未计入）
+.\venv\Scripts\python.exe -m pyflakes ai_content.py ai_jobs_runner.py daily_ai_worker.py generate_guides.py cleanup_orphan_ai.py db.py routers\competitions.py
+# 前端构建（PowerShell 里 npm.ps1 会被执行策略拦，必须 npm.cmd 或直调 node）
+cd ..\frontend; npm.cmd run build
+cd ..\frontend; D:\Tools\node.exe D:\Tools\node_modules\npm\bin\npm-cli.js run build
+```
+**`.verify/` 脚本用途**
+
+| 脚本 | 用途 |
+|---|---|
+| `prep_test_db.py` | 复制生产库 → `.verify/approve_api_test.db`，挑一条可审样本并保证库里有管理员账号 |
+| `run_api_patched.py` | 用隔离库起后端（`KUO_DB_PATH=<库> KUO_PORT=8010`），绝不写 `competitions.db` |
+| `smoke_approve.py` | 走真实 HTTP 审批一条候选，打印响应与入库结果（`python smoke_approve.py <candidate_id> [base_url]`） |
+| `find_enrichable_candidate.py` | 找出「应能补全成功」的 pending 候选（`raw_json` 带 `contest_id` 或名称能对 `saikr_map`） |
+| `check_official_url.js` | Node 校验详情页「官网链接」判定（名录目录页/非法协议必须拒绝，真实官网放行） |
+| `wcag_contrast.py` | 校验封面兜底配色的 WCAG 对比度（纯计算，不看图），口径对齐 `main.css` |
+| `audit_cover_fallback.py` | 审计兜底在真实数据上的表现：多少卡片走兜底、简称是否撞名/撞形、哈希色相是否撞色 |
+
+**验收口径**：改动后至少跑 `py_compile` + 相关单测 + 一次 dry-run；写库改动先在隔离库（`.verify/*.db`）跑通再碰正式库。
+
+---
+## 九、云端部署与运维
+### 9.1 线上现状
+| 项 | 值 |
+|---|---|
+| 服务器 | 阿里云 Ubuntu 24.04.2 LTS · `112.126.90.252` · 1.6 GiB RAM（+2 GiB Swap） |
+| 部署方式 | **原地升级** `/root/KuAo`（未用 `/opt/kuao` + 独立用户；systemd 以 root 运行） |
+| 发布 commit | `81e768633e420163982bda692239e8dd590760af`（2026-11-08 14:33 切换，15:29 cron + 验收完成） |
+| 服务 | systemd `kuao-backend`（`127.0.0.1:8000`，`--workers 1`）+ Nginx `:80` 反代 `/api/` |
+| 前端根 | **`/var/www/html`**（不是 `/opt/kuao/frontend/dist`，也不是 `/root/KuAo/frontend/dist`；以 `nginx -T` 的 root 为准） |
+| 备份 | `/root/KuAo/backend/backups/`（保留 30 天）；切换前备份 `/root/kuao-backups/20261108-143324/` |
+| 回滚 | `bash /root/kuao-rollback.sh 20261108-143324`；代码 `git checkout 3ee9dd5`；库用上述备份目录里的 `competitions.db` |
+### 9.2 crontab（时区 `Asia/Shanghai`；Ubuntu cron 不支持 `CRON_TZ`，必须设系统时区）
+云端现有 5 条任务 + 本轮新增 1 条（名称索引半月刷新，随下版部署写入；完整命令与 `flock`/日志切分见 `CLOUD_DEPLOYMENT_GUIDE.md` 第 7.4 节）：
+- 02:30 `backup_db.py` 备份 → 04:10 `discover_saikr.py --apply --allow-production`（只写候选）→ 04:40 `daily_ai_worker.py --limit 4 --idea-limit 2 --budget-tokens 300000` → 周日 05:20 `pipeline_update.py --limit 20` → 05:40/05:50 清理日志与旧备份（只清 `logs/`、`backups/`）。
+- **04:00（每月 1/15 日）`saikr_match.py --refresh-if-stale`**：刷新 `saikr_index.json`（52 页 × 1.2s ≈80s），**刻意压到半月一次防封 IP**；索引新鲜时只读本地、0 请求直接退出，重复跑无副作用；`flock -n locks/saikr_index.lock`，日志 `logs/saikr-index-YYYYMM.log`。
+- 新闻采集**未挂**：`LIST_URL` 确定后按同一模板加一条（周一/四 03:00，`--max-pages 4 --allow-production`）。`discover_university.py` 不挂日任务，名单年度更新时人工跑一次。
+- **顺序不能反**（备份在所有写库之前）；先逐条手动执行确认退出码 0 再挂 cron，`crontab -l` 留档，连续失败 2 次暂停。
+- 线上实际路径是 `/root/KuAo`，示例中的 `/opt/kuao/backend` 按实际改；**将来迁到 `/opt/kuao` 必须同步改 systemd `WorkingDirectory`、cron 的 `cd`、日志/备份路径**，并先停服务、删 `-wal/-shm` 再移库。
+
+
+### 9.3 本地 → 云端库覆盖（完整版见 `CLOUD_DEPLOYMENT_GUIDE.md`）
+四步：① 本地 `backup_db.py --db .\competitions.db --backup-dir .\backups --label pre-cloud-sync --keep-days 30` 生成快照，记 SHA-256 后 `scp` 到云端 `/tmp/competitions.db.sync`；② 云端 `systemctl stop kuao-backend`，先 `backup_db.py --db competitions.db --backup-dir backups --label pre-db-sync --keep-days 30` 备份现库；③ `sha256sum` 核对后 `install -m 644 /tmp/competitions.db.sync competitions.db`，**必须 `rm -f competitions.db-wal competitions.db-shm`**；④ 校验 `integrity_check` + 四表行数与详情三卡填充数，再 `systemctl start kuao-backend`、`curl -fsS http://127.0.0.1:8000/api/health` 与 `/api/competitions/1` 抽验。
+- 覆盖前先对比云端行数，与本地快照不一致就停下；避开凌晨 `02:30–05:50` cron 写库窗口（必须操作就先注释写库任务）。
+- 回滚：停服务 → `cp "$(ls -1t backups/competitions.db.bak-*-pre-db-sync | head -n 1)" competitions.db` → 删 `-wal/-shm` → 起服务。
+
+浏览器验收务必 **Ctrl + F5** 强刷；仍是旧页面就先 `curl -s http://112.126.90.252/ | grep -o 'assets/index-[^"]*'` 确认引用的是新哈希。线上无强缓存（只有 `ETag` / `Last-Modified`），旧包通常是文件没进 Web 根。
+
+每日备份：`./venv/bin/python backup_db.py --db competitions.db --backup-dir backups --keep-days 30 --label daily`。用 `sqlite3.Connection.backup()`（不是 `cp`）生成含已提交 WAL 的一致快照，备份库为 `journal_mode=DELETE`、恢复不依赖 `-wal/-shm`；备份后自动 `integrity_check` + 四表行数校验。备份 SHA 与线上库不同属正常，验收只看 `integrity_check` 与行数；恢复见 1.4。

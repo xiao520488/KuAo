@@ -65,7 +65,9 @@ from bs4 import BeautifulSoup
 
 import db
 import discover_common as common
+import image_guard
 import llm
+import saikr_match
 
 SAIKR_DETAIL = "https://apiv4buffer.saikr.com/api/pc/contest/info"
 MAP_PATH = os.path.join(common.BASE_DIR, "saikr_map.json")
@@ -745,6 +747,68 @@ def load_target_competitions(db_path: str) -> dict:
     return {int(row["id"]): row for row in rows}
 
 
+# 赛氪详情 API 的时间字段 -> 主表「双轨制」日期列（只补空，绝不覆盖）
+SAIKR_DATE_KEYS = (
+    ("reg_start_date", "regist_start_time"),
+    ("reg_end_date", "regist_end_time"),
+    ("contest_start_date", "contest_start_time"),
+    ("contest_end_date", "contest_end_time"),
+)
+
+# 封面候选键：接口不同版本字段名不一致，按优先级依次尝试
+# （实测 saikr 详情用 web_pic_big，占位符为空串时继续试下一个）
+SAIKR_COVER_KEYS = ("web_pic_big", "web_pic", "image", "cover", "cover_url",
+                    "poster", "banner", "image_url")
+
+
+def fill_dates_and_cover(target_db: str, competition_id: int, detail: dict) -> dict:
+    """用赛氪详情补「空的日期字段 / 封面」，已有值一律不动。
+
+    封面必须过 image_guard 闸门（二维码、banner、宽高比超限都会被拒），
+    不合格就保持 NULL，由前端走无图兜底，绝不写脏图。
+
+    返回 {"dates": [已写列名], "cover": URL 或 None}。
+    """
+    rows = _read_rows(
+        target_db,
+        "SELECT reg_start_date, reg_end_date, contest_start_date, "
+        "contest_end_date, image_url FROM competitions WHERE id = %d"
+        % int(competition_id),
+    )
+    if not rows:
+        return {"dates": [], "cover": None}
+    row = rows[0]
+
+    patch = {}
+    dates = []
+    for column, key in SAIKR_DATE_KEYS:
+        if str(row.get(column) or "").strip():
+            continue
+        moment = _parse_api_time(detail.get(key))
+        if moment is not None:
+            patch[column] = moment.strftime("%Y-%m-%d")
+            dates.append(column)
+
+    cover = None
+    if not str(row.get("image_url") or "").strip():
+        for key in SAIKR_COVER_KEYS:
+            url = str(detail.get(key) or "").strip()
+            if not url.lower().startswith("http"):
+                continue
+            try:
+                ok, _reason, _info = image_guard.check_image(url)
+            except Exception:  # noqa: BLE001 - 校验异常按不合格处理
+                ok = False
+            if ok:
+                patch["image_url"] = url
+                cover = url
+                break
+
+    if patch:
+        db.update_competition(int(competition_id), patch, db_path=target_db)
+    return {"dates": dates, "cover": cover}
+
+
 def _norm_name(name: str) -> str:
     return db.normalize_competition_name(name or "")
 
@@ -907,12 +971,17 @@ def _parse_ids(raw: str) -> set:
 
 def enrich_competition(target_db: str, competition_id: int, *,
                        contest_id=None, allow_stale: bool = False,
+                       allow_name_match: bool = False,
                        max_chars=None, session=None, mapping=None,
                        now=None) -> dict:
     """抓取 + AI 提纯 + 写库，供 CLI 与 review_candidates.approve 复用。
 
+    allow_name_match=True 时，若拿不到 contest_id（如教育部门名录来源的候选，
+    其 source_url 只是目录页），会用「赛事名称」到本地赛氪索引里匹配一次，
+    匹配失败的状态码为 no_match（CLI 默认仍是 no_mapping，行为不变）。
+
     调用方负责：生产库备份、生产库权限校验、异常兜底。
-    返回 status：updated / complete / no_mapping / stale / no_fields / ai_empty / exists。
+    返回 status：updated / complete / no_mapping / no_match / stale / no_fields / ai_empty / exists。
     """
     target_db = os.path.abspath(target_db)
     rows = load_target_competitions(target_db)
@@ -925,14 +994,31 @@ def enrich_competition(target_db: str, competition_id: int, *,
     if not missing:
         return {"status": "complete", "competition_id": int(competition_id)}
 
+    name = row.get("name") or ""
     if contest_id is None:
         mapping = mapping if mapping is not None else load_map()
         contest_id, match = resolve_contest_id(row, mapping, _build_by_name(mapping))
+        if not contest_id and allow_name_match:
+            # 名录类候选没有 contest_id，source_url 又只是目录页（同一链接指所有赛事），
+            # 唯一可靠的锚点就是赛事名称 -> 本地赛氪索引（saikr_match）。
+            hit = saikr_match.resolve(name)
+            if hit:
+                contest_id = int(hit["contest_id"])
+                match = "名称匹配(%s/%.2f)" % (hit["method"], hit["score"])
+                log("[赛氪匹配] 名称「%s」-> contest_id=%s（%s，%.2f，赛氪名「%s」）" % (
+                    name, contest_id, hit["method"], hit["score"],
+                    hit["matched_name"]))
+            else:
+                log("[赛氪匹配] 名称「%s」未匹配到赛氪" % name)
     else:
         contest_id, match = int(contest_id), "candidate"
     if not contest_id:
-        return {"status": "no_mapping", "competition_id": int(competition_id),
-                "reason": "无赛氪 contest_id"}
+        return {
+            "status": "no_mapping" if not allow_name_match else "no_match",
+            "competition_id": int(competition_id),
+            "reason": "无赛氪 contest_id" if not allow_name_match
+                      else "通过名称未匹配到赛氪",
+        }
 
     owns_session = session is None
     session = session or _session()
@@ -970,12 +1056,17 @@ def enrich_competition(target_db: str, competition_id: int, *,
         db_path=target_db,
         **{field: value["text"] for field, value in purified.items()},
     )
+    # 顺手补「空的日期字段 + 封面」：审核入库的新赛事通常这两类也是空壳，
+    # 只补空、封面过 image_guard 闸门，失败保持 NULL 走前端兜底。
+    extra = fill_dates_and_cover(target_db, int(competition_id), detail)
+    changed = bool(written) or bool(extra["dates"]) or bool(extra["cover"])
     return {
-        "status": "updated" if written else "exists",
+        "status": "updated" if changed else "exists",
         "competition_id": int(competition_id),
         "contest_id": contest_id,
         "match": match,
         "written": sorted(written),
+        "extra": extra,
         "fields": purified,
     }
 

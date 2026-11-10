@@ -962,6 +962,11 @@ MAILTO=""
 # 1) 03:00 每周一/周四 高校新闻获奖采集（写 awards / 占位赛事）
 0 3 * * 1,4 cd /opt/kuao/backend && flock -n /opt/kuao/backend/locks/news.lock ./venv/bin/python crawler_news.py --list-url "<LIST_URL>" --db-path competitions.db --allow-production --max-pages 4 --max-items 10 --report workspace/news_batch_$(date +\%F).json >> logs/news-$(date +\%F).log 2>&1
 
+# 1.5) 04:00 每月 1 号 / 15 号 刷新赛氪名称索引（saikr_index.json）
+#      频率刻意压到半月一次：一次刷新要抓 52 页（1.2s 间隔），每天跑有封 IP 风险。
+#      已新鲜时脚本只读本地、0 请求直接退出（--refresh-if-stale），重复跑无副作用。
+0 4 1,15 * * cd /opt/kuao/backend && flock -n /opt/kuao/backend/locks/saikr_index.lock ./venv/bin/python saikr_match.py --refresh-if-stale >> logs/saikr-index-$(date +\%Y\%m).log 2>&1
+
 # 2) 04:10 每日 赛氪候选发现（只写候选表；每日守卫防重复）
 10 4 * * * cd /opt/kuao/backend && flock -n /opt/kuao/backend/locks/discover.lock ./venv/bin/python discover_saikr.py --db-path competitions.db --apply --allow-production >> logs/discover-$(date +\%F).log 2>&1
 
@@ -995,6 +1000,7 @@ journalctl -u cron -n 50 --no-pager
 |---|---|---|---|
 | 02:30 | `backup_db.py` | `backups/` | 必须在所有写库之前 |
 | 03:00（周一/四） | `crawler_news.py` | `awards`、占位 `competitions` | 可能新建占位赛事，AI 当晚会跳过无官网/省级 |
+| 04:00（每月 1/15） | `saikr_match.py --refresh-if-stale` | `saikr_index.json` | 半月一次，抓 52 页 ≈80s；新鲜时 0 请求；索引供审核「名称 → contest_id」用 |
 | 04:10 | `discover_saikr.py` | `competition_candidates` | 只写候选，不碰主表；每日守卫 |
 | 04:40 | `daily_ai_worker.py` | `competitions.full_process_guide`、`insights`、`ideas`、`ai_jobs` | 吃当天候选/新闻结果；预算熔断 |
 | 05:20（周日） | `pipeline_update.py` | 主表缺失字段 | 与 AI 错开；20 条上限 |
