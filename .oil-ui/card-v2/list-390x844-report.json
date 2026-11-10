@@ -1,0 +1,20 @@
+[
+  {
+    "file": "page.png",
+    "state": null,
+    "size": "390x844",
+    "zoom": 1,
+    "animationWaitMs": 0,
+    "issues": [],
+    "lint": [
+      {
+        "rule": "tightLeading",
+        "label": "多行正文行高过紧",
+        "count": 1,
+        "examples": [
+          "h3.line-clamp-2.text-xl「中国机器人大赛暨 RoboCup 机器人世界杯中」（1.38）"
+        ]
+      }
+    ]
+  }
+]

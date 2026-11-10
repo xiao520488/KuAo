@@ -39,9 +39,11 @@ body,
 }
 
 /* ------------------------------------------------------------------
-   无封面兜底：按赛事名色相生成的淡彩渐变 + 赛事首字
-   卡片（16:9）与详情页（最高 300px 大图位）共用，避免灰白破图/空洞占位。
-   色相由 src/utils/coverFallback.js 计算后通过 --cover-hue 传入。
+   无封面兜底：赛事徽记（App 图标式色块 + 分类标签）
+   颜色只由赛事大类决定（工科蓝 / 理科绿 / 商科橙 / 文科紫 / 未分类中性灰），
+   色相由 src/utils/coverFallback.js 通过 --cover-hue 传入，同一大类永远同色。
+   对比度口径：图标方块固定 38% 明度 + 纯白字（最差的橙色相也有 ≈5:1，超 WCAG AA）；
+   标签字 30% 明度压在 97% 明度画布上（≈8:1）。暗色模式单独一套口径。
    ------------------------------------------------------------------ */
 .cover-fallback {
   position: relative;
@@ -49,65 +51,155 @@ body,
   height: 100%;
   width: 100%;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
+  gap: clamp(10px, 3.2cqw, 16px);
   overflow: hidden;
-  background:
-    radial-gradient(120% 120% at 16% 10%, hsl(var(--cover-hue, 210) 88% 98% / 0.95), transparent 58%),
-    linear-gradient(135deg,
-      hsl(var(--cover-hue, 210) 68% 94%),
-      hsl(calc(var(--cover-hue, 210) + 42) 62% 86%));
+  /* 内部尺寸随封面宽度缩放：卡片（≤430px）与详情页大图位共用一套规则 */
+  container-type: inline-size;
+  /* 画布：极淡的同色相渐变，负责衬托图标而不是抢注意力 */
+  background: linear-gradient(
+    135deg,
+    hsl(var(--cover-hue, 214) 74% 97%),
+    hsl(var(--cover-hue, 214) 62% 92%)
+  );
 }
 
-/* 右下角一层柔光，避免大色块太平 */
+/* 未分类：饱和度压到接近中性，避免冒充某一类比赛 */
+.cover-fallback[data-tone='未分类'] {
+  background: linear-gradient(135deg, hsl(215 12% 96%), hsl(215 10% 91%));
+}
+
+/* 右下角一层柔光，避免大色块太平（保留质感，不改信息结构） */
 .cover-fallback::after {
   content: '';
   position: absolute;
   inset: 0;
-  background: radial-gradient(85% 85% at 82% 92%, rgb(255 255 255 / 0.55), transparent 62%);
+  background: radial-gradient(85% 85% at 88% 92%, rgb(255 255 255 / 0.5), transparent 62%);
   pointer-events: none;
 }
 
-.cover-fallback__glyph {
+/* 左侧：赛事标识方块。深色实底 + 纯白字，绝不做半透明水印。
+   每个大类单独定 --mark-l / --mark-s：白字对比度实测均 >= 5.2:1（WCAG AA 正文级）。
+   亮度必须逐色相校准——绿色的相对亮度天然高，同样 38% 明度只有 3.4:1，必须压低。 */
+.cover-fallback__mark {
   position: relative;
   z-index: 1;
-  font-size: clamp(2.5rem, 6vw, 3.4rem);
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: clamp(44px, 16cqw, 76px);
+  height: clamp(44px, 16cqw, 76px);
+  border-radius: clamp(12px, 4.4cqw, 22px);
+  background: hsl(var(--cover-hue, 214) var(--mark-s, 62%) var(--mark-l, 38%));
+  color: #fff;
+  font-size: clamp(15px, 5.4cqw, 27px);
   font-weight: 800;
   line-height: 1;
   letter-spacing: -0.02em;
-  color: hsl(var(--cover-hue, 210) 42% 30% / 0.9);
-  text-shadow: 0 1px 0 rgb(255 255 255 / 0.55);
+  text-shadow: 0 1px 1px rgb(0 0 0 / 0.12);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.28),
+    0 8px 18px -8px hsl(var(--cover-hue, 214) 70% 28% / 0.55);
 }
 
-/* 2 字简称：字号略收、拉开字间距，两个字在色块中心视觉居中且不拥挤。
-   margin-right 抵消最后一个字后的字间距，避免整体重心偏左。 */
-.cover-fallback__glyph--short {
-  font-size: clamp(1.8rem, 4.5vw, 2.35rem);
-  letter-spacing: 0.14em;
-  margin-right: -0.14em;
-  white-space: nowrap;
+/* 逐色相校准过的明度（S 固定 62%，未分类降饱和到 14%） */
+.cover-fallback[data-tone='工科'] {
+  --mark-l: 46%;
+}
+.cover-fallback[data-tone='理科'] {
+  --mark-l: 28%;
+}
+.cover-fallback[data-tone='商科'] {
+  --mark-l: 36%;
+}
+.cover-fallback[data-tone='文科'] {
+  --mark-l: 46%;
+}
+.cover-fallback[data-tone='未分类'] {
+  --mark-s: 14%;
+  --mark-l: 34%;
 }
 
-/* 详情页大图位：字号更大、略降不透明度 */
-.cover-fallback--hero .cover-fallback__glyph {
-  font-size: clamp(4rem, 12vw, 6rem);
+.cover-fallback[data-tone='未分类'] .cover-fallback__mark {
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.22),
+    0 8px 18px -8px rgb(15 23 42 / 0.35);
 }
 
-.cover-fallback--hero .cover-fallback__glyph--short {
-  font-size: clamp(3rem, 8vw, 4.5rem);
-  letter-spacing: 0.18em;
-  margin-right: -0.18em;
+/* 2 字简称：字号略收、字距微开，两个字在方块里视觉居中不拥挤 */
+.cover-fallback__mark--short {
+  font-size: clamp(13px, 4.8cqw, 24px);
+  letter-spacing: 0.01em;
 }
 
-/* 暗色模式：同色相压暗，保证与卡片底色协调 */
+/* 右侧：分类标签 —— 颜色承载的信息在这里被读出来 */
+.cover-fallback__label {
+  position: relative;
+  z-index: 1;
+  min-width: 0;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  font-size: clamp(11px, 3.1cqw, 13px);
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  line-height: 1.35;
+  color: hsl(var(--cover-hue, 214) 52% 30%);
+}
+
+.cover-fallback[data-tone='未分类'] .cover-fallback__label {
+  color: hsl(215 16% 36%);
+}
+
+/* 详情页大图位：同一套锁版，整体放大并居中，读起来像品牌横幅 */
+.cover-fallback--hero {
+  justify-content: center;
+  gap: clamp(16px, 2.6cqw, 28px);
+}
+
+.cover-fallback--hero .cover-fallback__mark {
+  width: clamp(64px, 9cqw, 108px);
+  height: clamp(64px, 9cqw, 108px);
+  border-radius: clamp(18px, 2.6cqw, 30px);
+  font-size: clamp(22px, 3.2cqw, 38px);
+}
+
+.cover-fallback--hero .cover-fallback__mark--short {
+  font-size: clamp(19px, 2.8cqw, 34px);
+}
+
+.cover-fallback--hero .cover-fallback__label {
+  font-size: clamp(12px, 1.1cqw, 15px);
+  letter-spacing: 0.16em;
+}
+
+/* 暗色模式：画布压暗；标识方块沿用校准好的实色（白字对比度不受画布影响），
+   只补一圈细描边让它从暗底上浮出来，而不是把底色调亮导致白字变糊。 */
 .dark .cover-fallback {
-  background:
-    radial-gradient(120% 120% at 16% 10%, hsl(var(--cover-hue, 210) 36% 30% / 0.9), transparent 58%),
-    linear-gradient(135deg,
-      hsl(var(--cover-hue, 210) 32% 22%),
-      hsl(calc(var(--cover-hue, 210) + 42) 28% 16%));
+  background: linear-gradient(
+    135deg,
+    hsl(var(--cover-hue, 214) 30% 20%),
+    hsl(var(--cover-hue, 214) 26% 15%)
+  );
 }
 
-.dark .cover-fallback__glyph {
-  color: hsl(var(--cover-hue, 210) 60% 80% / 0.92);
-  text-shadow: 0 1px 0 rgb(0 0 0 / 0.35);
+.dark .cover-fallback[data-tone='未分类'] {
+  background: linear-gradient(135deg, hsl(215 18% 20%), hsl(215 16% 15%));
+}
+
+.dark .cover-fallback__mark {
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.16),
+    0 0 0 1px rgb(255 255 255 / 0.1),
+    0 8px 18px -8px rgb(0 0 0 / 0.6);
+}
+
+.dark .cover-fallback__label {
+  color: hsl(var(--cover-hue, 214) 62% 78%);
+}
+
+.dark .cover-fallback[data-tone='未分类'] .cover-fallback__label {
+  color: hsl(215 20% 74%);
 }

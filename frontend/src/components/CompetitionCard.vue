@@ -68,11 +68,13 @@ const COUNTDOWN_TONE = {
 
 const countdownClass = computed(() => (countdown.value ? COUNTDOWN_TONE[countdown.value.tone] : ''))
 
-// 封面兜底：无图 / 图片加载失败时，用名称哈希色相 + 2 字简称占位（布局尺寸不变）
+// 封面兜底：无图 / 图片加载失败时，按赛事大类取色的赛事徽记（图标 + 分类），布局尺寸不变
 // 真实图片永远优先：只有 image 为空或 @error 后才渲染 fallback。
 const imageFailed = ref(false)
 const showImage = computed(() => Boolean(props.image) && !imageFailed.value)
-const fallback = computed(() => coverFallback(props.title, props.shortName))
+const fallback = computed(() =>
+  coverFallback({ title: props.title, shortName: props.shortName, category: props.category })
+)
 
 function onImageError() {
   imageFailed.value = true
@@ -180,17 +182,19 @@ async function removeOnly() {
           class="h-full w-full object-cover object-center transition-transform duration-300 group-hover:scale-105"
           @error="onImageError"
         />
-        <!-- 无图 / 加载失败：按名称哈希生成淡彩渐变 + 2 字简称（无简称则首字） -->
+        <!-- 无图 / 加载失败：按赛事大类取色的徽记（左侧标识方块 + 右侧分类标签） -->
         <div
           v-else
           class="cover-fallback"
+          :data-tone="fallback.tone"
           :style="{ '--cover-hue': fallback.hue }"
           aria-hidden="true"
         >
           <span
-            class="cover-fallback__glyph"
-            :class="{ 'cover-fallback__glyph--short': fallback.isShortName }"
+            class="cover-fallback__mark"
+            :class="{ 'cover-fallback__mark--short': fallback.isShortName }"
           >{{ fallback.glyph }}</span>
+          <span class="cover-fallback__label">{{ fallback.catLabel }}</span>
         </div>
       </div>
 
@@ -231,7 +235,7 @@ async function removeOnly() {
       <!-- 标题 -->
       <div class="flex items-start gap-2">
         <h3
-          class="truncate text-xl font-bold text-slate-900 dark:text-slate-100 cursor-pointer
+          class="line-clamp-2 text-xl font-bold leading-[1.45] text-slate-900 dark:text-slate-100 cursor-pointer
                  transition-colors duration-300 group-hover:text-blue-600"
           @click.stop="goDetail()"
         >

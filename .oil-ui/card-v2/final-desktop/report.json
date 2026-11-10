@@ -1,0 +1,82 @@
+[
+  {
+    "file": "competitions.png",
+    "target": "http://localhost:5173/competitions",
+    "name": "competitions",
+    "state": null,
+    "size": "1440x900",
+    "zoom": 1,
+    "animationWaitMs": 0,
+    "issues": [],
+    "lint": []
+  },
+  {
+    "file": "35.png",
+    "target": "http://localhost:5173/competition/35",
+    "name": "35",
+    "state": null,
+    "size": "1440x900",
+    "zoom": 1,
+    "animationWaitMs": 0,
+    "issues": [],
+    "lint": [
+      {
+        "rule": "contrastLow",
+        "label": "文字对比度不达标（正文低于 3:1，大字低于 2.5:1）",
+        "count": 7,
+        "examples": [
+          "span.text-xs.text-slate-400「信息来自平台采集，最终以官网当年通知为准」（2.45:1）",
+          "p.mt-3.text-xs「报名时间」（2.56:1）",
+          "p.mt-3.text-xs「比赛时间」（2.56:1）"
+        ]
+      }
+    ]
+  },
+  {
+    "file": "sheet.png",
+    "width": 1344,
+    "height": 7081,
+    "columns": 2,
+    "items": [
+      {
+        "naturalWidth": 1440,
+        "naturalHeight": 15752,
+        "scale": 1,
+        "renderScale": 0.4444444444444444,
+        "sourceCrop": {
+          "x": 0,
+          "y": 0,
+          "width": 1440,
+          "height": 15752
+        },
+        "width": 640,
+        "height": 7001,
+        "labelHeight": 32,
+        "x": 24,
+        "y": 24,
+        "label": "competitions",
+        "labelY": 7033
+      },
+      {
+        "naturalWidth": 1440,
+        "naturalHeight": 1953,
+        "scale": 1,
+        "renderScale": 0.4444444444444444,
+        "sourceCrop": {
+          "x": 0,
+          "y": 0,
+          "width": 1440,
+          "height": 1953
+        },
+        "width": 640,
+        "height": 868,
+        "labelHeight": 32,
+        "x": 680,
+        "y": 24,
+        "label": "35",
+        "labelY": 900
+      }
+    ],
+    "issues": []
+  }
+]
