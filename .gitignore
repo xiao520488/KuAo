@@ -22,3 +22,6 @@ node_modules/
 dist/
 _*.py
 _*.txt
+
+# 赛氪名称索引（~1MB 生成产物，saikr_match.py --build / --refresh-if-stale 可重建）
+saikr_index.json
