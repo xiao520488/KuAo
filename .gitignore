@@ -25,3 +25,9 @@ _*.txt
 
 # 赛氪名称索引（~1MB 生成产物，saikr_match.py --build / --refresh-if-stale 可重建）
 saikr_index.json
+
+# 本地验证/取证产物（截图、DOM 快照、临时 DB、Chrome profile）——纯本地产物
+.verify/
+logs/
+# 前端打包产物（dist/ 已忽略，这是手工打成的 tar 包，每次构建都会变）
+dist.tar.gz
