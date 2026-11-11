@@ -420,6 +420,21 @@ cd backend
 - **学科分类**：`competition_whitelist.guess_category()` 输出**前端 33 个细分方向的原名**（不再自造类目），前端 `resolveCategory()` 一次命中；84 项里 `职业技能`（3 条）与 `农林食品`（1 条）原本没有对应方向，已补进 `competitionCategory.js` 的 `CATEGORY_TREE`。实测可见 84 条落在 **20 个类目**、`待确认` 归零。
 - **数据丰度现状（如实记录）**：84 条中 **66 条**至少有「参赛对象/内容范围/考核方式/报名日期/封面」之一，**18 条全空骨架**（8 条赛氪未收录 + 10 条赛氪详情无字段或往年届次被清空）；`intro`/`summary` 仍为空——这两列靠 `generate_guides`/AI 生成，不属补齐脚本职责。
 
+### 2.19 简称与简介补齐（2026-11-11 本地已执行）
+```powershell
+cd backend
+# 2 字简称（走 llm，只补空值）
+.\venv\Scripts\python.exe -X utf8 generate_short_names.py `
+    --db-path competitions.db --allow-production --sleep 0.3
+# 一句话简介 + 赛事介绍（走 llm，只补空值）
+.\venv\Scripts\python.exe -X utf8 backfill_intro.py --apply --allow-production --sleep 0.4
+```
+- **注意 `--db-path`**：`generate_short_names.py` 的 `DEFAULT_DB_PATH` 指向 `test_crawl.db`，不带 `--db-path competitions.db` 会白跑一遍测试库（实测踩过）。
+- **结果**：简称 **60/60** 补齐（如「码蹄」「世技」「机战」）；简介 **62/62** 补齐，`summary` + `intro` 均落库，用量 109 次调用 / 14.0 万 tokens。可见 84 条的 `summary`、`short_name` 缺口双双归零。
+- **`backfill_intro.py`** 只管 `summary`/`intro` 两列，不碰日期、封面、参赛对象，也不生成整篇攻略（那是 `generate_guides.py`）；提示词明确「不编造年份/日期/数量」，默认 dry-run，写生产库要 `--apply --allow-production`，写前自动备份。
+- **封面未做（已放弃一条路）**：试过按 `official_url` 抓 `og:image` 补 67 条缺口——6 个样本只有 1 个命中，且抓回来的是 `dycode.png` 二维码，`image_guard` 的 URL 黑名单（qr/qrcode/erweima/logo/icon/banner）拦不住这种命名，脚本已删除。当前 67 条赛事继续走 `coverFallback.js` 渐变兜底；若以后要补，正路是赛氪 `contest/lists` 的列表级封面字段（需重建本地索引带上 image），而不是逐站抓官网。
+- **剩余缺口（18 条骨架的参赛对象/内容范围）**：赛氪详情本身没有这些字段，只能从官网通知页抓正文再抽取，属下一轮工作。
+
 ---
 ## 三、赛氪数据源事实与合规边界
 - Vue SPA，HTML 只有 4.6 KB 空壳，**必须走内部 JSON API**：列表 `GET https://apiv4buffer.saikr.com/api/pc/contest/lists?page=&limit=&sort=&class_id=&level=`（`sort=2` 最近更新）；详情 `GET https://apiv4buffer.saikr.com/api/pc/contest/info?contest_id=<id>`。匿名可调，无 Token / 签名 / 强制 Cookie；`acw_tc` 只是阿里云 WAF 被动标记。
