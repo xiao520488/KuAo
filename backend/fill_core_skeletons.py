@@ -148,6 +148,22 @@ def plan_dates(detail: dict) -> dict:
 #   * 考试安排：不写（赛程里混着具体日期，同样有年份污染风险）。
 PARENT_FALLBACK_FIELDS = ("participants", "content_scope")
 PARENT_MATCH_MIN_SCORE = 0.92
+# 父赛事文本里的「2024年6月1日前」这类届次时间，对省级赛是新信息也是错信息：
+# 日期不可能通用，直接把日期短语剥掉，保留资格描述本体（"正式注册的全日制…"）。
+_PARENT_DATE_RE = re.compile(
+    r"(?:19|20)\d{2}\s*年(?:\s*\d{1,2}\s*月(?:\s*\d{1,2}\s*日)?)?\s*"
+    r"(?:之前|以前|前|后|截止)?\s*"
+)
+
+
+def strip_parent_dates(text: str) -> str:
+    """去掉父赛事文本里的年份/日期短语，避免把往年截止时间带进省级赛。"""
+    cleaned = _PARENT_DATE_RE.sub("", text or "")
+    cleaned = re.sub(r"\(\s*\)|（\s*）", "", cleaned)
+    cleaned = re.sub(r"[，,；;]\s*[，,；;]", "，", cleaned)
+    cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
+    cleaned = re.sub(r"(?m)^\s*[、，,；;]\s*", "", cleaned)
+    return cleaned.strip()
 _PARENT_SUFFIX_RE = re.compile(
     r"(?:[·•\-—_]?\s*(?:省级赛区|省级选拔赛|省级赛|省赛区|省赛|分赛区|赛区|省级))\s*$"
 )
@@ -293,7 +309,8 @@ def dry_run(db_path: str, targets: list, *, delay, allow_stale: bool,
             texts = {k: (v.get("text") or "") if isinstance(v, dict) else str(v or "")
                      for k, v in raw.items()}
             if parent_mode:
-                texts = {k: v for k, v in texts.items() if k in PARENT_FALLBACK_FIELDS}
+                texts = {k: strip_parent_dates(v) for k, v in texts.items()}
+                log("  [口径] 父赛事文本已剥离年份/日期短语，只保留资格描述")
             item["raw_chars"] = {k: len(v) for k, v in texts.items()}
             item["raw_preview"] = {k: v[:80] for k, v in texts.items()}
             for field, label in (("participants", "参赛对象"), ("content_scope", "内容范围"),
@@ -412,12 +429,22 @@ def apply_one(db_path: str, competition_id: int, *, index: dict, session,
     if needed:
         purified = enrich.purify_fields(name, needed, max_chars=max_chars)
         if purified:
+            payload = {}
+            for field, value in purified.items():
+                text = value["text"]
+                if parent_mode:
+                    text = strip_parent_dates(text)
+                    if len(text) < 10:
+                        log("  · %s 剥离日期后为空，放弃写入" % field)
+                        continue
+                payload[field] = text
             written = sorted(db.fill_competition_detail_text(
-                competition_id, only_empty=True, db_path=db_path,
-                **{field: value["text"] for field, value in purified.items()},
-            ))
+                competition_id, only_empty=True, db_path=db_path, **payload,
+            )) if payload else []
             for field in written:
-                log("  ✓ %s：%d 字（AI 提纯）" % (field, len(purified[field]["text"])))
+                log("  ✓ %s：%d 字（AI 提纯%s）"
+                    % (field, len(payload[field]),
+                       "，已剥离父赛事年份" if parent_mode else ""))
         else:
             log("  · AI 未产出可用短句，长文本保持空")
     elif parent_mode:
