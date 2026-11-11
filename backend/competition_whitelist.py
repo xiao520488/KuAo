@@ -234,20 +234,30 @@ _BY_INDEX = {idx: (idx, name, url) for idx, name, url in WHITELIST}
 def match(name: str):
     """返回命中的白名单条目 dict（index/name/url/matched），未命中返回 None。
 
-    取「命中的最长键」：避免「挑战杯」这种短别名抢在
-    「挑战杯中国大学生创业计划竞赛」这类全称前面（#2 vs #3 必须分清）。
+    三趟匹配，优先级从高到低：
+      ① 完全相等 —— 「世界技能大赛」必须命中 #81，而不是被 #82（中国选拔赛）截走；
+      ② 键被名称包含 —— 「2026年高教社杯全国大学生数学建模竞赛」命中 #5；
+      ③ 名称被键包含 —— 名称偏短时兜底（如只写了「大唐杯」）。
+    每趟内部取**最长键**，避免「挑战杯」这种短别名抢在「挑战杯中国大学生创业计划
+    竞赛」前面（#2 vs #3 必须分清）。
     """
     norm = normalize(name)
     if not norm:
         return None
-    best = None  # (key_len, idx, key)
-    for idx, _wl_name, _url, keys in _INDEX:
-        for key in keys:
-            if len(key) < 3:
-                continue
-            if norm == key or key in norm or (len(norm) >= 4 and norm in key):
+
+    def _pick(predicate):
+        best = None
+        for idx, _wl_name, _url, keys in _INDEX:
+            for key in keys:
+                if len(key) < 3 or not predicate(norm, key):
+                    continue
                 if best is None or len(key) > best[0]:
                     best = (len(key), idx, key)
+        return best
+
+    best = (_pick(lambda n, k: n == k)
+            or _pick(lambda n, k: k in n)
+            or _pick(lambda n, k: len(n) >= 4 and n in k))
     if best is None:
         return None
     idx = best[1]
@@ -282,6 +292,54 @@ def gate(name: str) -> tuple[bool, str]:
 
 def summary() -> str:
     return "白名单 %d 项（来源：%s）" % (len(WHITELIST), ROSTER_SOURCE)
+
+
+# ---------------------------------------------------------------- 学科分类
+# 分类取值**直接用前端 33 个细分方向的原名**（frontend/src/utils/competitionCategory.js），
+# 这样 resolveCategory() 能一次命中 MINOR_TO_MAJOR，不用再维护一层「原始类目 -> 大类」的
+# 别名表。84 项里有两种前端暂时没有的方向（职业技能、农林食品），已同步补进前端字典。
+# 规则顺序敏感：越具体的放前面，通用词放后面。
+CATEGORY_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("数学建模", ("数学建模", "统计建模")),
+    ("健康生命&医学", ("医学", "护理", "药学", "生命科学", "生物医学", "食品")),
+    ("农林食品", ("农业", "林业", "兽医", "水产", "园艺", "农林")),
+    ("外语", ("外语", "英语", "翻译", "跨文化")),
+    ("演讲主持&辩论", ("演讲", "主持", "辩论")),
+    ("艺术素养", ("诵写讲", "书写", "经典诵")),
+    ("工业&创意设计", ("广告艺术", "艺术设计", "视觉传达", "数字艺术", "华灿奖", "好创意",
+                   "米兰设计周", "工业设计", "数字媒体", "美术", "动画", "创意设计")),
+    ("土木建筑", ("结构设计", "建筑", "bim", "土木", "桥梁", "水利", "花园", "城乡规划",
+              "测绘", "地质", "遥感", "地理信息")),
+    ("化学化工", ("化工", "化学", "金相", "冶金")),
+    ("材料高分子", ("材料", "高分子")),
+    ("物理", ("物理", "光电", "光学")),
+    ("力学", ("力学",)),
+    ("环境能源", ("节能减排", "能源", "环境", "电力", "电气", "双碳")),
+    ("工程机械", ("机械", "汽车", "车辆", "成图", "三维数字化", "智能制造", "工程训练",
+              "工程实践")),
+    ("电子&自动化", ("电子设计", "集成电路", "芯片", "通信", "半导体", "嵌入式", "物联网",
+                 "ict", "仪器", "自动化")),
+    ("商业", ("市场调查", "商业", "财会", "会计", "金融", "税收", "经济", "企业模拟",
+            "沙盘", "物流", "管理", "营销", "审计", "贸易")),
+    ("机器人", ("机器人", "robocup", "robomaster", "robotac", "无人机", "智能装备")),
+    ("程序设计", ("程序设计", "编程", "算法", "acm", "icpc", "蓝桥", "码蹄", "软件测试")),
+    ("人工智能", ("人工智能", "信息安全", "网络安全", "大数据", "智能", "数据科学")),
+    ("计算机&信息技术", ("计算机", "信息技术", "数字化", "互联网", "软件", "云计算")),
+    ("创业", ("创新创业", "创业", "创客", "电子商务", "三创", "挑战杯", "创新大赛")),
+    ("创青春", ("创青春",)),
+    ("职业技能", ("职业技能", "技能大赛", "世界技能", "金砖", "一带一路", "职业院校")),
+)
+
+DEFAULT_CATEGORY = "计算机&信息技术"
+
+
+def guess_category(name: str) -> str:
+    """按名称给 84 项目录里的赛事归一个前端细分方向（只用于核心赛，别复用到野生赛事）。"""
+    text = (name or "").lower()
+    for category, keywords in CATEGORY_RULES:
+        if any(k.lower() in text for k in keywords):
+            return category
+    return DEFAULT_CATEGORY
 
 
 if __name__ == "__main__":

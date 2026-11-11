@@ -152,15 +152,31 @@ def create_row(conn, entry):
     index, name, url = entry
     row = {
         "name": name,
-        "category": common.guess_category(name) or "待确认",
+        "category": whitelist.guess_category(name),
         "level": "national",
         "level_label": "国家级",
         "official_url": url or None,
-        "discover_source": "edu:84",
         "is_active": 1,
         "sort_order": 9999,
     }
     return db.add_competition(row)
+
+
+def tag_source(conn, cid):
+    """db.add_competition 不认 discover_source，这里补上来源标记。"""
+    conn.execute("UPDATE competitions SET discover_source='edu:84' WHERE id=?", (cid,))
+    conn.commit()
+
+
+DATE_FIELDS = ("reg_start_date", "reg_end_date", "contest_start_date", "contest_end_date",
+               "reg_start_month", "reg_end_month", "contest_start_month", "contest_end_month")
+
+
+def clear_dates(conn, cid):
+    """往年届次只保留可复用的稳定字段，报名/比赛时间一律清空，避免学生看到过期日期。"""
+    conn.execute("UPDATE competitions SET %s WHERE id=?"
+                 % ", ".join("%s=NULL" % f for f in DATE_FIELDS), (cid,))
+    conn.commit()
 
 
 def backup(db_path):
@@ -184,20 +200,51 @@ def _edition_year(text):
 
 
 def _official_core(index):
-    """白名单官方名（去掉并列尾巴）的归一化形式。"""
+    """白名单官方名（去掉并列尾巴、末尾英文/括号）的归一化形式。"""
     name = whitelist.WHITELIST[index - 1][1]
     return whitelist.normalize(whitelist._base_name(name))
+
+
+_PREFIX_RE = __import__("re").compile(
+    r"^(?:(?:20\d{2})年?|第[一二三四五六七八九十百零\d]+届|【[^】]*】|\[[^\]]*\]|（[^）]*）|\([^)]*\))+")
+
+# 极少数赛事的官方名前面固定挂赞助商杯名（正大杯=市场调查、科云杯=财会…）。
+# 只有「杯名 -> 白名单序号」对得上的才允许剥掉，避免「天府杯数学建模」这类
+# 同名旁支靠杯名混进国赛名录。
+CUP_PREFIX = {
+    "高教社杯": 5,
+    "正大杯": 20,
+    "科云杯": 78,
+    "工行杯": 55,
+    "大唐杯": 41,
+    "西门子杯": 23,
+    "外教社杯": 57,
+    "学创杯": 48,
+    "外研社国才杯": 15,
+}
+
+
+def _strip_prefix(text):
+    """剥掉「2026年」「第十二届」「【榜单赛事】」这类前缀。"""
+    out = text or ""
+    for _ in range(8):
+        new = _PREFIX_RE.sub("", out)
+        if new == out:
+            break
+        out = new
+    return out
 
 
 def _validate(cand_name, index, score, min_score=0.85):
     """赛氪名是否真的是这条白名单赛事。
 
-    三道闸：
+    四道闸（越靠后越宽松）：
       ① 相似度 >= min_score（拒绝「——地球科学与技术学院」这类院内通知）；
-      ② 官方核心名与赛氪名互为包含 -> 通过（最常见）；
-      ③ 否则要求命中白名单的**长别名**（>=6 字），用于「论坛(大赛) vs 大赛」
-         「赛例 vs 案例」这类官方名本身有出入的情况；短别名（如「数学建模」）
-         一律不放行，避免「天府杯数学建模」冒充国赛。
+      ② 剥掉年份/届次/【榜单】前缀（以及白名单内登记的赞助杯名）后，必须
+         **以官方核心名开头**——「天府杯全国大学生数学建模竞赛」剥不掉
+         「天府杯」，开头也不是官方名，直接否决，防止同名旁支冒充；
+      ③ 赛氪名被官方名包含（如官方名带后缀而赛氪名更短）；
+      ④ 命中白名单的长别名（>=6 字），兜住「论坛(大赛) vs 大赛」「赛例 vs 案例」。
     """
     core = _official_core(index)
     cand = whitelist.normalize(cand_name)
@@ -205,10 +252,23 @@ def _validate(cand_name, index, score, min_score=0.85):
         return False, "名称无法归一化"
     if score < min_score:
         return False, "相似度 %.2f < %.2f" % (score, min_score)
-    if core in cand or cand in core:
+
+    raw = _strip_prefix((cand_name or "").strip().lstrip("“”\"'「」《》"))
+    for cup, idx in CUP_PREFIX.items():
+        if idx == index and raw.startswith(cup):
+            raw = _strip_prefix(raw[len(cup):])
+            break
+    body = whitelist.normalize(raw)
+    core_short = __import__("re").sub(r"[a-z]+$", "", core)
+    for head in (core, core_short):
+        if head and (body.startswith(head) or cand.startswith(head)):
+            return True, ""
+    if cand and cand in core:
         return True, ""
     hit = whitelist.match(cand_name)
-    if hit and hit["index"] == index and len(hit["matched"] or "") >= 6:
+    aliases = whitelist.ALIASES.get(index, ())
+    if hit and hit["index"] == index and len(hit["matched"] or "") >= 6 \
+            and hit["matched"] in aliases:
         return True, ""
     return False, "赛氪名不是官方全称（疑似同名子赛事/院内赛）"
 
@@ -228,6 +288,10 @@ def main(argv=None):
     ap.add_argument("--delay", type=float, default=6.0,
                     help="搜索接口兜底请求间隔秒数（默认 6，建议 5~10）")
     ap.add_argument("--limit", type=int, default=0, help="最多处理前 N 条（0=全部）")
+    ap.add_argument("--skeletons", action="store_true",
+                    help="赛氪没收录的也建骨架行（官方名+官网链接），保证 84 项齐全")
+    ap.add_argument("--stale-partial", action="store_true",
+                    help="往年届次只写稳定字段（参赛对象/范围/封面），日期清空不误导")
     args = ap.parse_args(argv)
 
     db_path = os.path.abspath(args.db)
@@ -342,6 +406,7 @@ def main(argv=None):
             continue
         try:
             cid = create_row(conn, (index, name, url))
+            tag_source(conn, cid)
             log("[建行] #%d %s -> competition_id=%s" % (index, name, cid))
             if args.no_ai:
                 detail = enrich.fetch_detail(enrich._session(), chosen["contest_id"])
@@ -360,10 +425,21 @@ def main(argv=None):
                     db_path, cid, contest_id=chosen["contest_id"],
                     allow_name_match=False,
                 )
-                # 详情里没有封面时再兜底补封面/日期
-                enrich.fill_dates_and_cover(
-                    db_path, cid, enrich.fetch_detail(enrich._session(),
-                                                      chosen["contest_id"]))
+                # 往年届次：稳定字段照样提纯，但日期清空
+                if result.get("status") == "stale" and args.stale_partial:
+                    past = enrich.enrich_competition(
+                        db_path, cid, contest_id=chosen["contest_id"],
+                        allow_name_match=False, allow_stale=True)
+                    enrich.fill_dates_and_cover(
+                        db_path, cid, enrich.fetch_detail(enrich._session(),
+                                                          chosen["contest_id"]))
+                    clear_dates(conn, cid)
+                    result = dict(past, status="stale-partial")
+                else:
+                    # 详情里没有封面时再兜底补封面/日期
+                    enrich.fill_dates_and_cover(
+                        db_path, cid, enrich.fetch_detail(enrich._session(),
+                                                          chosen["contest_id"]))
             written.append({"index": index, "id": cid, "name": name,
                             "saikr": chosen.get("matched_name"), "result": result})
             log("[写入] #%d %s（contest_id=%s，%s）"
@@ -372,12 +448,26 @@ def main(argv=None):
             failed.append({"index": index, "name": name, "error": repr(exc)})
             log("[失败] #%d %s -> %r" % (index, name, exc))
 
+    # ---------------- 赛氪没收录的：建骨架，保证 84 项目录齐全 ----------------
+    skeletons = []
+    if args.skeletons and unmatched:
+        for item in unmatched:
+            index, name, url = item["entry"]
+            try:
+                cid = create_row(conn, (index, name, url))
+                tag_source(conn, cid)
+                skeletons.append({"index": index, "id": cid, "name": name})
+                log("[骨架] #%d %s -> competition_id=%s" % (index, name, cid))
+            except Exception as exc:  # noqa: BLE001
+                failed.append({"index": index, "name": name, "error": repr(exc)})
+                log("[骨架失败] #%d %s -> %r" % (index, name, exc))
+
     total = conn.execute("SELECT COUNT(*) FROM competitions").fetchone()[0]
     active = conn.execute(
         "SELECT COUNT(*) FROM competitions WHERE COALESCE(is_active,1)=1").fetchone()[0]
     log("\n=== 完成 ===")
-    log("新增 %d 条，失败 %d 条；主库 %d 条（前台可见 %d 条）"
-        % (len(written), len(failed), total, active))
+    log("新增 %d 条，骨架 %d 条，失败 %d 条；主库 %d 条（前台可见 %d 条）"
+        % (len(written), len(skeletons), len(failed), total, active))
     if failed:
         for f in failed:
             log("  失败 #%s %s：%s" % (f["index"], f["name"], f["error"]))
@@ -386,7 +476,7 @@ def main(argv=None):
     report_path = os.path.join(
         report_dir, "init_84_races_%s.json" % datetime.now().strftime("%Y%m%d-%H%M%S"))
     with open(report_path, "w", encoding="utf-8") as f:
-        json.dump({"written": written, "failed": failed,
+        json.dump({"written": written, "failed": failed, "skeletons": skeletons,
                    "unmatched": [i["entry"] for i in unmatched]},
                   f, ensure_ascii=False, indent=1)
     log("报告：%s" % report_path)

@@ -34,7 +34,7 @@
 ### 0.4 数据库快照（2026-11-10 实测）
 | 对象 | 现状 |
 |---|---|
-| `competitions.db`（本地生产库副本） | 赛事 **46**（11-10 深夜再清 5 条三字段全空的冷门空壳后）/ 获奖 **87** / 候选 **82**（approved 17 · pending 57 · rejected 8）/ 攻略 **7** / `short_name` 全覆盖 / `ai_jobs` **0** |
+| `competitions.db`（本地生产库副本） | 赛事 **91**（可见 84 = 教育部 84 项全集；隐藏 7 条带 awards 的省级占位）/ 获奖 **87** / 候选 **0**（已清空）/ 攻略 **7** / `short_name` 全覆盖 / `ai_jobs` **0** |
 | `test_crawl.db`（测试库） | 赛事 **33** / 获奖 **88** / 候选 **82**（全 pending）/ 攻略 **9** / `ai_jobs` 2（均 done）；**schema 落后**，缺 `*_date` 四列，需 `db.init_db('test_crawl.db')` 补列后再跑日期类脚本 |
 | 云端 `competitions.db` | 2026-11-08 迁移后 33 / 87 / 82 / 攻略 7 / ai_jobs 0，SHA `297e17df…`；本地新数据尚未同步 |
 | 候选来源 | `edu-roster` 62 / `saikr` 20，`UNIQUE(source, source_key)` 零重复 |
@@ -112,6 +112,7 @@ CREATE TABLE IF NOT EXISTS competition_candidates (
 | `discover_common.py` | 发现公共层：目标库保护/备份、建候选表、入库循环、去重统计、类别猜测 |
 | `competition_whitelist.py` | **教育部 84 项核心国赛白名单唯一事实源**：名单 + 别名 + `match()` / `is_provincial()` / `gate()` 统一入库闸门（见 2.17） |
 | `cleanup_non_core_races.py` | 主库收敛为「84 项智库」：非白名单/省级赛删除或转占位、`--wipe-candidates` 清空候选池（见 2.17） |
+| `init_84_races.py` | 84 项全量补齐：本地索引优先解析赛氪 `contest_id`、未命中才走搜索兜底、`--skeletons` 给未收录项建骨架、`--stale-partial` 往年届次只写稳定字段（见 2.18） |
 | `discover_university.py` | 84 项高校竞赛目录页解析（文本行/表格/序号变体），默认 dry-run |
 | `discover_saikr.py` | 赛氪列表前 2 页（≤20 条/天）增量发现，3–5 秒延迟，每日守卫，往年届次跳过 |
 | `review_candidates.py` | 审核 CLI（`--list/--approve/--reject`）：重过封面闸门 + 同事务写主表 + 自动补简称/详情 |
@@ -399,6 +400,25 @@ Copy-Item .\competitions.db .\test_crawl.db -Force
 - **实测（2026-11-11）**：46 → 31 条（删 15 条水赛、7 条省赛转占位）。删除：汉语言文字、商务外语词汇、机器人与算法大赛（含两赛道）、中外杯、英语世界杯、英才计划、诗经吟唱、中国故事大赛×2、中西部外语翻译、环保知识大赛、华文奖、云帐房、悦·读者杯。占位：#23/#24/#25/#27/#28/#29/#30（均带 awards）。**候选表 82 条清空归零**。
 - **闸门已固化到三条链路**（默认生效，无开关）：`discover_saikr` 写候选前、`discover_university` 解析目录后、`review_candidates --approve` 与 `POST /api/admin/candidates/{id}/approve` 入库前，统一调 `whitelist.gate(name)`；非白名单/省级直接丢弃或 400。应急破例只能 `review_candidates --allow-non-whitelist`（CLI 显式，无 API 入口）。
 - 前端同步去掉「赛事级别」：卡片徽章、列表筛选、详情三卡（`sm:grid-cols-3`）里的级别项全部移除，只留「赛事类别」；`list_competitions` / `list_hot_competitions` / `get_categories` 补 `is_active=1`，占位赛事不再泄漏到前台（实测列表 24 条、无省级）。
+
+### 2.18 84 项全量补齐（2026-11-11 本地已执行，云端待同步）
+```powershell
+cd backend
+# 1. 预演：本地索引优先，未命中/往年届次才走赛氪搜索兜底
+.\venv\Scripts\python.exe -X utf8 init_84_races.py --dry-run
+# 2. 真实落库（自动备份到 %TEMP%\kuo-verify）
+.\venv\Scripts\python.exe -X utf8 init_84_races.py --apply --allow-production `
+    --skeletons --stale-partial
+# 3. 只看白名单匹配自检（0 网络）
+.\venv\Scripts\python.exe competition_whitelist.py
+```
+- **结果**：84 项里主库原有 24 → 缺 60；`init_84_races.py` 解析出 **52 条赛氪可匹配**（本地索引 36 + 搜索兜底 16），**8 条赛氪未收录**（#7 医学技术技能、#29 地质技能、#60 水利创新设计、#73 企业模拟、#74 数智化沙盘、#80 RoboTac、#82 世界技能大赛中国选拔赛、#84 码蹄杯）建骨架行（官方名+官网+类目，`is_active=1`）。主库 **31 → 91**，前台可见 **24 → 84**，白名单覆盖 **84/84**。
+- **防误配三重校验**（`_validate()`）：① 相似度 ≥0.85；② 剥掉年份/届次/`【榜单赛事】`/白名单内登记的赞助杯名（高教社杯/正大杯/科云杯…，`CUP_PREFIX` 一一对应序号）后，必须以官方核心名**开头**——「天府杯全国大学生数学建模竞赛」因此被否掉；③ 名称被官方名包含（官方名更长时兜底）；④ 命中白名单**显式别名**且 ≥6 字（兜「论坛(大赛) vs 大赛」「赛例 vs 案例」）。实测拦下 2 条真误配（#5 天府杯、#29 院内通知）。
+- **往年届次处理**：赛氪详情报名结束超 400 天的按 `stale-partial` 处理——参赛对象/内容范围/封面照写，**报名与比赛日期一律清空**（`clear_dates()`），避免学生看到 2020/2022 的过期日期；20 条走这条路径。
+- **赛氪搜索接口的合规边界**：`/api/pc/search/info` 对应 robots 禁止的 `/search`，只在 `init_84_races.py` 里做**一次性孤儿兜底**（≤16 次、6 s 间隔、`--no-search` 可全关），不进任何 cron。
+- **`match()` 改为三趟**（2026-11-11 修复）：① 完全相等 → ② 键被名称包含 → ③ 名称被键包含。修的是「世界技能大赛」被 #82「世界技能大赛中国选拔赛」截走、导致 #81 在库里缺席的问题（等价类：`全国大学生机器人大赛` vs `-RoboTac`）。
+- **学科分类**：`competition_whitelist.guess_category()` 输出**前端 33 个细分方向的原名**（不再自造类目），前端 `resolveCategory()` 一次命中；84 项里 `职业技能`（3 条）与 `农林食品`（1 条）原本没有对应方向，已补进 `competitionCategory.js` 的 `CATEGORY_TREE`。实测可见 84 条落在 **20 个类目**、`待确认` 归零。
+- **数据丰度现状（如实记录）**：84 条中 **66 条**至少有「参赛对象/内容范围/考核方式/报名日期/封面」之一，**18 条全空骨架**（8 条赛氪未收录 + 10 条赛氪详情无字段或往年届次被清空）；`intro`/`summary` 仍为空——这两列靠 `generate_guides`/AI 生成，不属补齐脚本职责。
 
 ---
 ## 三、赛氪数据源事实与合规边界
