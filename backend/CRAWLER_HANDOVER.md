@@ -1,6 +1,6 @@
 # CRAWLER_HANDOVER.md
 > 交接范围：`backend/` 的新闻获奖采集、赛事基础数据采集与补全、赛氪详情补充、候选表与审核、AI 攻略/灵感链路、云端定时任务、管理后台、前端展示规范。
-> 最后更新：2026-11-10（审核后自动补全修复）。本文件是**操作手册**，不记变更史；单条历史用 `git log` 与 `workspace/*.json` 回溯。
+> 最后更新：2026-11-11（新增第十节「JS 渲染站点抓取 SOP」，接入 playwright-mcp 浏览器抓包）。本文件是**操作手册**，不记变更史；单条历史用 `git log` 与 `workspace/*.json` 回溯。
 > 读法：第零节 30 秒 → 第二节命令 → 第五节后台 → 第七节边界。
 ## 文档导航
 零、接手必读（30 秒版）
@@ -13,6 +13,7 @@
 七、未完成项与已知边界
 八、测试与验证
 九、云端部署与运维
+十、JS 渲染站点抓取 SOP（playwright-mcp）
 
 ---
 ## 零、接手必读（30 秒版）
@@ -385,7 +386,7 @@ Copy-Item .\competitions.db .\test_crawl.db -Force
 ---
 ## 三、赛氪数据源事实与合规边界
 - Vue SPA，HTML 只有 4.6 KB 空壳，**必须走内部 JSON API**：列表 `GET https://apiv4buffer.saikr.com/api/pc/contest/lists?page=&limit=&sort=&class_id=&level=`（`sort=2` 最近更新）；详情 `GET https://apiv4buffer.saikr.com/api/pc/contest/info?contest_id=<id>`。匿名可调，无 Token / 签名 / 强制 Cookie；`acw_tc` 只是阿里云 WAF 被动标记。
-- **列表接口没有关键词搜索参数**（只有 page / limit / sort / class_id / level），站点 `/search` 被 robots 禁止 → 无法按名称反查 contest_id，这是「审核后补全」只能降级的前提。
+- **主列表接口没有关键词搜索参数**（只有 page / limit / sort / class_id / level）。另有关键词搜索接口 `GET /api/pc/search/info?type=0&keyword=<kw>&page=&limit=`（2026-11-11 实测可用，见 10.4），但它对应的 `/search` 页面被 robots 禁止 → **合规上不得用于批量名称反查**，所以在「审核后补全」里只能降级用本地索引，这是该降级的前提。
 - `robots.txt`：`Disallow: /api/`、`Disallow: /search`、`Disallow: /*?*`、`Crawl-delay: 10`。技术上违反 robots，定位是「低频、低风险、**非授权**」；前提：不商用、署名回链、只存 ID+名称+URL、间隔 ≥3 秒（建议 10）、每日 ≤2 页 20 条、遇 429/验证码立刻停。结论：只做**存量 32 条补全 + 每日 20 条增量候选**，不做全量抓取。
 - **`image_guard` 三条拒绝规则**（所有写封面入口共用 `check_image()`）：
   1. **URL 黑名单**：`qr / qrcode / erweima / logo / icon / banner`（子串 + `qr`/`ewm` token 匹配）→ 拒；
@@ -654,3 +655,72 @@ cd ..\frontend; D:\Tools\node.exe D:\Tools\node_modules\npm\bin\npm-cli.js run b
 浏览器验收务必 **Ctrl + F5** 强刷；仍是旧页面就先 `curl -s http://112.126.90.252/ | grep -o 'assets/index-[^"]*'` 确认引用的是新哈希。线上无强缓存（只有 `ETag` / `Last-Modified`），旧包通常是文件没进 Web 根。
 
 每日备份：`./venv/bin/python backup_db.py --db competitions.db --backup-dir backups --keep-days 30 --label daily`。用 `sqlite3.Connection.backup()`（不是 `cp`）生成含已提交 WAL 的一致快照，备份库为 `journal_mode=DELETE`、恢复不依赖 `-wal/-shm`；备份后自动 `integrity_check` + 四表行数校验。备份 SHA 与线上库不同属正常，验收只看 `integrity_check` 与行数；恢复见 1.4。
+
+---
+
+## 十、JS 渲染站点抓取 SOP（playwright-mcp）
+
+> 2026-11-11 实测落地。核心思想：**用高成本的浏览器去找低成本的接口**——浏览器只做「探路」，量产永远走 `requests` + JSON API。
+
+### 10.1 先判断要不要上浏览器（按顺序试，能停就停）
+1. `curl` / `requests` 拿原始 HTML，**grep 目标字段**（如赛事名、`result-item`、总数）。
+   - 命中 → 静态或服务端渲染，直接解析，**别开浏览器**。
+   - 只有 4–8 KB 空壳、字段计数为 0 → SPA，进第 2 步。
+2. 查 `robots.txt` 与站点条款，确认目标路径是否 `Disallow`（合规判断先行，见 10.4）。
+3. 打开 MCP 浏览器抓包定位真实接口，再用 `requests` 重放。
+
+> 对照数据（赛氪 `/search`，2026-11-11）：原始 HTML **4247 字节**，`云帐房` / `result-item` / `5163` 出现次数均为 **0**；而 DOM 渲染后有 10 张卡片 → 典型第 1 步就该判掉的 SPA。
+
+### 10.2 标准五步（工具名即 `playwright-mcp` 的工具）
+0. **前置**：本站装了 playwright-mcp（见 10.5），工具前缀 `mcp__browser__`，共 25 个。
+1. **开页面**：`browser_navigate(<列表页 URL>)`
+   - 注意路由：赛氪 `/races`、`/vs` 都是 404，真实列表页是 **`/search`**；别拿猜想 URL 当结论，先开首页 `browser_evaluate` 收集 `a[href]`，再定位入口。
+2. **读渲染结果**：先 `browser_snapshot` 看结构，再 `browser_evaluate` 精确抽字段（比 snapshot 省 token、比正则稳）：
+   ```js
+   () => [...document.querySelectorAll('li.result-item')].map(li => ({
+     title: li.querySelector('a[title]')?.getAttribute('title'),
+     href:  li.querySelector('a[href*="/vse/"]')?.href,
+   }))
+   ```
+   - 卡片 `innerText` 为空时说明文字在子节点/兄弟节点，往上找 `closest('div[class]')` 或改用 `a[title]`。
+3. **制造一次「翻页」并抓包**：赛氪是 `button.load-more`（「点击加载更多」），不是页码。
+   `browser_click('button.load-more')` → `browser_network_requests({filter:'search/info'})`
+   - 断言方式：**点击前后 DOM 条数变化**（10 → 20）+ **新增一条带 `page=2` 的请求**，两者同时成立才算确认「数据来自接口」。
+4. **取请求头**：`browser_network_request(index, part:'request-headers')`
+   - 只关心有没有 `Authorization` / `X-Sign` / 强制 `Cookie`。赛氪实测只有 `user-agent`、`referer: https://www.saikr.com/`、`accept: application/json` → 可直接重放。
+5. **重写成 requests 并核对分页字段**：换成 `requests`/`urllib` 循环 `page`，比对 `total` / `total_page` / `limit`，字段名以响应为准（赛氪：`contest_id`、`contest_name`、`contest_url`、`regist_start_time`(秒级时间戳)、`level_name`、`organiser`、`thumb_pic`、`labels[]`）。
+   - 落地位置：`discover_saikr.py`（列表）、`enrich_saikr_details.py`（详情）、`saikr_match.py`（索引）。**新站点照这三个文件的形状写**，别另起一套。
+
+### 10.3 三条现实提醒（别以为「有浏览器就无死角」）
+1. **能直连 API ≠ 可以高频跑**。接口都挂了 WAF/限流，超频直接 403 或返回空列表。
+   - 铁律沿用 §三：赛氪 3–5 秒（建议 10）、通知页 5–10 秒、新闻 2–5 秒；每日 ≤2 页 20 条；遇 429 / 验证码 / 空列表立即停。
+   - 抓包得的 `limit` 上限别试探性拉大（`limit=15` 与 `limit=10` 的 `total_page` 不同，大 limit 更容易触发风控）。
+2. **有签名的站点，浏览器只用来「拿环境」**。小红书、部分小程序端那种 `X-Sign` / `mtgsig`：
+   - 用 `browser_evaluate` / `browser_run_code_unsafe` 在页面上下文里**直接调用它自己的签名函数**（`window._sign(...)`），把签名后的头捞出来再交给 requests；
+   - 没必要时**不要**逆向混淆 JS——那是时间黑洞，浏览器内 hook 才是正解。
+3. **反爬分级（先定位级别，再选工具，别一上来就上浏览器）**：
+
+| 级别 | 特征 | 打法 |
+|---|---|---|
+| L1 静态 | HTML 里就有数据 | `requests` + 解析，成本最低 |
+| L2 纯 JS 渲染 | HTML 是空壳，数据走 XHR/JSON | **本节 SOP**：浏览器探路 → requests 重放 |
+| L3 强签名/指纹 | 请求带 `X-Sign`、TLS 指纹校验、`mtgsig` | playwright 留在页面里签（`browser_run_code_unsafe`），或 `--user-data-dir` 持久化会话 |
+| L4 登录态 | 必须登录 / 扫码 | playwright 登录一次存 `storageState`，requests 带 Cookie 复用 |
+
+> 赛氪属 **L2**，是最便宜的一级；判级成本 1 分钟，判错会浪费半小时。
+
+### 10.4 合规红线（升级工具 ≠ 放宽边界）
+- §三 的 robots 结论**不变**：赛氪 `Disallow: /api/`、`/search`、`/*?*`，`Crawl-delay: 10`。技术上能做，定位仍是「低频、低风险、**非授权**」，只做存量补全 + 每日 20 条增量候选，**不因新增抓包能力而扩量**。
+- **修正 §三 的一条旧结论**：列表接口**确实有关键词搜索**——`GET /api/pc/search/info?type=0&keyword=<kw>&page=&limit=`（2026-11-11 实测「挑战杯」total=22、「学创杯」total=6、「计算机设计大赛」total=15）。
+  但该接口对应 `/search` 页面被 robots 禁止，**因此仍不得拿它做批量名称反查**；`saikr_match` 继续用本地 `saikr_index.json`（§三「无法按名称反查」的操作结论不变，只是原因从「接口不存在」改为「合规不允许」）。
+- 抓到的页面快照、截图、日志统一落 `C:\Users\xiao\.dsh\mcp\out`（MCP 的 `--output-dir`），**不要**在仓库里生成 `.playwright-mcp/`；已 gitignore 的 `.verify/` 只放临时取证。
+
+### 10.5 本机 playwright-mcp 现状（别人接手时先核对这段）
+| 项 | 值 |
+|---|---|
+| 安装位置 | `C:\Users\xiao\.dsh\mcp\playwright-mcp`（本地依赖，非全局；`@playwright/mcp@0.0.85`，18.3 MB） |
+| 浏览器内核 | `%LOCALAPPDATA%\ms-playwright`（chromium-1254 / chromium_headless_shell-1254 / ffmpeg-1013，约 740 MB） |
+| 配置 | `C:\Users\xiao\.dsh\profiles\desktop\cordis.patch.yml` 的 `insert` 段，`serverName: browser`，stdio 启动 `node cli.js --headless --isolated --no-sandbox --viewport-size=1440,900 --output-dir=...\.dsh\mcp\out` |
+| 生效方式 | **DSH 热加载，改完配置无需重启**；进程参数变化即说明 reload 成功（换 PID 属正常） |
+| 备份 | `cordis.patch.yml.bak-20261111-1915` |
+| 内核下载 | `cdn.playwright.dev` 在墙内会 `ECONNRESET`，必须 `PLAYWRIGHT_DOWNLOAD_HOST=https://cdn.npmmirror.com/binaries/playwright` 再 `playwright-core/cli.js install chromium` |
