@@ -122,7 +122,7 @@ CREATE TABLE IF NOT EXISTS competition_candidates (
 | `generate_guides.py` | 兼容用的攻略批量 CLI（内部已是 v2 Prompt，`--only-missing / --id`） |
 | `analyzer.py` | 灵感生成唯一实现（`insights` + `ideas`，单条手动），被 `generate_inspiration()` 复用 |
 | `cleanup_orphan_ai.py` | 清理孤儿 `insights/ideas`（`competition_id` 空或悬空），默认 dry-run |
-| `fill_core_skeletons.py` | 核心赛事骨架补全（封面/日期/参赛对象）：名称匹配赛氪 → 详情 → AI 提纯 → 只补空字段；默认 dry-run，`--allow-stale` 只补往年封面/对象不写日期（见 2.16） |
+| `fill_core_skeletons.py` | 核心赛事骨架补全（封面/日期/参赛对象）：名称匹配赛氪 → 详情 → AI 提纯 → 只补空字段；默认 dry-run，`--allow-stale` 只补往年封面/对象不写日期，`--parent-fallback` 省级赛回退国赛只复制对象/范围（见 2.16） |
 | `generate_short_names.py` | 批量生成两字简称（AI，默认只补空，`--force` 覆盖） |
 | `short_names.py` | 赛事名 → 两字简称（只算不写库，落库由调用方完成） |
 | `db.py` | 数据层：建表/迁移、CRUD、候选表、ai_jobs 抢占、日期排序 SQL |
@@ -378,6 +378,7 @@ Copy-Item .\competitions.db .\test_crawl.db -Force
 - 目标 = 「`image_url` / `participants` / `reg_start_date` 三列全空 + 至少一条下游数据（awards / ideas / insights / user_preparations）」的核心赛事（本次 8 条）；`--ids` 可显式指定。
 - 链路复用审核入库同一套：`saikr_match` 名称匹配 → 赛氪详情 API → AI 提纯（禁止照抄）→ 只补空字段；封面仍过 `image_guard`，不合格保持 NULL 走前端兜底。
 - **往年届次护栏**：`--allow-stale` 下只补封面/参赛对象，**日期四列一律不写**（避免把 2019/2020 的报名日期写到 2026 赛事上）。默认不带 `--allow-stale` 时整条跳过。
+- **`--parent-fallback`（省级赛 → 国赛）**：省级赛在赛氪索引里往往没有条目，按「去后缀 / 去『省级』/ 补『全国』」生成变体回退匹配国赛（相似度 ≥0.92 才采用）。红线：**只复制 `participants` / `content_scope` 两类静态文本**；日期、封面、赛程（`exam_schedule` 里混时间）一律不写；省级赛这两个字段已有值时直接跳过。实测 #30 挑战杯·省级赛 回退到第 19 届国赛，写入参赛对象 265 字，日期/封面保持 NULL。
 - 实测（2026-11-11）：8 条中命中 5 条、未命中 3 条（计算机设计大赛·省级赛 / 学创杯 / 挑战杯·省级，需人工补）；写库 4 条（#2 挑战杯对象 266 字 + 封面；#17 信息安全对象 222 字 + 赛程 157 字；#25 软件测试范围 286 字 + 赛程 268 字 + 封面；#10 计算机设计大赛 2026 报名日期）。#4 年会展示详情无章节且封面被闸门拒绝，保持空壳。
 - 全库封面 22→23、参赛对象 25 条、报名日期 18 条；赛事总数 46 不变。
 

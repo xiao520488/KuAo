@@ -32,6 +32,10 @@ insights / user_preparations）」的核心赛事；`--ids` 可显式指定。
     # 4. 往年届次（报名结束超 400 天）也补：只写封面/参赛对象，日期列保持空
     venv\\Scripts\\python.exe fill_core_skeletons.py --apply --allow-production --allow-stale
 
+    # 5. 省级赛父赛事回退（只复制 参赛对象/内容范围，绝不写日期/封面/赛程）
+    venv\\Scripts\\python.exe fill_core_skeletons.py --parent-fallback
+    venv\\Scripts\\python.exe fill_core_skeletons.py --parent-fallback --ids 23,9,30
+
 合规
 ----
 * 只处理库里已有赛事，不发现新赛事；
@@ -45,6 +49,7 @@ import argparse
 import json
 import os
 import random
+import re
 import sqlite3
 import sys
 import time
@@ -64,7 +69,8 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_PREVIEW = os.path.join(BASE_DIR, ".verify", "fill_core_preview.json")
 
 TARGET_SQL = """
-SELECT c.id, c.name, c.discover_source,
+SELECT c.id, c.name, c.discover_source, c.image_url, c.participants,
+       c.content_scope, c.exam_schedule, c.reg_start_date,
        (SELECT COUNT(*) FROM awards a WHERE a.competition_id = c.id)
      + (SELECT COUNT(*) FROM ideas i WHERE i.competition_id = c.id)
      + (SELECT COUNT(*) FROM insights ins WHERE ins.competition_id = c.id)
@@ -91,7 +97,8 @@ def load_targets(db_path: str, ids: set | None = None) -> list:
             rows = []
             for cid in sorted(ids):
                 row = conn.execute(
-                    "SELECT id, name, discover_source, 0 AS children "
+                    "SELECT id, name, discover_source, image_url, participants, "
+                    "content_scope, exam_schedule, reg_start_date, 0 AS children "
                     "FROM competitions WHERE id = ?", (cid,)
                 ).fetchone()
                 if row is None:
@@ -131,8 +138,68 @@ def plan_dates(detail: dict) -> dict:
     return out
 
 
+# ---------------------------------------------------------------------------
+# 父赛事回退（省级赛 -> 国赛）
+# ---------------------------------------------------------------------------
+# 省级赛（如「计算机设计大赛·省级赛」「挑战杯省级…」）在赛氪索引里通常没有条目，
+# 但它的参赛对象 / 内容范围与国赛高度重合。回退只复制这两类静态文本：
+#   * 日期：绝对不写（省赛有自己的时间，宁缺勿错）；
+#   * 封面：绝对不写（国赛海报不等于省赛海报）；
+#   * 考试安排：不写（赛程里混着具体日期，同样有年份污染风险）。
+PARENT_FALLBACK_FIELDS = ("participants", "content_scope")
+PARENT_MATCH_MIN_SCORE = 0.92
+_PARENT_SUFFIX_RE = re.compile(
+    r"(?:[·•\-—_]?\s*(?:省级赛区|省级选拔赛|省级赛|省赛区|省赛|分赛区|赛区|省级))\s*$"
+)
+_PARENT_BRACKET_RE = re.compile(r"[（(]\s*(?:省级赛|省赛|省赛区|分赛区|赛区|省级)\s*[）)]\s*$")
+_PARENT_INLINE_RE = re.compile(r"[·•\-—_]?\s*(?:省级选拔赛|省级赛|省赛区|省赛|省级)\s*")
+
+
+def parent_variants(name: str) -> list:
+    """由省级赛名称生成「可能的国赛名称」，按可信度从高到低去重。"""
+    variants = []
+
+    def add(text):
+        text = (text or "").strip(" 　·•-—_")
+        if len(text) >= 4 and text not in variants:
+            variants.append(text)
+
+    base = _PARENT_BRACKET_RE.sub("", name or "")
+    base = _PARENT_SUFFIX_RE.sub("", base)
+    add(base)
+    inline = _PARENT_INLINE_RE.sub("", name or "")
+    add(inline)
+    # 「挑战杯」省级大学生… -> 「挑战杯」全国大学生…：国赛条目普遍带「全国」
+    for text in (base, inline):
+        if "全国" not in text and "大学生" in text:
+            add(text.replace("大学生", "全国大学生", 1))
+    return variants
+
+
+def resolve_target(name: str, index: dict, allow_parent: bool) -> dict | None:
+    """先按原名精确匹配，失败再按父赛事名回退。"""
+    hit = saikr_match.resolve(name, index=index)
+    if hit:
+        return {"hit": hit, "mode": "direct", "variant": name}
+    if not allow_parent:
+        return None
+    best = None
+    for variant in parent_variants(name):
+        if variant == name:
+            continue
+        hit = saikr_match.resolve(variant, index=index)
+        if not hit:
+            continue
+        score = float(hit.get("score") or 0)
+        if score < PARENT_MATCH_MIN_SCORE:
+            continue
+        if best is None or score > float(best["hit"].get("score") or 0):
+            best = {"hit": hit, "mode": "parent", "variant": variant}
+    return best
+
+
 def dry_run(db_path: str, targets: list, *, delay, allow_stale: bool,
-            preview_path: str) -> int:
+            allow_parent: bool, preview_path: str) -> int:
     log("[模式] dry-run（只读库 + 抓取 + 校验，不写库、不调 AI）")
     log("[目标库] %s" % db_path)
     log("[计划] %d 条核心赛事\n" % len(targets))
@@ -146,19 +213,38 @@ def dry_run(db_path: str, targets: list, *, delay, allow_stale: bool,
             name = row["name"]
             log("─" * 72)
             log("#%s %s（下游数据 %s 条）" % (row["id"], name, row["children"]))
-            hit = saikr_match.resolve(name, index=index)
             item = {"id": row["id"], "name": name, "contest_id": None,
-                    "match": None, "match_score": None, "matched_name": None}
-            if not hit:
+                    "match": None, "match_score": None, "matched_name": None,
+                    "mode": "direct"}
+            resolved = resolve_target(name, index, allow_parent)
+            if resolved is None:
                 log("  赛氪匹配: ✗ 未命中（保持空壳，需人工补）")
+                if allow_parent:
+                    log("  父赛事回退: 生成变体 %s 后仍未命中" % "、".join(parent_variants(name)[:3]))
                 item["status"] = "no_match"
                 results.append(item)
                 continue
+            hit = resolved["hit"]
+            item["mode"] = resolved["mode"]
+            if resolved["mode"] == "parent":
+                empty_parent = [f for f in PARENT_FALLBACK_FIELDS
+                                if not str(row[f] or "").strip()]
+                if not empty_parent:
+                    log("  父赛事回退: 命中 variant「%s」，但参赛对象/内容范围均已有值 → 无需写"
+                        % resolved["variant"])
+                    item["status"] = "complete"
+                    results.append(item)
+                    continue
+                item["parent_variant"] = resolved["variant"]
+                log("  父赛事回退: 「%s」未命中 → 变体「%s」命中 contest_id=%s（%.2f）"
+                    % (name, resolved["variant"], hit["contest_id"], hit["score"]))
+                log("  红线: 只复制 参赛对象/内容范围，日期、封面、赛程一律不写")
+            else:
+                log("  赛氪匹配: ✓ contest_id=%s（%s %.2f，赛氪名「%s」）"
+                    % (hit["contest_id"], hit["method"], hit["score"], hit["matched_name"]))
             item.update(contest_id=int(hit["contest_id"]), match=hit["method"],
                         match_score=round(float(hit["score"]), 3),
                         matched_name=hit["matched_name"])
-            log("  赛氪匹配: ✓ contest_id=%s（%s %.2f，赛氪名「%s」）"
-                % (hit["contest_id"], hit["method"], hit["score"], hit["matched_name"]))
             try:
                 detail = enrich.fetch_detail(session, int(hit["contest_id"]))
             except Exception as exc:  # noqa: BLE001 - 单条失败不阻断
@@ -167,45 +253,65 @@ def dry_run(db_path: str, targets: list, *, delay, allow_stale: bool,
                 results.append(item)
                 continue
 
+            parent_mode = resolved["mode"] == "parent"
             stale = enrich.stale_reason(detail, now)
             item["stale"] = stale
-            if stale and not allow_stale:
+            if stale and not allow_stale and not parent_mode:
                 log("  时效闸门: %s → 整条跳过（要写往年封面/对象加 --allow-stale）" % stale)
                 item["status"] = "stale"
                 results.append(item)
                 continue
             if stale:
                 log("  时效闸门: %s → 只补封面/参赛对象，日期列保持空（避免写入往年日期）" % stale)
-            item["skip_dates"] = bool(stale)
+            item["skip_dates"] = bool(stale) or parent_mode
 
-            cover = plan_cover(detail)
-            item["cover"] = cover
-            if cover["ok"]:
-                log("  封面: ✓ %s（字段 %s）" % (cover["url"], cover["key"]))
-            elif cover["url"]:
-                log("  封面: ✗ 被闸门拒绝（%s）→ 保持空，前端走兜底" % cover["reason"])
+            if parent_mode:
+                log("  封面: 跳过（父赛事海报不适用于省级赛）")
+                item["cover"] = {"url": None, "ok": False, "reason": "父赛事回退不写封面", "key": None}
+                log("  日期: 跳过（父赛事回退绝不写日期）")
+                item["dates"] = {k: None for k in (
+                    "reg_start_date", "reg_end_date", "contest_start_date", "contest_end_date")}
             else:
-                log("  封面: — %s" % cover["reason"])
+                cover = plan_cover(detail)
+                item["cover"] = cover
+                if cover["ok"]:
+                    log("  封面: ✓ %s（字段 %s）" % (cover["url"], cover["key"]))
+                elif cover["url"]:
+                    log("  封面: ✗ 被闸门拒绝（%s）→ 保持空，前端走兜底" % cover["reason"])
+                else:
+                    log("  封面: — %s" % cover["reason"])
 
-            dates = plan_dates(detail)
-            item["dates"] = dates
-            log("  日期: %s" % (
-                "跳过（往年届次）" if stale else
-                "reg %s ~ %s ｜ contest %s ~ %s" % (
-                    dates["reg_start_date"] or "-", dates["reg_end_date"] or "-",
-                    dates["contest_start_date"] or "-", dates["contest_end_date"] or "-")))
+                dates = plan_dates(detail)
+                item["dates"] = dates
+                log("  日期: %s" % (
+                    "跳过（往年届次）" if stale else
+                    "reg %s ~ %s ｜ contest %s ~ %s" % (
+                        dates["reg_start_date"] or "-", dates["reg_end_date"] or "-",
+                        dates["contest_start_date"] or "-", dates["contest_end_date"] or "-")))
 
             raw = enrich.extract_fields(detail)
             texts = {k: (v.get("text") or "") if isinstance(v, dict) else str(v or "")
                      for k, v in raw.items()}
+            if parent_mode:
+                texts = {k: v for k, v in texts.items() if k in PARENT_FALLBACK_FIELDS}
             item["raw_chars"] = {k: len(v) for k, v in texts.items()}
             item["raw_preview"] = {k: v[:80] for k, v in texts.items()}
             for field, label in (("participants", "参赛对象"), ("content_scope", "内容范围"),
                                  ("exam_schedule", "考试安排")):
+                if parent_mode and field == "exam_schedule":
+                    log("  %s: 跳过（父赛事回退不写赛程）" % label)
+                    continue
                 text = texts.get(field) or ""
                 log("  %s: %s" % (label, ("规则抽取 %d 字，apply 时交 AI 提纯" % len(text))
                                   if text else "页面无对应章节"))
             item["status"] = "ready"
+            if parent_mode:
+                fillable = {f: t for f, t in texts.items()
+                            if t and not str(row[f] or "").strip()}
+                item["fillable"] = sorted(fillable)
+                if not fillable:
+                    log("  · 父赛事详情没有可补章节，本次不写（保持原样）")
+                    item["status"] = "complete"
             results.append(item)
 
             if order < len(targets) - 1:
@@ -262,21 +368,35 @@ def _current_row(db_path: str, competition_id: int) -> dict:
 
 
 def apply_one(db_path: str, competition_id: int, *, index: dict, session,
-              allow_stale: bool, now, max_chars: int = enrich.MAX_FIELD_LEN) -> dict:
-    """单条补全：名称匹配 -> 抓详情 -> AI 提纯 -> 只写空字段。"""
+              allow_stale: bool, allow_parent: bool, now,
+              max_chars: int = enrich.MAX_FIELD_LEN) -> dict:
+    """单条补全：名称匹配（可父赛事回退）-> 抓详情 -> AI 提纯 -> 只写空字段。"""
     row = _current_row(db_path, competition_id)
     if not row:
         return {"status": "missing"}
     name = row["name"]
-    hit = saikr_match.resolve(name, index=index)
-    if not hit:
+    resolved = resolve_target(name, index, allow_parent)
+    if resolved is None:
         return {"status": "no_match", "reason": "赛氪索引未命中"}
+    hit = resolved["hit"]
+    parent_mode = resolved["mode"] == "parent"
     contest_id = int(hit["contest_id"])
-    log("  赛氪匹配: contest_id=%s（%s %.2f）" % (contest_id, hit["method"], hit["score"]))
+    if parent_mode:
+        log("  父赛事回退: 变体「%s」-> contest_id=%s（%.2f）；只复制对象/范围"
+            % (resolved["variant"], contest_id, hit["score"]))
+    else:
+        log("  赛氪匹配: contest_id=%s（%s %.2f）" % (contest_id, hit["method"], hit["score"]))
+
+    if parent_mode:
+        empty_parent = [f for f in PARENT_FALLBACK_FIELDS
+                        if not str(row.get(f) or "").strip()]
+        if not empty_parent:
+            log("  · 参赛对象/内容范围均已有值，无需回退补全")
+            return {"status": "complete", "contest_id": contest_id, "mode": "parent"}
 
     detail = enrich.fetch_detail(session, contest_id)
     stale = enrich.stale_reason(detail, now)
-    if stale and not allow_stale:
+    if stale and not allow_stale and not parent_mode:
         return {"status": "stale", "reason": stale, "contest_id": contest_id}
     if stale:
         log("  时效闸门: %s → 跳过日期列" % stale)
@@ -284,6 +404,9 @@ def apply_one(db_path: str, competition_id: int, *, index: dict, session,
     raw = enrich.extract_fields(detail)
     empty_fields = [field for field in enrich.DETAIL_FIELDS
                     if not str(row.get(field) or "").strip()]
+    if parent_mode:
+        empty_fields = [field for field in empty_fields
+                        if field in PARENT_FALLBACK_FIELDS]
     needed = {field: raw[field] for field in empty_fields if field in raw}
     written = []
     if needed:
@@ -297,6 +420,8 @@ def apply_one(db_path: str, competition_id: int, *, index: dict, session,
                 log("  ✓ %s：%d 字（AI 提纯）" % (field, len(purified[field]["text"])))
         else:
             log("  · AI 未产出可用短句，长文本保持空")
+    elif parent_mode:
+        log("  · 省级赛待补字段在父赛事详情里没有对应章节")
     else:
         if empty_fields:
             log("  · 空字段 %s 在详情页无对应章节（%s 已有值）"
@@ -306,34 +431,38 @@ def apply_one(db_path: str, competition_id: int, *, index: dict, session,
             log("  · 参赛对象/范围/安排 均已有值，无需补")
 
     patch = {}
-    cover = plan_cover(detail)
-    if cover["ok"] and not str(row.get("image_url") or "").strip():
-        patch["image_url"] = cover["url"]
-        log("  ✓ 封面：%s" % cover["url"])
-    elif not cover["ok"]:
-        log("  · 封面保持空：%s" % cover["reason"])
-
-    if not stale:
-        for column, key in enrich.SAIKR_DATE_KEYS:
-            if str(row.get(column) or "").strip():
-                continue
-            moment = enrich._parse_api_time(detail.get(key))
-            if moment is not None:
-                patch[column] = moment.strftime("%Y-%m-%d")
-                log("  ✓ 日期 %s = %s" % (column, patch[column]))
+    if parent_mode:
+        log("  · 封面/日期/赛程：父赛事回退一律不写")
     else:
-        log("  · 日期列保持空（往年届次，避免写错年份）")
+        cover = plan_cover(detail)
+        if cover["ok"] and not str(row.get("image_url") or "").strip():
+            patch["image_url"] = cover["url"]
+            log("  ✓ 封面：%s" % cover["url"])
+        elif not cover["ok"]:
+            log("  · 封面保持空：%s" % cover["reason"])
+
+        if not stale:
+            for column, key in enrich.SAIKR_DATE_KEYS:
+                if str(row.get(column) or "").strip():
+                    continue
+                moment = enrich._parse_api_time(detail.get(key))
+                if moment is not None:
+                    patch[column] = moment.strftime("%Y-%m-%d")
+                    log("  ✓ 日期 %s = %s" % (column, patch[column]))
+        else:
+            log("  · 日期列保持空（往年届次，避免写错年份）")
 
     if patch:
         db.update_competition(competition_id, patch, db_path=db_path)
 
     status = "updated" if (written or patch) else "exists"
     return {"status": status, "contest_id": contest_id, "match": hit["method"],
-            "written": written, "patch": sorted(patch), "stale": stale}
+            "mode": resolved["mode"], "written": written, "patch": sorted(patch),
+            "stale": stale}
 
 
 def apply_run(db_path: str, targets: list, *, delay, allow_stale: bool,
-              max_chars: int = enrich.MAX_FIELD_LEN) -> int:
+              allow_parent: bool, max_chars: int = enrich.MAX_FIELD_LEN) -> int:
     if common.is_production_db(db_path):
         log("[备份] 生产库写前备份：%s" % common.backup_db(db_path))
     log("[模式] apply（AI 提纯 + 只写空字段）")
@@ -352,8 +481,8 @@ def apply_run(db_path: str, targets: list, *, delay, allow_stale: bool,
             log("#%s %s" % (cid, name))
             try:
                 result = apply_one(db_path, cid, index=index, session=session,
-                                   allow_stale=allow_stale, now=now,
-                                   max_chars=max_chars)
+                                   allow_stale=allow_stale, allow_parent=allow_parent,
+                                   now=now, max_chars=max_chars)
             except Exception as exc:  # noqa: BLE001 - 单条失败不阻断
                 log("  ✗ 异常：%s" % exc)
                 result = {"status": "error", "reason": str(exc)}
@@ -391,6 +520,9 @@ def parse_args(argv=None):
     p.add_argument("--allow-production", action="store_true", help="允许写生产库（配合 --apply）")
     p.add_argument("--allow-stale", action="store_true",
                    help="往年届次（报名结束超 400 天）也补封面/对象，但日期列保持空")
+    p.add_argument("--parent-fallback", action="store_true", dest="parent_fallback",
+                   help="省级赛未命中时回退到同名国赛：只复制参赛对象/内容范围，"
+                        "绝不写日期、封面、赛程")
     p.add_argument("--delay", default="3,5", help="赛氪请求间隔 min,max 秒，下限 3")
     p.add_argument("--limit", type=int, default=0, help="只处理前 N 条")
     p.add_argument("--max-chars", type=int, default=enrich.MAX_FIELD_LEN,
@@ -434,9 +566,9 @@ def main(argv=None) -> int:
 
     if args.apply:
         return apply_run(db_path, targets, delay=delay, allow_stale=args.allow_stale,
-                         max_chars=args.max_chars)
+                         allow_parent=args.parent_fallback, max_chars=args.max_chars)
     return dry_run(db_path, targets, delay=delay, allow_stale=args.allow_stale,
-                   preview_path=args.preview)
+                   allow_parent=args.parent_fallback, preview_path=args.preview)
 
 
 if __name__ == "__main__":
