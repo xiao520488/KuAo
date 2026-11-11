@@ -38,6 +38,7 @@ from bs4 import BeautifulSoup
 
 import db
 import discover_common as common
+import competition_whitelist as whitelist
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_URLS = [
@@ -246,6 +247,14 @@ def build_candidates(entries: list, page_url: str) -> tuple:
         if reason:
             filtered.append({
                 "name": entry["name"], "reason": reason,
+                "index": entry["index"],
+            })
+            continue
+        # 白名单闸门：目录页偶尔混入「观察目录」或往届非 84 项，统一挡在候选池外
+        allowed, gate_reason = whitelist.gate(entry["name"])
+        if not allowed:
+            filtered.append({
+                "name": entry["name"], "reason": "非核心赛：%s" % gate_reason,
                 "index": entry["index"],
             })
             continue

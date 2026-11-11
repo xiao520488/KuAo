@@ -37,6 +37,7 @@ import db
 import discover_common as common
 import enrich_saikr_details as enrich
 import short_names
+import competition_whitelist as whitelist
 from batch_update_competitions import check_image
 
 DEFAULT_DB_PATH = common.DEFAULT_DB_PATH
@@ -236,6 +237,15 @@ def cmd_approve(args) -> int:
         raise SystemExit("候选 %s 当前状态为 %s，只有 pending 可以提拔" % (
             args.approve, candidate["status"]))
 
+    # 白名单闸门：非 84 项核心赛（含省级/区域赛）默认拒绝入库
+    allowed, gate_reason = whitelist.gate(candidate.get("raw_name") or "")
+    if not allowed and not getattr(args, "allow_non_whitelist", False):
+        raise SystemExit(
+            "拒绝入库：%s 不在「教育部 84 项核心国赛」内（%s）。\n"
+            "  如确认要人工破例，加 --allow-non-whitelist 重跑。" % (
+                candidate.get("raw_name"), gate_reason))
+    log("[白名单] %s -> %s" % (candidate.get("raw_name"), gate_reason))
+
     duplicate = db.find_duplicate_candidate(
         candidate["norm_name"],
         official_url=candidate.get("official_url"),
@@ -300,6 +310,8 @@ def parse_args(argv=None):
                         help="允许写生产库（写前自动备份）")
     parser.add_argument("--skip-enrich", action="store_true",
                         help="approve 后不抓取赛氪详情、不调模型（离线/应急）")
+    parser.add_argument("--allow-non-whitelist", action="store_true",
+                        help="破例允许提拔「非 84 项白名单」候选（默认拒绝）")
     parser.add_argument("--limit", type=int, default=100,
                         help="--list 最多显示条数（默认 100）")
     args = parser.parse_args(argv)

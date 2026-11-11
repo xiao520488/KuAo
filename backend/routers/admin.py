@@ -36,6 +36,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 import db
 import enrich_saikr_details as enrich
 import short_names
+import competition_whitelist as whitelist
 from security import get_current_admin
 
 logger = logging.getLogger(__name__)
@@ -307,6 +308,15 @@ def approve_candidate(candidate_id: int) -> dict:
         raise HTTPException(
             status_code=400,
             detail="候选当前状态为 %s，只有 pending 可以审核" % candidate.get("status"),
+        )
+
+    # 白名单闸门：只收教育部 84 项核心国赛，非白名单/省级一律拒绝入库
+    allowed, gate_reason = whitelist.gate(candidate.get("raw_name") or "")
+    if not allowed:
+        raise HTTPException(
+            status_code=400,
+            detail="《%s》%s，不允许转入核心赛事库" % (
+                candidate.get("raw_name"), gate_reason),
         )
 
     data = _build_competition_data(candidate)

@@ -280,8 +280,8 @@ def test_review_approve_auto_enriches(monkeypatch, tmpdb):
     inserted = db.add_candidate({
         "source": "saikr",
         "source_key": "saikr:777",
-        "raw_name": "全国大学生测试赛事",
-        "norm_name": db.normalize_competition_name("全国大学生测试赛事"),
+        "raw_name": "全国大学生数学建模竞赛",
+        "norm_name": db.normalize_competition_name("全国大学生数学建模竞赛"),
         "level_label": "国家级",
         "category_hint": "程序设计",
         "raw_json": json.dumps({"contest_id": 777}, ensure_ascii=False),
@@ -297,7 +297,7 @@ def test_review_approve_auto_enriches(monkeypatch, tmpdb):
     with sqlite3.connect(tmpdb) as conn:
         comp = conn.execute(
             "SELECT id, participants, content_scope, exam_schedule "
-            "FROM competitions WHERE name = '全国大学生测试赛事'"
+            "FROM competitions WHERE name = '全国大学生数学建模竞赛'"
         ).fetchone()
         candidate = conn.execute(
             "SELECT status, competition_id FROM competition_candidates WHERE id = ?",
@@ -308,3 +308,39 @@ def test_review_approve_auto_enriches(monkeypatch, tmpdb):
     assert comp[2] == "1. 算法设计；2. 软件开发"
     assert comp[3] == "1. 5 月报名截止；2. 7 月决赛"
     assert candidate == ("approved", comp[0])
+
+
+def test_review_approve_rejects_non_whitelist(monkeypatch, tmpdb):
+    """白名单闸门：非 84 项 / 省级候选默认不许进入主库（2026-11-11）。"""
+    inserted = db.add_candidate({
+        "source": "saikr",
+        "source_key": "saikr:888",
+        "raw_name": "全国大学生测试水赛",
+        "norm_name": db.normalize_competition_name("全国大学生测试水赛"),
+        "level_label": "国家级",
+        "category_hint": "待确认",
+        "raw_json": json.dumps({"contest_id": 888}, ensure_ascii=False),
+    })
+    with pytest.raises(SystemExit) as exc:
+        review_candidates.main(["--approve", str(inserted["id"]), "--db-path", tmpdb])
+    assert "84 项核心国赛" in str(exc.value)
+    with sqlite3.connect(tmpdb) as conn:
+        assert conn.execute(
+            "SELECT status FROM competition_candidates WHERE id = ?", (inserted["id"],)
+        ).fetchone()[0] == "pending"
+
+
+def test_review_approve_refuses_provincial(monkeypatch, tmpdb):
+    """省级/区域赛：即使名字能命中白名单基名，也默认拒绝入库。"""
+    inserted = db.add_candidate({
+        "source": "saikr",
+        "source_key": "saikr:999",
+        "raw_name": "全国大学生数学建模竞赛·省赛",
+        "norm_name": db.normalize_competition_name("全国大学生数学建模竞赛·省赛"),
+        "level_label": "省级",
+        "category_hint": "数学建模",
+        "raw_json": json.dumps({"contest_id": 999}, ensure_ascii=False),
+    })
+    with pytest.raises(SystemExit) as exc:
+        review_candidates.main(["--approve", str(inserted["id"]), "--db-path", tmpdb])
+    assert "省级/区域赛事" in str(exc.value)

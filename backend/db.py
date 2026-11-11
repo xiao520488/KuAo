@@ -954,7 +954,7 @@ def list_competitions(category: Optional[str] = None,
         month: 报名月覆盖该月份（考虑跨年区间），Python 侧二次过滤
         keyword: 名称模糊匹配
     """
-    where = "WHERE 1=1"
+    where = "WHERE COALESCE(is_active, 1) = 1"
     params = []
     if category:
         where += " AND category LIKE ?"
@@ -998,7 +998,8 @@ def list_hot_competitions(limit: int = 8) -> list:
 
     sql = (f"SELECT * FROM (SELECT *, {_PHASE_EXPR} AS _phase, "
            f"{_PREC_EXPR} AS _prec FROM competitions "
-           "WHERE COALESCE(NULLIF(TRIM(level), ''), 'national') = 'national') "
+           "WHERE COALESCE(is_active, 1) = 1 "
+           "AND COALESCE(NULLIF(TRIM(level), ''), 'national') = 'national') "
            f"WHERE _phase IN (0, 1) {_ORDER_BY_SMART} LIMIT ?")
     with get_conn() as conn:
         rows = conn.execute(sql, (n,)).fetchall()
@@ -1010,7 +1011,8 @@ def get_categories() -> list:
     with get_conn() as conn:
         rows = conn.execute(
             "SELECT DISTINCT category FROM competitions "
-            "WHERE category IS NOT NULL AND TRIM(category) <> '' "
+            "WHERE COALESCE(is_active, 1) = 1 "
+            "AND category IS NOT NULL AND TRIM(category) <> '' "
             "ORDER BY category"
         ).fetchall()
     return [r["category"] for r in rows]

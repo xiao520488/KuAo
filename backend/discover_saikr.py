@@ -35,6 +35,7 @@ import requests
 
 import db
 import discover_common as common
+import competition_whitelist as whitelist
 
 SAIKR_LIST = "https://apiv4buffer.saikr.com/api/pc/contest/lists"
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -135,6 +136,10 @@ def build_candidate(item: dict, now: datetime) -> tuple:
     name = clean_display_name(item.get("contest_name"))
     if len(name) < 4:
         return None, "名称缺失/过短"
+    # 白名单闸门（2026-11-11）：只收教育部 84 项核心国赛，非白名单/省级一律不进候选池
+    allowed, gate_reason = whitelist.gate(name)
+    if not allowed:
+        return None, "非核心赛：%s" % gate_reason
     try:
         if int(item.get("is_exam") or 0) == 1:
             return None, "考试类"
