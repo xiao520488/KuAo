@@ -122,6 +122,7 @@ CREATE TABLE IF NOT EXISTS competition_candidates (
 | `generate_guides.py` | 兼容用的攻略批量 CLI（内部已是 v2 Prompt，`--only-missing / --id`） |
 | `analyzer.py` | 灵感生成唯一实现（`insights` + `ideas`，单条手动），被 `generate_inspiration()` 复用 |
 | `cleanup_orphan_ai.py` | 清理孤儿 `insights/ideas`（`competition_id` 空或悬空），默认 dry-run |
+| `fill_core_skeletons.py` | 核心赛事骨架补全（封面/日期/参赛对象）：名称匹配赛氪 → 详情 → AI 提纯 → 只补空字段；默认 dry-run，`--allow-stale` 只补往年封面/对象不写日期（见 2.16） |
 | `generate_short_names.py` | 批量生成两字简称（AI，默认只补空，`--force` 覆盖） |
 | `short_names.py` | 赛事名 → 两字简称（只算不写库，落库由调用方完成） |
 | `db.py` | 数据层：建表/迁移、CRUD、候选表、ai_jobs 抢占、日期排序 SQL |
@@ -365,6 +366,21 @@ Copy-Item .\competitions.db .\test_crawl.db -Force
 ```
 只删 `competition_id IS NULL` 或悬空行。
 
+### 2.16 核心赛事骨架补全（封面 / 日期 / 参赛对象，2026-11-11 已执行）
+```powershell
+# 1. 预演（默认：只读库 + 抓详情 + 过封面闸门，不写库、不调 AI）
+.\venv\Scripts\python.exe fill_core_skeletons.py
+# 2. 真实写生产库（自动备份）
+.\venv\Scripts\python.exe fill_core_skeletons.py --apply --allow-production --allow-stale
+# 3. 只处理指定赛事 / 往年届次
+.\venv\Scripts\python.exe fill_core_skeletons.py --ids 2,10,17 --apply --allow-production --allow-stale
+```
+- 目标 = 「`image_url` / `participants` / `reg_start_date` 三列全空 + 至少一条下游数据（awards / ideas / insights / user_preparations）」的核心赛事（本次 8 条）；`--ids` 可显式指定。
+- 链路复用审核入库同一套：`saikr_match` 名称匹配 → 赛氪详情 API → AI 提纯（禁止照抄）→ 只补空字段；封面仍过 `image_guard`，不合格保持 NULL 走前端兜底。
+- **往年届次护栏**：`--allow-stale` 下只补封面/参赛对象，**日期四列一律不写**（避免把 2019/2020 的报名日期写到 2026 赛事上）。默认不带 `--allow-stale` 时整条跳过。
+- 实测（2026-11-11）：8 条中命中 5 条、未命中 3 条（计算机设计大赛·省级赛 / 学创杯 / 挑战杯·省级，需人工补）；写库 4 条（#2 挑战杯对象 266 字 + 封面；#17 信息安全对象 222 字 + 赛程 157 字；#25 软件测试范围 286 字 + 赛程 268 字 + 封面；#10 计算机设计大赛 2026 报名日期）。#4 年会展示详情无章节且封面被闸门拒绝，保持空壳。
+- 全库封面 22→23、参赛对象 25 条、报名日期 18 条；赛事总数 46 不变。
+
 ---
 ## 三、赛氪数据源事实与合规边界
 - Vue SPA，HTML 只有 4.6 KB 空壳，**必须走内部 JSON API**：列表 `GET https://apiv4buffer.saikr.com/api/pc/contest/lists?page=&limit=&sort=&class_id=&level=`（`sort=2` 最近更新）；详情 `GET https://apiv4buffer.saikr.com/api/pc/contest/info?contest_id=<id>`。匿名可调，无 Token / 签名 / 强制 Cookie；`acw_tc` 只是阿里云 WAF 被动标记。
@@ -538,6 +554,8 @@ cd frontend; D:\Tools\node.exe D:\Tools\node_modules\npm\bin\npm-cli.js run dev
 - 红色【删除】→ **自定义二次确认弹窗**（标题「确认要永久删除吗？」，正文《赛事名》+「此操作不可恢复！」+ 将连带删除的获奖条数），【取消】/【永久删除】（红），提交中禁用，支持 `Esc` / 点遮罩关闭，成功后 Toast「已删除《XXX》」并刷新列表。
 
 **验证**：TestClient 副本库 15 项断言全 PASS（分页/关键词/403/401/404/级联 awards=8/候选解绑/总数收敛）；浏览器 E2E 在隔离库上跑通「点删除 → 弹窗 → 永久删除 → 列表 46→45 + Toast」，生产库计数不变。**注意**：隔离后端必须用 `backend/tests/tools/run_api_patched.py`（它才读 `KUO_DB_PATH`），直接 `uvicorn main:app` 会指向生产库。
+
+> **踩坑（2026-11-10 夜，已修复）**：E2E 探针误连生产库，两次跑各删掉当时列表首行（#59 统计建模、#48 环保知识大赛），均从备份 `competitions.db.bak-*` 完整回填（含候选绑定）。教训：探针只准连副本库，跑前先 `SELECT COUNT(*)` 留底；删除类 E2E 一律 `run_api_patched.py --port 8010` + `--db-path` 副本。
 
 ---
 ## 六、前端展示规范（已定稿，勿回退）
