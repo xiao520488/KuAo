@@ -294,15 +294,6 @@ const officialHost = computed(() => {
   }
 })
 
-// 真实级别文案：优先后端 level_label，缺失时按 level 兜底
-const levelText = computed(() => {
-  const label = String(detail.value?.level_label || '').trim()
-  if (label) return label
-  if (detail.value?.level === 'provincial') return '省级'
-  if (detail.value?.level === 'national') return '国家级'
-  return ''
-})
-
 // 简介：intro 与 summary 都是真实采集字段，去重后逐段渲染
 const introParagraphs = computed(() => {
   const intro = String(detail.value?.intro || '').trim()
@@ -430,13 +421,6 @@ const guideReady = computed(() => Boolean(detail.value?.full_process_guide))
         <section class="mt-9">
           <div class="flex flex-wrap items-center gap-2">
             <span
-              v-if="levelText"
-              class="rounded-full bg-slate-900 px-3 py-1 text-xs font-bold text-white
-                     dark:bg-white dark:text-slate-900"
-            >
-              {{ levelText }}
-            </span>
-            <span
               v-if="detail.category"
               class="rounded-full bg-white px-3 py-1 text-xs font-bold text-slate-600
                      ring-1 ring-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:ring-slate-700"
@@ -489,7 +473,7 @@ const guideReady = computed(() => Boolean(detail.value?.full_process_guide))
         </section>
 
         <!-- 3. 关键信息速览（真实字段；缺失时明确写“暂未收录”） -->
-        <section class="mt-8 grid grid-cols-2 gap-4 lg:grid-cols-4">
+        <section class="mt-8 grid grid-cols-1 gap-4 sm:grid-cols-3">
           <div
             class="rounded-2xl border border-slate-200/70 bg-white p-5 shadow-sm
                    dark:border-slate-700 dark:bg-slate-800"
@@ -515,20 +499,6 @@ const guideReady = computed(() => Boolean(detail.value?.full_process_guide))
               :class="hasContestTime ? 'text-slate-800 dark:text-slate-100' : 'text-slate-500 dark:text-slate-400'"
             >
               {{ hasContestTime ? contestTimeText : '暂未收录' }}
-            </p>
-          </div>
-
-          <div
-            class="rounded-2xl border border-slate-200/70 bg-white p-5 shadow-sm
-                   dark:border-slate-700 dark:bg-slate-800"
-          >
-            <span class="block h-1.5 w-8 rounded-full bg-violet-500"></span>
-            <p class="mt-3 text-xs font-bold tracking-wide text-slate-500 dark:text-slate-400">赛事级别</p>
-            <p
-              class="mt-1.5 text-lg font-black leading-tight"
-              :class="levelText ? 'text-slate-800 dark:text-slate-100' : 'text-slate-500 dark:text-slate-400'"
-            >
-              {{ levelText || '暂未收录' }}
             </p>
           </div>
 

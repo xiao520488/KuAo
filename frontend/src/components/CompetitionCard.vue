@@ -20,8 +20,6 @@ const props = defineProps({
   signUpTime: { type: String, default: '待公布' },
   // 比赛时间
   contestTime: { type: String, default: '待公布' },
-  // 竞赛级别标签，可选展示
-  level: { type: String, default: '' },
   // 竞赛分类（学科/方向），可选展示
   category: { type: String, default: '' },
   // 是否隐藏"加入备赛"按钮（备赛列表页使用）
@@ -241,13 +239,6 @@ async function removeOnly() {
         >
           {{ title }}
         </h3>
-        <span
-          v-if="level"
-          class="mt-1 shrink-0 rounded-full bg-blue-50 dark:bg-blue-500/15 px-3 py-0.5
-                 text-xs font-bold text-blue-600 dark:text-blue-400"
-        >
-          {{ level }}
-        </span>
         <span
           v-if="category"
           :title="category"

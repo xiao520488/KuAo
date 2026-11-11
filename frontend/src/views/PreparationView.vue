@@ -24,21 +24,12 @@ function resolveImage(item) {
   return /^https?:\/\//i.test(url) ? url : ''
 }
 
-const LEVEL_FALLBACK = {
-  national: '国家级',
-  provincial: '省级',
-  municipal: '市级',
-  regional: '区域级',
-  international: '国际级'
-}
-
 // 备赛条目 -> 卡片 props；competition_id 即真实竞赛 ID，保证详情/工作台跳转有效
 function mapToPrepCard(item) {
   if (!item || item.competition_id === null || item.competition_id === undefined) return null
   return {
     id: item.competition_id,
     title: item.name || '未命名竞赛',
-    level: item.level_label || LEVEL_FALLBACK[item.level] || item.level || '',
     category: item.category || '',
     image: resolveImage(item),
     shortName: item.short_name || '',

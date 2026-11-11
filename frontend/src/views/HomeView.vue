@@ -42,22 +42,12 @@ function resolveImage(item) {
   return /^https?:\/\//i.test(url) ? url : ''
 }
 
-// 级别兜底：后端 level 是枚举 national/provincial，中文标签在 level_label
-const LEVEL_FALLBACK = {
-  national: '国家级',
-  provincial: '省级',
-  municipal: '市级',
-  regional: '区域级',
-  international: '国际级'
-}
-
 // 后端字段 -> 卡片 props（以后端真实字段为准）
+// 平台只收录教育部 84 项核心国赛，不再有「赛事级别」维度
 function mapToCard(item, index) {
-  const level = item.level_label || LEVEL_FALLBACK[item.level] || item.level || ''
   return {
     id: item.id ?? index,
     title: item.name || '未命名竞赛',
-    level,
     category: item.category || item.subject || '',
     image: resolveImage(item),
     shortName: item.short_name || '',
@@ -653,7 +643,6 @@ watch(
           :image="item.image"
           :short-name="item.shortName"
           :title="item.title"
-          :level="item.level"
           :category="item.category"
           :sign-up-time="item.signUpTime"
           :contest-time="item.contestTime"

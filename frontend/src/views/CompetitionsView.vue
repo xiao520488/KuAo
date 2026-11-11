@@ -35,11 +35,7 @@ async function loadPreparedStates(list) {
 }
 
 // ===== 筛选栏 =====
-// 第一级大类严格限定为四类，第二级细分方向来自统一分类字典
-const levels = ['全部级别', '国家级', '省级']
-
-const level = ref('全部级别')
-
+// 平台只收录教育部 84 项核心国赛，「赛事级别」不再区分，只按学科大类筛选
 // 科目 Mega Menu 状态
 const menuOpen = ref(false)
 const activeMajor = ref('')
@@ -49,11 +45,6 @@ const selectedMajors = ref([])
 const subjectMenuRef = ref(null)
 // 桌面端悬停展开；触屏设备没有 Hover，改为点击展开
 const canHover = ref(false)
-
-const LEVEL_FILTER_MAP = {
-  国家级: 'national',
-  省级: 'provincial'
-}
 
 function openMenu(major) {
   activeMajor.value = major
@@ -117,17 +108,7 @@ function onDocumentPointerDown(e) {
 }
 
 const filtered = computed(() => {
-  const base = competitions.value.filter((item) => {
-    // 市级数据不再纳入列表（与级别筛选保持一致）
-    if (item.levelRaw === 'municipal' || item.levelRaw === '市级' || item.level === '市级') return false
-
-    // 级别：优先用原始枚举匹配，兼容 level_label 为“区域级/区域赛”等叫法
-    const levelOk =
-      level.value === '全部级别' ||
-      item.levelRaw === LEVEL_FILTER_MAP[level.value] ||
-      item.level === level.value
-    return levelOk
-  })
+  const base = competitions.value
 
   // 数组为空（或点了“全部”）时展示全部；否则按多选分类做 OR 过滤
   if (selectedMajors.value.length === 0) return base
@@ -148,21 +129,12 @@ function resolveImage(item) {
   return /^https?:\/\//i.test(url) ? url : ''
 }
 
-const LEVEL_FALLBACK = {
-  national: '国家级',
-  provincial: '省级',
-  regional: '区域级',
-  international: '国际级'
-}
-
 function mapToCard(item, index) {
   const rawCategory = item.category || item.subject || ''
   const mapped = resolveCategory(rawCategory)
   return {
     id: item.id ?? index,
     title: item.name || '未命名竞赛',
-    level: item.level_label || LEVEL_FALLBACK[item.level] || item.level || '',
-    levelRaw: item.level || '',
     category: rawCategory,
     major: mapped.major,
     minor: mapped.minor,
@@ -359,19 +331,6 @@ onBeforeUnmount(() => {
             </div>
           </div>
 
-          <!-- 级别 -->
-          <label class="flex items-center gap-2 sm:flex-none">
-            <span class="shrink-0 text-sm font-medium text-slate-500 dark:text-slate-400">级别</span>
-            <select
-              v-model="level"
-              class="w-full min-w-0 flex-1 rounded-xl border-0 bg-slate-100 dark:bg-slate-700/60 px-4 py-2 text-sm font-semibold
-                     text-slate-700 dark:text-slate-200 outline-none ring-1 ring-transparent
-                     transition focus:bg-white dark:focus:bg-slate-800 focus:ring-blue-500 sm:w-auto sm:flex-none"
-            >
-              <option v-for="l in levels" :key="l" :value="l">{{ l }}</option>
-            </select>
-          </label>
-
           <!-- 结果计数 -->
           <span class="text-sm text-slate-500 dark:text-slate-400 sm:ml-auto">
             {{ filtered.length }} 个结果
@@ -419,7 +378,7 @@ onBeforeUnmount(() => {
         class="rounded-2xl border border-dashed border-slate-200 dark:border-slate-700 px-6 py-16 text-center"
       >
         <p class="font-bold text-slate-500 dark:text-slate-400">没有符合条件的竞赛</p>
-        <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">试试更换其他科目或级别</p>
+        <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">试试更换其他科目</p>
       </div>
 
       <!-- 正常列表 -->
@@ -431,7 +390,6 @@ onBeforeUnmount(() => {
           :image="item.image"
           :short-name="item.shortName"
           :title="item.title"
-          :level="item.level"
           :category="item.category"
           :sign-up-time="item.signUpTime"
           :contest-time="item.contestTime"

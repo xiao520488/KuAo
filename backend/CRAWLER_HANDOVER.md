@@ -110,6 +110,8 @@ CREATE TABLE IF NOT EXISTS competition_candidates (
 | `backfill_candidates_date.py` | 候选池日期补全：赛氪候选走 `raw_json`（零网络），其余走模型 + 原文核对 |
 | `cleanup_bad_covers.py` | 清理主表垃圾封面（重过 `image_guard`，不合格置 NULL，transient 待复查） |
 | `discover_common.py` | 发现公共层：目标库保护/备份、建候选表、入库循环、去重统计、类别猜测 |
+| `competition_whitelist.py` | **教育部 84 项核心国赛白名单唯一事实源**：名单 + 别名 + `match()` / `is_provincial()` / `gate()` 统一入库闸门（见 2.17） |
+| `cleanup_non_core_races.py` | 主库收敛为「84 项智库」：非白名单/省级赛删除或转占位、`--wipe-candidates` 清空候选池（见 2.17） |
 | `discover_university.py` | 84 项高校竞赛目录页解析（文本行/表格/序号变体），默认 dry-run |
 | `discover_saikr.py` | 赛氪列表前 2 页（≤20 条/天）增量发现，3–5 秒延迟，每日守卫，往年届次跳过 |
 | `review_candidates.py` | 审核 CLI（`--list/--approve/--reject`）：重过封面闸门 + 同事务写主表 + 自动补简称/详情 |
@@ -382,6 +384,21 @@ Copy-Item .\competitions.db .\test_crawl.db -Force
 - **`--parent-fallback`（省级赛 → 国赛）**：省级赛在赛氪索引里往往没有条目，按「去后缀 / 去『省级』/ 补『全国』」生成变体回退匹配国赛（相似度 ≥0.92 才采用）。红线：**只复制 `participants` / `content_scope` 两类静态文本**；日期、封面、赛程（`exam_schedule` 里混时间）一律不写；省级赛这两个字段已有值时直接跳过。文本里的「2024年6月1日前」这类届次时间用 `strip_parent_dates()` 剥掉再入库（保留资格描述本体）。实测 #30 挑战杯·省级赛 回退到第 19 届国赛，写入参赛对象 235 字（无年份），日期/封面/赛程保持 NULL。
 - 实测（2026-11-11）：8 条中命中 5 条、未命中 3 条（计算机设计大赛·省级赛 / 学创杯 / 挑战杯·省级，需人工补）；写库 4 条（#2 挑战杯对象 266 字 + 封面；#17 信息安全对象 222 字 + 赛程 157 字；#25 软件测试范围 286 字 + 赛程 268 字 + 封面；#10 计算机设计大赛 2026 报名日期）。#4 年会展示详情无章节且封面被闸门拒绝，保持空壳。
 - 全库封面 22→23、参赛对象 25 条、报名日期 18 条；赛事总数 46 不变。
+
+### 2.17 收敛为「教育部 84 项核心国赛智库」（2026-11-11 已执行）
+```powershell
+# 1. 预演（默认 dry-run：只打印将删/将占位/待复核）
+.\venv\Scripts\python.exe cleanup_non_core_races.py --wipe-candidates
+# 2. 真实执行（自动备份到 %TEMP%\kuo-verify）
+.\venv\Scripts\python.exe cleanup_non_core_races.py --apply --allow-production --wipe-candidates
+# 3. 自检白名单匹配
+.\venv\Scripts\python.exe competition_whitelist.py "蓝桥杯全国软件和信息技术专业人才大赛"
+```
+- **白名单唯一事实源** = `competition_whitelist.py`：84 条「序号 + 官方名 + 官网」+ 别名表，来源 `sdaeu.edu.cn` 教务处榜单页；`match()` 走「归一化 + 最长命中」（去标点/年份/届次，取命中最长的键，避免「挑战杯」把创业计划赛误判成课外学术作品赛）。
+- **清理口径（双重条件）**：① 名称带 `省赛/省级/区域赛/赛区/选拔赛` 字眼；② 不在 84 项名单。命中且**无下游数据**→删除（级联 awards/ideas/insights/备赛计划/AI 任务，候选解绑）；命中但**有真实获奖**→转占位（`category='待确认'`、`sort_order=9999`、`is_active=0`，行与 awards 全保留，前端不再展示）。非白名单但有获奖 → 只列「待复核」，不自动动。
+- **实测（2026-11-11）**：46 → 31 条（删 15 条水赛、7 条省赛转占位）。删除：汉语言文字、商务外语词汇、机器人与算法大赛（含两赛道）、中外杯、英语世界杯、英才计划、诗经吟唱、中国故事大赛×2、中西部外语翻译、环保知识大赛、华文奖、云帐房、悦·读者杯。占位：#23/#24/#25/#27/#28/#29/#30（均带 awards）。**候选表 82 条清空归零**。
+- **闸门已固化到三条链路**（默认生效，无开关）：`discover_saikr` 写候选前、`discover_university` 解析目录后、`review_candidates --approve` 与 `POST /api/admin/candidates/{id}/approve` 入库前，统一调 `whitelist.gate(name)`；非白名单/省级直接丢弃或 400。应急破例只能 `review_candidates --allow-non-whitelist`（CLI 显式，无 API 入口）。
+- 前端同步去掉「赛事级别」：卡片徽章、列表筛选、详情三卡（`sm:grid-cols-3`）里的级别项全部移除，只留「赛事类别」；`list_competitions` / `list_hot_competitions` / `get_categories` 补 `is_active=1`，占位赛事不再泄漏到前台（实测列表 24 条、无省级）。
 
 ---
 ## 三、赛氪数据源事实与合规边界
