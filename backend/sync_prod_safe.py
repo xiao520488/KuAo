@@ -374,7 +374,7 @@ def sync(source: str, target: str, *, apply: bool, backup_dir: str, make_backup:
         conflicts_total = sum(len(p["conflicts"]) for p in plans)
         if stale_total:
             report["warnings"].append(
-                f"目标库有 {stale_total} 行本地不存在（不会删除；比赛可用 --deactivate-missing 下架）"
+                f"目标库有 {stale_total} 行本地不存在（本工具不删任何行，需人工下架/清理）"
             )
         if conflicts_total:
             report["warnings"].append(f"{conflicts_total} 行因唯一键冲突被跳过")
