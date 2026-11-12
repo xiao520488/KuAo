@@ -715,10 +715,10 @@ cd ..\frontend; D:\Tools\node.exe D:\Tools\node_modules\npm\bin\npm-cli.js run b
 - 线上实际路径是 `/root/KuAo`，示例中的 `/opt/kuao/backend` 按实际改；**将来迁到 `/opt/kuao` 必须同步改 systemd `WorkingDirectory`、cron 的 `cd`、日志/备份路径**，并先停服务、删 `-wal/-shm` 再移库。
 
 
-### 9.3 本地 → 云端库覆盖（完整版见 `CLOUD_DEPLOYMENT_GUIDE.md`）
-四步：① 本地 `backup_db.py --db .\competitions.db --backup-dir .\backups --label pre-cloud-sync --keep-days 30` 生成快照，记 SHA-256 后 `scp` 到云端 `/tmp/competitions.db.sync`；② 云端 `systemctl stop kuao-backend`，先 `backup_db.py --db competitions.db --backup-dir backups --label pre-db-sync --keep-days 30` 备份现库；③ `sha256sum` 核对后 `install -m 644 /tmp/competitions.db.sync competitions.db`，**必须 `rm -f competitions.db-wal competitions.db-shm`**；④ 校验 `integrity_check` + 四表行数与详情三卡填充数，再 `systemctl start kuao-backend`、`curl -fsS http://127.0.0.1:8000/api/health` 与 `/api/competitions/1` 抽验。
-- 覆盖前先对比云端行数，与本地快照不一致就停下；避开凌晨 `02:30–05:50` cron 写库窗口（必须操作就先注释写库任务）。
-- 回滚：停服务 → `cp "$(ls -1t backups/competitions.db.bak-*-pre-db-sync | head -n 1)" competitions.db` → 删 `-wal/-shm` → 起服务。
+### 9.3 ~~本地 → 云端库覆盖~~（**已废止，见 9.4**）
+
+> ⚠️ 本节旧流程（本地 `backup_db.py` 出快照 → `scp` → 云端 `install -m 644` 整库替换）**已于 2026-11-11 废止**：它把云端 `users` 表换成本地版本，真实注册用户全部丢失。**不要再照着做，`install` 本地库到云端一律禁止。**
+> 现行流程只有一条：用 `sync_prod_safe.py` 合并三张业务表，见 **§9.4**；完整命令单在 `backend/workspace/cloud-sync-runbook.md`（v2，本地留存）。
 
 浏览器验收务必 **Ctrl + F5** 强刷；仍是旧页面就先 `curl -s http://112.126.90.252/ | grep -o 'assets/index-[^"]*'` 确认引用的是新哈希。线上无强缓存（只有 `ETag` / `Last-Modified`），旧包通常是文件没进 Web 根。
 
@@ -752,7 +752,7 @@ python sync_prod_safe.py --source competitions.db --target workspace/prod-snapsh
 python sync_prod_safe.py --source competitions.db --export-sql workspace/sync.sql
 ```
 
-推荐的云上姿势：`systemctl stop kuao-backend` → `scp` 下云端 `competitions.db` 到 `workspace/prod-snapshot.db` → 本地 `--apply` → `scp` 回去 → 云端 `install -m 644` + `rm -f competitions.db-wal competitions.db-shm` + 起服务。**注意**：`install` 这一步仍然整库覆盖，所以必须在**停服且已把云端库拉回本地**的前提下做，且此时目标库已经是"同步后的完整云端库"，等于只搬运，不改变内容。
+推荐的云上姿势（完整命令见 `backend/workspace/cloud-sync-runbook.md` v2）：云端 `backup_db.py --label for-sync` 出一致快照（**别直接 `scp` 线上库——WAL 模式下只拷主文件会漏提交**）→ `scp` 下到 `workspace/cloud-snapshot.db` → 本地 dry-run 看计划 → `--apply` 就地合并 → `scp` 回去 → 云端**先对账**（合并库与现库的 `users/user_preparations/feedbacks` 行数、`sum(id)` 必须逐项相同）→ `systemctl stop` → `install -m 644` + `rm -f competitions.db-wal competitions.db-shm` → 起服务。这一刀仍是整库替换，但内容 100% 源自云端自身，三张业务表才是本地增量，所以安全；对账不一致必须中止。
 
 报告落在 `backend/workspace/sync_prod_safe_<时间>.json`，含每表 `inserts/updates/unchanged/conflicts/stale_on_target`、受保护表行数、`integrity_check`。测试：`tests/test_sync_prod_safe.py`（6 条，覆盖"写业务表不改用户表""救援回灌""SQL 包无破坏性语句""结构漂移中止"）。
 
