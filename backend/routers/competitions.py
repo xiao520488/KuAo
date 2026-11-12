@@ -136,9 +136,12 @@ def list_competitions(
     category: Optional[str] = Query(None, description="竞赛类别，模糊匹配"),
     month: Optional[int] = Query(None, ge=1, le=12, description="报名包含该月份的竞赛"),
     keyword: Optional[str] = Query(None, description="竞赛名称关键词，模糊匹配"),
+    limit: Optional[int] = Query(None, ge=1, le=500,
+                                 description="最多返回条数；省略则返回全部"),
 ) -> List[Competition]:
     """获取竞赛列表（真实数据）。"""
-    rows = db_list_competitions(category=category, month=month, keyword=keyword)
+    rows = db_list_competitions(category=category, month=month, keyword=keyword,
+                                limit=limit)
     return [_row_to_competition(r) for r in rows]
 
 

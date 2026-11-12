@@ -934,7 +934,8 @@ def get_competition(cid: int) -> Optional[dict]:
 
 def list_competitions(category: Optional[str] = None,
                       month: Optional[int] = None,
-                      keyword: Optional[str] = None) -> list:
+                      keyword: Optional[str] = None,
+                      limit: Optional[int] = None) -> list:
     """
     条件查询比赛列表（智能排序）。
 
@@ -953,6 +954,9 @@ def list_competitions(category: Optional[str] = None,
         category: 类别模糊匹配
         month: 报名月覆盖该月份（考虑跨年区间），Python 侧二次过滤
         keyword: 名称模糊匹配
+        limit: 只返回前 N 条（None = 全部）。**必须在 month 过滤之后才截断**：
+               若把 LIMIT 写进 SQL，就是「先截断再过滤」，传了 limit 反而
+               可能返回比 limit 更少的行，也会漏掉排在后面的当月赛事。
     """
     where = "WHERE COALESCE(is_active, 1) = 1"
     params = []
@@ -974,6 +978,13 @@ def list_competitions(category: Optional[str] = None,
                   if _month_in_range(month, r.get("reg_start_month"),
                                      r.get("reg_end_month"),
                                      r.get("reg_cross_year"))]
+    if limit is not None:
+        try:
+            n = int(limit)
+        except (TypeError, ValueError):
+            n = 0
+        if n >= 0:
+            result = result[:n]
     return result
 
 
