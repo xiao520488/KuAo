@@ -1000,6 +1000,10 @@ def list_hot_competitions(limit: int = 8) -> list:
         limit: 返回条数上限（自动收敛到 1~50，默认 8）
     返回:
         list[dict]，已按紧迫度排序、已补 level_label
+
+    注意：**实际条数允许少于 limit**。筛选口径是「当下真的能报」，赛季淡季
+    只有 3 条就返回 3 条；禁止用已截止赛事补齐凑数（2026-11-12 产品决定，
+    见 CRAWLER_HANDOVER.md §11.2），首页留白优于让用户误以为赛事过期。
     """
     try:
         n = int(limit)

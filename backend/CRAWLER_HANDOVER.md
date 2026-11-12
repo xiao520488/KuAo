@@ -854,3 +854,53 @@ SQL
 | 生效方式 | **DSH 热加载，改完配置无需重启**；进程参数变化即说明 reload 成功（换 PID 属正常） |
 | 备份 | `cordis.patch.yml.bak-20261111-1915` |
 | 内核下载 | `cdn.playwright.dev` 在墙内会 `ECONNRESET`，必须 `PLAYWRIGHT_DOWNLOAD_HOST=https://cdn.npmmirror.com/binaries/playwright` 再 `playwright-core/cli.js install chromium` |
+
+## 十一、本机 AI 工具链（三件套，2026-11-12 全部落地）
+
+| 工具 | 作用 | 落地形态 |
+|---|---|---|
+| `oil-ui` | 界面设计与视觉评审（对比页、截图取证） | DSH 插件 `dsh-oil-ui`（`github:oil-oil/dsh-oil-ui`），提供 `oil_ui_*` 工具 + `oil-ui` Skill |
+| `playwright-mcp` | 真实浏览器渲染抓取 | DSH 插件 `@deepseek-ai/dsh-mcp-client`（`serverName: browser`），见 §10 |
+| `superpowers`（裁剪版） | 系统性调试 + 计划书写法 | 只装 2 个 Skill，走 `dsh-skill-filesystem` 的 `customSkillDirs`，**没有** npm 包、**没有** hooks |
+
+### 11.1 superpowers 裁剪安装（为什么只装两节）
+
+上游 `obra/superpowers`（`22f0b46` / v7.0.2，MIT）自带 15 个 Skill、Claude Code 的 `SessionStart` 钩子、以及 TDD / 子 Agent 评审等强制流程。**强制的 TDD 与逐任务评审会和本项目的验收节奏冲突**：KuAo 的验证是产物级（跑脚本、查库、看截图、pytest 全量），不是逐函数红灯绿灯，硬插进来只会拖慢且互相打断。
+
+因此只取 `systematic-debugging`（四阶段根因定位）与 `writing-plans`（计划书写法），其余 13 个 Skill 与 `hooks/` 全部不落盘——是物理上没有，不是靠开关屏蔽。
+
+**配置位置**（唯一改动的文件）：`C:\Users\xiao\.dsh\profiles\desktop\cordis.patch.yml`，`insert` 段追加：
+
+```yaml
+    - id: superpowers-skills
+      name: '@deepseek-ai/dsh-skill-filesystem'
+      config:
+        providerName: superpowers          # 独立 provider，不与默认文件系统 provider 抢名
+        includeDefaultRoots: false         # 不扫 <project>/.dsh/skills、~/.dsh/skills，避免混入仓库技能
+        customSkillDirs:
+          - 'D:\agent-lab\dsh-plugins\superpowers\skills'
+        watch: true                        # 改 SKILL.md 后下一次调用即生效，无需重启
+```
+
+| 项 | 值 |
+|---|---|
+| 技能目录 | `D:\agent-lab\dsh-plugins\superpowers\skills\{systematic-debugging,writing-plans}\SKILL.md` |
+| 来源与取舍 | `D:\agent-lab\dsh-plugins\superpowers\UPSTREAM.md`（含 commit、排除清单、升级步骤） |
+| 上游副本 | `D:\agent-lab\dsh-plugins\_tmp\superpowers`（完整 clone，仅供升级时对照，未挂载） |
+| 备份 | `cordis.patch.yml.bak-20261212-211254-pre-superpowers`（注意日期是系统中招后的 2026 年，非笔误） |
+| 验收 | `plugin_manager` 里 `superpowers-skills` → `fiberPhase: active`；技能目录出现两条，且 `skill` 工具能加载正文 |
+
+**升级**：`git -C D:\agent-lab\dsh-plugins\_tmp\superpowers pull` → 重新拷两个目录 → 更新 UPSTREAM.md 的 commit。
+
+### 11.2 产品决策：`/hot` 宁可少，不用「刚截止」凑数（勿改）
+
+2026-11-12 实测：84 条在架国家级赛事里，当天只有 3 条处于「报名中/未开始」，`/api/competitions/hot?limit=50` 就返回 3 条。
+
+**这是正确行为，不是缺陷。** 首页是「精品国赛智库」的热门位，热门 = 当下真的能报。用已截止赛事补齐会让用户以为赛事过期，破坏信任；留白优于误导。
+
+因此：
+- **不要**给 `/hot` 加「用 `_phase=2` 补齐到 limit」的兜底逻辑；
+- 前端按返回条数自适应渲染，不要写死 8 张卡；
+- 若某天首页太空，正确的解法是补真实的在招赛事数据（`discover_saikr` + 审核），不是放宽筛选口径。
+
+同批次还修了主列表的 `limit`：`db.list_competitions()` 原先**没有** limit 参数，`GET /api/competitions?limit=N` 被 FastAPI 静默忽略（`?limit=1` 返回全部 84 条）。现补为 `Query(None, ge=1, le=500)`，并**在 `month` 的 Python 过滤之后**再切片——若把 `LIMIT` 写进 SQL 就是「先截断再过滤」，会返回比 limit 更少的行。回归测试 `backend/test_competition_list_limit.py`（4 条）专门锁这个坑。
