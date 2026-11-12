@@ -724,6 +724,68 @@ cd ..\frontend; D:\Tools\node.exe D:\Tools\node_modules\npm\bin\npm-cli.js run b
 
 每日备份：`./venv/bin/python backup_db.py --db competitions.db --backup-dir backups --keep-days 30 --label daily`。用 `sqlite3.Connection.backup()`（不是 `cp`）生成含已提交 WAL 的一致快照，备份库为 `journal_mode=DELETE`、恢复不依赖 `-wal/-shm`；备份后自动 `integrity_check` + 四表行数校验。备份 SHA 与线上库不同属正常，验收只看 `integrity_check` 与行数；恢复见 1.4。
 
+### 9.4 安全同步 `sync_prod_safe.py`（2026-11-11 事故后的强制流程）
+
+**事故**：用 `install`/`cp` 整库覆盖云端 `competitions.db`，`users` 表被本地版本替换，真实注册用户全部丢失。**整库覆盖从此禁止**——即使先备份，也别赌恢复链路。
+
+`backend/sync_prod_safe.py` 是唯一允许的"本地 → 云端"数据通道，硬约束如下：
+
+| 约束 | 实现 |
+|---|---|
+| 只写三张业务表 | `BUSINESS_TABLES = ("competitions", "awards", "competition_candidates")` 硬编码，CLI 无参数可改 |
+| 用户资产绝不可写 | 写入事务内对**除白名单外所有表**做行级 SHA-256 指纹，前后不一致立即 `ROLLBACK` 并抛 `SyncError` |
+| 绝不删行 | 只 `INSERT ... ON CONFLICT(id) DO UPDATE`；生成语句经 `guard_sql()` 拦截 `DELETE/DROP/TRUNCATE/REPLACE/ALTER`。`REPLACE` 也必须禁：它先删后插，会触发 `user_preparations` 的 `ON DELETE CASCADE` |
+| 跨库读取 | `ATTACH DATABASE 'file:...?mode=ro'`，源库只读挂载；`file_uri()` 负责 Windows 路径转 URI |
+| 写入前备份 | `sqlite3.Connection.backup()` 生成 `backups/<库名>.bak-<时间>-pre-sync` |
+| 结构漂移即中止 | 三张表列集合不一致（源多列/目标多列）直接拒绝，避免半升级写坏库 |
+| 唯一键冲突不覆盖 | 目标库已存在同 `content_hash` / `(source,source_key)` 的行 → 跳过并列入报告 |
+| 默认 dry-run | 不加 `--apply` 只打印计划，零写入 |
+
+三种用法（本地执行）：
+
+```bash
+# 1) 看计划
+python sync_prod_safe.py --source competitions.db --target workspace/prod-snapshot.db
+# 2) 落盘（自动备份目标库）
+python sync_prod_safe.py --source competitions.db --target workspace/prod-snapshot.db --apply
+# 3) 不碰目标库，只生成差异 SQL 包，回服务器执行
+python sync_prod_safe.py --source competitions.db --export-sql workspace/sync.sql
+```
+
+推荐的云上姿势：`systemctl stop kuao-backend` → `scp` 下云端 `competitions.db` 到 `workspace/prod-snapshot.db` → 本地 `--apply` → `scp` 回去 → 云端 `install -m 644` + `rm -f competitions.db-wal competitions.db-shm` + 起服务。**注意**：`install` 这一步仍然整库覆盖，所以必须在**停服且已把云端库拉回本地**的前提下做，且此时目标库已经是"同步后的完整云端库"，等于只搬运，不改变内容。
+
+报告落在 `backend/workspace/sync_prod_safe_<时间>.json`，含每表 `inserts/updates/unchanged/conflicts/stale_on_target`、受保护表行数、`integrity_check`。测试：`tests/test_sync_prod_safe.py`（6 条，覆盖"写业务表不改用户表""救援回灌""SQL 包无破坏性语句""结构漂移中止"）。
+
+#### 事故恢复：只回灌用户资产
+
+```bash
+# 云端找事故前备份（02:30 日备份 或 覆盖前 pre-db-sync）
+ls -1t /root/KuAo/backend/backups/competitions.db.bak-* | head
+# 拉回本地后：
+python sync_prod_safe.py --target workspace/cloud-current.db \
+    --rescue-from workspace/cloud-pre-overwrite.db --apply
+```
+
+`--rescue-from` 只处理 `users / user_preparations / feedbacks / ai_usage`：按主键补齐**缺失**行，`INSERT ... ON CONFLICT DO NOTHING`，不删、不覆盖已有账号；用户名相同但 id 不同会打印"需人工裁决"而不是静默合并。会校验其它表指纹未变。
+
+也可以在服务器上用 sqlite3 就地救（等价逻辑，注意先 `systemctl stop`）：
+
+```bash
+cp competitions.db competitions.db.before-rescue
+sqlite3 competitions.db <<'SQL'
+ATTACH '/root/KuAo/backend/backups/<事故前备份>' AS bak;
+BEGIN IMMEDIATE;
+INSERT OR IGNORE INTO users (id, username, password_hash, created_at, is_admin)
+  SELECT id, username, password_hash, created_at, is_admin FROM bak.users;
+INSERT OR IGNORE INTO user_preparations (user_id, competition_id, created_at)
+  SELECT user_id, competition_id, created_at FROM bak.user_preparations
+  WHERE user_id IN (SELECT id FROM users);
+COMMIT;
+SQL
+```
+
+抢救后立刻用 `sync_prod_safe.py` 的 `--apply` 路径做一次"业务表同步"，确认用户表行数不回退。
+
 ---
 
 ## 十、JS 渲染站点抓取 SOP（playwright-mcp）
