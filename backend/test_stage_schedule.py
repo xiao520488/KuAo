@@ -229,17 +229,27 @@ class DeriveSpanTest(unittest.TestCase):
 
     def test_month_only_notes_fill_month_columns(self) -> None:
         stages = [
-            {"stage": "报名", "start_date": "2025-09-10", "end_date": "2025-10-31", "note": ""},
-            {"stage": "校赛", "start_date": None, "end_date": None, "note": "安排在2025年11月"},
-            {"stage": "初赛", "start_date": None, "end_date": None, "note": "省初赛2025年11月"},
-            {"stage": "复赛", "start_date": None, "end_date": None, "note": "2025年12月举行"},
-            {"stage": "决赛", "start_date": None, "end_date": None, "note": "中国总决赛2026年3月进行"},
+            {"stage": "报名", "start_date": "2026-09-10", "end_date": "2026-10-31", "note": ""},
+            {"stage": "校赛", "start_date": None, "end_date": None, "note": "安排在2026年11月"},
+            {"stage": "初赛", "start_date": None, "end_date": None, "note": "省初赛2026年11月"},
+            {"stage": "复赛", "start_date": None, "end_date": None, "note": "2026年12月举行"},
+            {"stage": "决赛", "start_date": None, "end_date": None, "note": "中国总决赛2027年3月进行"},
         ]
         self.assertEqual(ss.derive_span(stages, today=TODAY),
                          {"contest_start_month": 11, "contest_end_month": 3})
         patch = ss.plan_writes({"stage_schedule": ss.dumps(stages[:1])}, stages,
                                ss.dumps(stages), today=TODAY)
         self.assertEqual(patch, {"contest_start_month": 11, "contest_end_month": 3})
+
+    def test_past_year_month_only_dropped(self) -> None:
+        """防呆：只到月的往年数据丢弃（爬到上一届的典型症状）。"""
+        stages = [
+            {"stage": "校赛", "start_date": None, "end_date": None, "note": "2025年11月"},
+            {"stage": "初赛", "start_date": None, "end_date": None, "note": "2026年3月"},
+        ]
+        span = ss.derive_span(stages, today=TODAY)
+        self.assertNotIn(11, span.values())
+        self.assertEqual(span, {"contest_start_month": 3})
 
     def test_date_track_wins_over_month_track(self) -> None:
         stages = [

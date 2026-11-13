@@ -1050,3 +1050,10 @@ backend\venv\Scripts\python.exe backend\backfill_stage_schedule.py --apply --all
 **执行记录**：14 条「有阶段表、顶部四列全空」→ 10 条补上月/日轨；
 华为ICT(id=20) → `contest_start_month=11, contest_end_month=3`，
 详情页顶部渲染为「2025年11月 – 2026年3月」。
+
+**后续（同日人工清洗）**：复查发现该赛事的 2025 年阶段其实是上一届残留，已把 id=20 的
+九个时间字段（4 个 `*_date`、4 个 `*_month`、`stage_schedule`）全部清空，
+前端自动降级回「暂未收录」，详情页不再显示阶段表。同时加防呆：
+`stage_schedule.span_candidates()` 中「只到月、且年份早于今年」的候选直接丢弃，
+防止下次抓取再把往年月份写回顶部（精确到日的日期不受影响，仍按原护栏处理）。
+清洗后本地列表位置：落入「无日期」段（智能排序 phase=3 整段压最后，段内按 id）。

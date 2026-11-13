@@ -197,6 +197,8 @@ def span_candidates(stages: list, *, today: Optional[date] = None) -> list:
             year, month = today.year, int(hit.group(1))
         if not (1 <= month <= 12) or not (lo <= year <= hi):
             continue
+        if year < today.year:
+            continue  # 防呆：只到月的往年数据不可信（多半是爬到了上一届），直接丢弃
         items.append(("%04d-%02d-01" % (year, month), 1, "month", (year, month), "note"))
     return items
 
