@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """stage_schedule.py —— 把赛程正文拆成「阶段级」结构化时间表。
 
 背景（2026-11-13 重构）：
@@ -48,6 +48,15 @@ STAGE_ORDER = ("报名", "校赛", "省赛", "初赛", "复赛", "决赛")
 
 # 顶部「比赛时间」总跨度只取比赛阶段，报名不算（报名起止是另一条时间线）
 SPAN_EXCLUDE = ("报名",)
+# 顶部「比赛时间」只取比赛本身：报名、以及备案/申请/审核/公示/证书这类行政节点
+# 都不该把跨度拉长（如三创赛「省赛承办单位申请 2025-10」会把开始日拉到去年）。
+SPAN_EXCLUDE_KEYWORDS = ("报名", "备案", "申请", "审核", "公示", "证书", "颁发")
+
+
+def span_excluded(stage_name, note=None) -> bool:
+    """该阶段是否不参与顶部总跨度（阶段名或备注命中行政关键词即排除）。"""
+    text = "%s %s" % (stage_name or "", note or "")
+    return any(word in text for word in SPAN_EXCLUDE_KEYWORDS)
 
 MAX_STAGE_CHARS = 10
 MAX_NOTE_CHARS = 40
@@ -149,7 +158,7 @@ def span(stages: list) -> tuple:
     """
     starts, ends = [], []
     for row in stages:
-        if row.get("stage") in SPAN_EXCLUDE:
+        if span_excluded(row.get("stage"), row.get("note")):
             continue
         if row.get("start_date"):
             starts.append(row["start_date"])
@@ -178,7 +187,7 @@ def span_candidates(stages: list, *, today: Optional[date] = None) -> list:
     lo, hi = today.year + MIN_YEAR_OFFSET, today.year + MAX_YEAR_OFFSET
     items = []
     for row in stages or []:
-        if row.get("stage") in SPAN_EXCLUDE:
+        if span_excluded(row.get("stage"), row.get("note")):
             continue
         for key in ("start_date", "end_date"):
             value = str(row.get(key) or "").strip()

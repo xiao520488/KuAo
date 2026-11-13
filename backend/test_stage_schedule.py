@@ -150,6 +150,21 @@ class SpanTest(unittest.TestCase):
         stages = [{"stage": "报名", "start_date": "2026-09-10", "end_date": "2026-11-30"}]
         self.assertEqual(ss.span(stages), (None, None))
 
+    def test_span_excludes_administrative_nodes(self) -> None:
+        """三创赛：校赛注册/省赛承办申请/团队审核/成绩公示 不得把顶部跨度拉到去年。"""
+        stages = [
+            {"stage": "报名", "start_date": "2025-10-20", "end_date": "2025-12-31"},
+            {"stage": "校赛", "start_date": "2025-10-20", "end_date": "2025-11-30",
+             "note": "校赛注册及备案"},
+            {"stage": "省赛", "start_date": "2025-10-20", "end_date": "2025-11-30",
+             "note": "省赛承办单位申请"},
+            {"stage": "团队审核", "start_date": "2025-10-20", "end_date": "2026-03-10"},
+            {"stage": "初赛", "start_date": "2026-03-11", "end_date": "2026-04-10"},
+            {"stage": "决赛", "start_date": "2026-07-10", "end_date": "2026-08-10"},
+            {"stage": "成绩公示", "start_date": "2026-08-05", "end_date": "2026-08-12"},
+        ]
+        self.assertEqual(ss.span(stages), ("2026-03-11", "2026-08-10"))
+
     def test_span_drops_end_when_before_start(self) -> None:
         """「名单公布 6/10」+「决赛 7/12」：结束日早于开始日，只保留开始日。"""
         stages = [
