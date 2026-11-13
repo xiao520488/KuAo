@@ -64,6 +64,7 @@ import requests
 from bs4 import BeautifulSoup
 
 import db
+import contest_dates
 import discover_common as common
 import image_guard
 import llm
@@ -89,7 +90,7 @@ STALE_DAYS = 400          # 报名结束超过 400 天视为往年届次，整�
 DAILY_WINDOW_DAYS = 7     # --daily-update 只处理最近 N 天新入库的赛事
 
 # AI 提纯（防版权）：每个 contest_id 只调用一次，三字段一起改写
-AI_PROMPT_VER = "saikr-enrich-v1"
+AI_PROMPT_VER = "saikr-enrich-v2"
 AI_MAX_TOKENS = 2000
 AI_ITEM_MAX_CHARS = 50    # 单条短句上限（不含「1. 」编号）
 AI_MAX_ITEMS = 8          # 单字段最多保留条目，避免列表失控
@@ -507,8 +508,16 @@ AI_PURIFY_SYSTEM = (
 
 AI_PURIFY_SCHEMA_HINT = (
     '{"participants": "1. ...\\n2. ...", "content_scope": "1. ...", '
-    '"exam_schedule": "1. ..."}'
+    '"exam_schedule": "1. ...", "extracted_contest_date": "2026-11-14", '
+    '"extracted_contest_end_date": null}'
 )
+
+# 模型输出的比赛日期键 -> 主表日期列（2026-11-13：赛氪 API 的 contest_*_time
+# 是占位符 '-0001/11/30'，比赛日期只能从「考试安排」正文里提炼）
+_AI_DATE_KEYS = {
+    "contest_start_date": "extracted_contest_date",
+    "contest_end_date": "extracted_contest_end_date",
+}
 
 _RE_PURIFY_ITEM = re.compile(
     r"^\s*(?:\d{1,2}\s*[.、．)）]|[（(]\s*\d{1,2}\s*[）)]|[-*•·])\s*"
@@ -610,13 +619,19 @@ def build_purify_prompt(name: str, raw_fields: dict) -> str:
         "- participants（参赛对象）：谁可以参赛（身份、学历、年龄、团队人数等）",
         "- content_scope（内容范围）：比赛内容、赛项、赛道、主题、作品类型",
         "- exam_schedule（考试安排）：赛程阶段与时间节点（报名、初赛、复赛、决赛、提交截止等）",
+        "- extracted_contest_date（比赛开始日）/ extracted_contest_end_date（比赛结束日）：",
+        "  只抽「比赛本身」（初赛/复赛/决赛/答辩/评审）的日期，输出 YYYY-MM-DD；",
+        "  报名起止、材料提交截止、缴费截止都不算比赛日期；",
+        "  原文只写「11月14日」没有年份的，按赛程推断（报名在 2025 年、决赛在次年春天就写 2026）；",
+        "  只有月份没有具体某一天（如「7月至8月」）或正文没写，就输出 null，绝不编造。",
         "",
         "硬性要求：",
         "1. 必须用自己的话概括，禁止整句照抄；除赛事/赛项等专有名词外，连续引用不超过 12 个字。",
         "2. 每个字段输出 1~%d 条，每条一行，用「1. 」「2. 」编号。" % AI_MAX_ITEMS,
         "3. 每条不超过 %d 个汉字；只写原文有的事实，原文没有的日期/人数不要猜测。" % AI_ITEM_MAX_CHARS,
-        "4. 某个字段没有对应信息就返回空字符串，不要编造。",
-        "5. 不要输出 Markdown、标题或解释。",
+        "4. 某个字段没有对应信息就返回空字符串，不要编造；日期没有就返回 null。",
+        "5. extracted_contest_date 必须与 exam_schedule 里的说法一致，不能凭空多出一个日期。",
+        "6. 不要输出 Markdown、标题或解释。",
         "",
         "原始文本：",
     ]
@@ -636,18 +651,22 @@ def build_purify_prompt(name: str, raw_fields: dict) -> str:
 
 def _pick_ai_value(data: dict, field: str):
     """兼容模型用中文字段名或包一层 fields 的输出。"""
-    for key in (field, FIELD_LABELS[field]):
-        if key in data:
+    for key in (field, FIELD_LABELS.get(field)):
+        if key and key in data:
             return data[key]
     return None
 
 
 def purify_fields(name: str, raw_fields: dict,
-                  *, max_chars: int = MAX_FIELD_LEN) -> dict:
-    """调用一次 llm.py，把原始章节提炼为结构化短句。
+                  *, max_chars: int = MAX_FIELD_LEN) -> tuple:
+    """调用一次 llm.py，把原始章节提炼为结构化短句，并顺带抽取比赛日期。
 
-    返回 {field: {"text", "source", "raw_chars"}}；LLM 失败时抛 llm.LLMError，
-    调用方必须保留 NULL，**绝不能回落写原文**。
+    返回 ``(fields, dates)``：
+        fields: ``{field: {"text", "source", "raw_chars"}}``
+        dates:  ``{"contest_start_date": "2026-11-14", ...}``（未经护栏校验，
+                调用方必须过 ``contest_dates.plan_date_writes`` 才能入库）
+
+    LLM 失败时抛 llm.LLMError，调用方必须保留 NULL，**绝不能回落写原文**。
     """
     needed = {}
     for field in DETAIL_FIELDS:
@@ -660,7 +679,7 @@ def purify_fields(name: str, raw_fields: dict,
         source = item.get("source") if isinstance(item, dict) else ""
         needed[field] = {"text": text, "source": source or "赛氪详情"}
     if not needed:
-        return {}
+        return {}, {}
 
     data = llm.chat_json(
         build_purify_prompt(name, needed),
@@ -692,7 +711,14 @@ def purify_fields(name: str, raw_fields: dict,
             "source": "AI提纯：%s｜%s" % (needed[field]["source"], AI_PROMPT_VER),
             "raw_chars": len(needed[field]["text"]),
         }
-    return result
+
+    dates = {}
+    for column, key in _AI_DATE_KEYS.items():
+        value = _pick_ai_value(data, key)
+        if value in (None, "", "null", "None", "无"):
+            continue
+        dates[column] = str(value).strip()
+    return result, dates
 
 
 # ============================================================
@@ -1044,9 +1070,9 @@ def enrich_competition(target_db: str, competition_id: int, *,
         return {"status": "no_fields", "competition_id": int(competition_id),
                 "contest_id": contest_id, "reason": "页面无可用章节"}
 
-    purified = purify_fields(row.get("name") or "", needed,
-                             max_chars=max_chars or MAX_FIELD_LEN)
-    if not purified:
+    purified, extracted_dates = purify_fields(
+        row.get("name") or "", needed, max_chars=max_chars or MAX_FIELD_LEN)
+    if not purified and not extracted_dates:
         return {"status": "ai_empty", "competition_id": int(competition_id),
                 "contest_id": contest_id, "reason": "AI 未产出可用短句"}
 
@@ -1059,7 +1085,13 @@ def enrich_competition(target_db: str, competition_id: int, *,
     # 顺手补「空的日期字段 + 封面」：审核入库的新赛事通常这两类也是空壳，
     # 只补空、封面过 image_guard 闸门，失败保持 NULL 走前端兜底。
     extra = fill_dates_and_cover(target_db, int(competition_id), detail)
-    changed = bool(written) or bool(extra["dates"]) or bool(extra["cover"])
+    date_patch = {}
+    if extracted_dates:
+        raw_text = (raw.get("exam_schedule") or {}).get("text") or ""
+        date_patch = contest_dates.apply(
+            target_db, int(competition_id), extracted_dates, raw_text)
+    changed = (bool(written) or bool(extra["dates"]) or bool(extra["cover"])
+               or bool(date_patch))
     return {
         "status": "updated" if changed else "exists",
         "competition_id": int(competition_id),
@@ -1067,6 +1099,7 @@ def enrich_competition(target_db: str, competition_id: int, *,
         "match": match,
         "written": sorted(written),
         "extra": extra,
+        "date_patch": date_patch,
         "fields": purified,
     }
 
@@ -1147,6 +1180,7 @@ def main(argv=None) -> int:
 
     # AI 提纯：每个 contest_id 一次；失败/照抄一律保留 NULL，绝不写原文
     purified = {}
+    dates_by_contest = {}
     ai_calls = ai_failed = 0
     usage_before = llm.get_usage()
     if args.no_llm:
@@ -1163,15 +1197,19 @@ def main(argv=None) -> int:
                 continue
             name = by_contest[contest_id][0]["name"]
             try:
-                result = purify_fields(name, needed, max_chars=MAX_FIELD_LEN)
+                result, dates = purify_fields(name, needed, max_chars=MAX_FIELD_LEN)
                 purified[contest_id] = result
+                dates_by_contest[contest_id] = dates
                 ai_calls += 1
                 log("[AI] contest_id=%s -> 提纯 %d/%d 字段%s"
                     % (contest_id, len(result), len(needed),
                        "" if result else "（⚠ 无可用短句，保留 NULL）"))
+                if dates:
+                    log("[AI] contest_id=%s -> 比赛日期候选 %s" % (contest_id, dates))
             except Exception as exc:  # noqa: BLE001 - 单条 AI 失败不阻断批量
                 ai_failed += 1
                 purified[contest_id] = {}
+                dates_by_contest[contest_id] = {}
                 log("[AI] ✗ contest_id=%s：%s（保留 NULL，不写原文）"
                     % (contest_id, exc))
     usage_after = llm.get_usage()
@@ -1189,6 +1227,7 @@ def main(argv=None) -> int:
         "ai_tokens": ai_tokens,
         "ai_fields": sum(len(value) for value in purified.values()),
         "updated_competitions": 0,
+        "date_written": 0,
         "field_written": {field: 0 for field in DETAIL_FIELDS},
         "field_extracted": {field: 0 for field in DETAIL_FIELDS},
     }
@@ -1247,6 +1286,22 @@ def main(argv=None) -> int:
         if entry["fields"] and any(
                 info.get("written") for info in entry["fields"].values()):
             stats["updated_competitions"] += 1
+
+        # 比赛日期：AI 从「考试安排」正文里提的候选值，过 contest_dates 护栏后只补空
+        ai_dates = dates_by_contest.get(contest_id) or {}
+        if ai_dates:
+            raw_text = (raw_fields.get("exam_schedule") or {}).get("text") or ""
+            if args.apply:
+                date_patch = contest_dates.apply(
+                    target_db, target["target_id"], ai_dates, raw_text)
+            else:
+                date_patch = contest_dates.plan_from_db(
+                    target_db, target["target_id"], ai_dates, raw_text)
+            if date_patch:
+                entry["date_patch"] = date_patch
+                if args.apply:
+                    stats["date_written"] += 1
+                    stats["updated_competitions"] += 1
         preview.append(entry)
 
     payload = {
@@ -1276,7 +1331,7 @@ def main(argv=None) -> int:
     if args.apply:
         log("[写入] 更新比赛 %d 条｜" % stats["updated_competitions"] + " / ".join(
             "%s %d 个" % (FIELD_LABELS[field], stats["field_written"][field])
-            for field in DETAIL_FIELDS))
+            for field in DETAIL_FIELDS) + "｜比赛日期 %d 条" % stats["date_written"])
     else:
         log("[预演] 未写库；确认预览后加 --apply 执行")
     if stats["stale_skipped"]:

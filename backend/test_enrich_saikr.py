@@ -107,7 +107,7 @@ def test_purify_fields_calls_llm_once_for_all_fields(monkeypatch):
         "exam_schedule": {"text": "报名截止 5 月 1 日，决赛于 7 月举行。",
                           "source": "章节：赛程安排"},
     }
-    result = enrich.purify_fields("测试赛", raw)
+    result, dates = enrich.purify_fields("测试赛", raw)
 
     assert len(calls) == 1  # 三字段共用一次调用
     assert result["participants"]["text"] == "1. 全日制在校生；2. 团队 2-5 人"
@@ -125,10 +125,10 @@ def test_purify_fields_drops_copied_field(monkeypatch):
         enrich.llm, "chat_json",
         lambda *a, **k: {"participants": raw_text[:45]},
     )
-    result = enrich.purify_fields(
+    result, dates = enrich.purify_fields(
         "测试赛", {"participants": {"text": raw_text, "source": "章节"}}
     )
-    assert result == {}  # 照抄 -> 丢弃，绝不回落写原文
+    assert result == {} and dates == {}  # 照抄 -> 丢弃，绝不回落写原文
 
 
 def test_purify_fields_raises_on_llm_failure(monkeypatch):
@@ -141,6 +141,43 @@ def test_purify_fields_raises_on_llm_failure(monkeypatch):
             "测试赛", {"participants": {"text": "全日制在校本科生、研究生均可报名参加本次竞赛。",
                                          "source": "章节"}}
         )
+
+
+def test_purify_fields_returns_extracted_contest_dates(monkeypatch):
+    monkeypatch.setattr(enrich.llm, "chat_json", lambda *a, **k: {
+        "exam_schedule": "1. 报名截止 5 月 1 日；2. 决赛 11 月 14 日举行",
+        "extracted_contest_date": "2026-11-14",
+        "extracted_contest_end_date": None,
+    })
+    _fields, dates = enrich.purify_fields(
+        "测试赛", {"exam_schedule": {"text": "报名截止 5 月 1 日，决赛于11月14日举行。",
+                                    "source": "章节"}}
+    )
+    assert dates == {"contest_start_date": "2026-11-14"}
+
+
+def test_enrich_competition_writes_date_from_schedule_text(monkeypatch, tmpdb):
+    """AI 抽到比赛日期 + 正文佐证 -> 反写 contest_start_date 与月份。"""
+    comp_id = db.add_competition({"name": "日期反写测试赛", "category": "程序设计"})
+    monkeypatch.setattr(enrich, "fetch_detail", lambda session, cid: {"contest_name": "x"})
+    monkeypatch.setattr(enrich, "extract_fields", lambda detail: {
+        "exam_schedule": {"text": "1. 报名：3月1日至4月30日；2. 决赛于11月14日举行。",
+                          "source": "章节"},
+    })
+    monkeypatch.setattr(enrich, "purify_fields", lambda name, needed, **kw: (
+        {"exam_schedule": {"text": "1. 5 月报名截止；2. 11 月 14 日决赛",
+                           "source": "AI提纯"}},
+        {"contest_start_date": "2026-11-14"},
+    ))
+
+    result = enrich.enrich_competition(tmpdb, comp_id, contest_id=123)
+    assert result["date_patch"] == {"contest_start_date": "2026-11-14",
+                                    "contest_start_month": 11}
+    with sqlite3.connect(tmpdb) as conn:
+        row = conn.execute(
+            "SELECT contest_start_date, contest_start_month FROM competitions "
+            "WHERE id = ?", (comp_id,)).fetchone()
+    assert row[0] == "2026-11-14" and row[1] == 11
 
 
 # ---------------------------------------------------------------------------
@@ -202,10 +239,10 @@ def test_enrich_competition_only_fills_empty(monkeypatch, tmpdb):
         "content_scope": {"text": "赛项分为算法与软件两个赛道。", "source": "章节"},
         "exam_schedule": {"text": "报名截止 5 月，决赛 7 月。", "source": "章节"},
     })
-    monkeypatch.setattr(enrich, "purify_fields", lambda name, needed, **kw: {
+    monkeypatch.setattr(enrich, "purify_fields", lambda name, needed, **kw: ({
         "content_scope": {"text": "1. 算法设计；2. 软件开发", "source": "AI提纯"},
         "exam_schedule": {"text": "1. 5 月报名截止；2. 7 月决赛", "source": "AI提纯"},
-    })
+    }, {}))
 
     result = enrich.enrich_competition(tmpdb, comp_id, contest_id=123)
     assert result["status"] == "updated"
@@ -232,11 +269,11 @@ def _fake_detail_pipeline(monkeypatch):
         "content_scope": {"text": "赛项分为算法与软件两个赛道。", "source": "章节"},
         "exam_schedule": {"text": "报名截止 5 月，决赛 7 月。", "source": "章节"},
     })
-    monkeypatch.setattr(enrich, "purify_fields", lambda name, needed, **kw: {
+    monkeypatch.setattr(enrich, "purify_fields", lambda name, needed, **kw: ({
         "participants": {"text": "1. 全日制在校生；2. 团队 2-5 人", "source": "AI提纯"},
         "content_scope": {"text": "1. 算法设计；2. 软件开发", "source": "AI提纯"},
         "exam_schedule": {"text": "1. 5 月报名截止；2. 7 月决赛", "source": "AI提纯"},
-    })
+    }, {}))
 
 
 def test_cli_daily_update_only_touches_recent(monkeypatch, tmpdb, tmp_path):
