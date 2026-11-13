@@ -224,5 +224,56 @@ class ApplyTest(unittest.TestCase):
         self.assertEqual(row[1], "2026-12-01")
 
 
+class DeriveSpanTest(unittest.TestCase):
+    """顶部总跨度的聚合：精确到日走 date 轨，只到月走 month 轨（2026-11-13 傍晚补）。"""
+
+    def test_month_only_notes_fill_month_columns(self) -> None:
+        stages = [
+            {"stage": "报名", "start_date": "2025-09-10", "end_date": "2025-10-31", "note": ""},
+            {"stage": "校赛", "start_date": None, "end_date": None, "note": "安排在2025年11月"},
+            {"stage": "初赛", "start_date": None, "end_date": None, "note": "省初赛2025年11月"},
+            {"stage": "复赛", "start_date": None, "end_date": None, "note": "2025年12月举行"},
+            {"stage": "决赛", "start_date": None, "end_date": None, "note": "中国总决赛2026年3月进行"},
+        ]
+        self.assertEqual(ss.derive_span(stages, today=TODAY),
+                         {"contest_start_month": 11, "contest_end_month": 3})
+        patch = ss.plan_writes({"stage_schedule": ss.dumps(stages[:1])}, stages,
+                               ss.dumps(stages), today=TODAY)
+        self.assertEqual(patch, {"contest_start_month": 11, "contest_end_month": 3})
+
+    def test_date_track_wins_over_month_track(self) -> None:
+        stages = [
+            {"stage": "初赛", "start_date": "2026-12-01", "end_date": "2026-12-20",
+             "note": "2026年12月评审"},
+            {"stage": "决赛", "start_date": None, "end_date": None, "note": "预计2027年5月"},
+        ]
+        span = ss.derive_span(stages, today=TODAY)
+        self.assertEqual(span["contest_start_date"], "2026-12-01")
+        # 决赛只到月，所以结束侧走月份轨（2027年5月）
+        self.assertEqual(span["contest_end_month"], 5)
+        self.assertNotIn("contest_end_date", span)
+
+    def test_single_candidate_sets_one_side_only(self) -> None:
+        self.assertEqual(ss.derive_span(
+            [{"stage": "初赛", "start_date": "2026-12-01", "note": ""}], today=TODAY),
+            {"contest_start_date": "2026-12-01"})
+        self.assertEqual(ss.derive_span(
+            [{"stage": "决赛", "end_date": "2026-12-20", "note": ""}], today=TODAY),
+            {"contest_end_date": "2026-12-20"})
+
+    def test_note_day_or_out_of_window_ignored(self) -> None:
+        stages = [
+            {"stage": "初赛", "start_date": None, "end_date": None, "note": "2020年11月回顾"},
+            {"stage": "决赛", "start_date": None, "end_date": None, "note": "12月20日以官网为准"},
+        ]
+        self.assertEqual(ss.derive_span(stages, today=TODAY), {})
+
+    def test_month_only_does_not_overwrite_existing(self) -> None:
+        stages = [{"stage": "初赛", "start_date": None, "end_date": None, "note": "2026年12月"}]
+        current = {"stage_schedule": "[{}]", "contest_start_month": 5,
+                   "contest_start_date": "2026-12-01"}
+        self.assertEqual(ss.plan_writes(current, stages, "", today=TODAY), {})
+
+
 if __name__ == "__main__":
     unittest.main()

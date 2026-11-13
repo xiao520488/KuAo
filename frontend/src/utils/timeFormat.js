@@ -85,6 +85,40 @@ export function formatStageRange(startValue, endValue) {
   return formatCnDate(start ? startValue : endValue)
 }
 
+// 阶段表 -> 顶部总跨度文案（带年份，如「2025年11月 – 2026年3月」）。
+// 与后端 stage_schedule.derive_span 同口径：报名不参与；精确到日优先，只到月用备注里的「YYYY年M月」。
+export function formatStageSpan(stages) {
+  if (!Array.isArray(stages)) return ''
+  const items = []
+  for (const row of stages) {
+    if (!row || String(row.stage || '') === '报名') continue
+    for (const key of ['start_date', 'end_date']) {
+      const value = String(row[key] || '').trim()
+      if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+        items.push({ key: value, kind: 0, label: formatCnDate(value) })
+      }
+    }
+    const note = String(row.note || '').replace(/\s+/g, '')
+    if (!note || /\d+\s*[日号]/.test(note)) continue
+    const hit = note.match(/(20\d{2})\s*年\s*(\d{1,2})\s*月/)
+    if (!hit) continue
+    const year = Number(hit[1])
+    const month = Number(hit[2])
+    if (month < 1 || month > 12) continue
+    items.push({
+      key: `${year}-${String(month).padStart(2, '0')}-01`,
+      kind: 1,
+      label: `${year}年${month}月`
+    })
+  }
+  if (!items.length) return ''
+  items.sort((a, b) => (a.key === b.key ? a.kind - b.kind : a.key < b.key ? -1 : 1))
+  const start = items[0]
+  const end = items[items.length - 1]
+  if (start.label === end.label) return start.label
+  return `${start.label} – ${end.label}`
+}
+
 // 本地零点，避免「今天 23 点 vs 明天 0 点」被算成 1 天
 function startOfDay(date) {
   return new Date(date.getFullYear(), date.getMonth(), date.getDate())

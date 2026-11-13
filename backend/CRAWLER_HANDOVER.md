@@ -1026,3 +1026,27 @@ backend\venv\Scripts\python.exe backend\backfill_stage_schedule.py --apply --all
 
 **只用 `sync_prod_safe.py` 合并**，禁止整库覆盖；上云顺序：先 `migrate_production.py --apply`
 （补 `stage_schedule` 列），再合并数据。
+
+### 13.6 顶部「比赛时间」联动阶段表（2026-11-13 傍晚补）
+
+**现象**：华为ICT大赛下面已有【阶段时间表】，顶部「比赛时间」仍写「暂未收录」。
+
+**根因**：`stage_schedule` 抽出来后只写了自己那一列；顶部 `contest_*` 四列没有联动。
+原 `plan_writes` 只从阶段里取「精确到日」的跨度，而该赛事除报名外全部只有
+「2025年11月」「2026年3月」这种月级备注 → 跨度为 None → 顶部空。
+
+**修复**：
+
+* `stage_schedule.derive_span()`：候选同时收「阶段 start/end 精确日期」与
+  「note 里的 `YYYY年M月`」（note 带「日/号」的不猜），按时间排序取最早/最晚；
+  精确到日写 `contest_*_date`，只到月写 `contest_*_month`；只有单个时间点时只写一侧；
+  报名仍不参与；年份窗口仍是 `[今年-1, 今年+1]`。
+* `plan_writes()` 改用 `derive_span()`，因此 `enrich_saikr_details.py` 新抓的行也会自动补月份轨。
+* 新脚本 `backfill_stage_dates.py`：只读聚合、不调模型、默认 dry-run，
+  `--apply --allow-production` 才写生产库（写前备份），只补空、可重复执行。
+* 前端 `utils/timeFormat.formatStageSpan()`：从阶段表的日期/备注里还原年份，
+  详情页顶部在「只有月份轨」时显示 `2025年11月 – 2026年3月`；有精确日期时仍走原日期格式。
+
+**执行记录**：14 条「有阶段表、顶部四列全空」→ 10 条补上月/日轨；
+华为ICT(id=20) → `contest_start_month=11, contest_end_month=3`，
+详情页顶部渲染为「2025年11月 – 2026年3月」。

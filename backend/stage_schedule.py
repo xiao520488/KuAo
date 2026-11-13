@@ -162,6 +162,74 @@ def span(stages: list) -> tuple:
     return start, end
 
 
+# note 里「2025年11月」「3月」这类只到月的表述，用来补顶部月份轨
+_MONTH_WITH_YEAR = re.compile(r"(20\d{2})\s*年\s*(\d{1,2})\s*月")
+_MONTH_ONLY = re.compile(r"(?<!\d)(\d{1,2})\s*月")
+_DAY_IN_NOTE = re.compile(r"\d+\s*[日号]")
+
+
+def span_candidates(stages: list, *, today: Optional[date] = None) -> list:
+    """顶部跨度的全部候选：[(排序键, 精度, 类型, 值)]。
+
+    精度 0=精确到日（来自 start_date/end_date），1=只到月（来自 note 的「YYYY年M月」）；
+    同一时间点优先取更精确的那个。报名阶段不参与（报名是另一条时间线）。
+    """
+    today = today or datetime.now(SHANGHAI).date()
+    lo, hi = today.year + MIN_YEAR_OFFSET, today.year + MAX_YEAR_OFFSET
+    items = []
+    for row in stages or []:
+        if row.get("stage") in SPAN_EXCLUDE:
+            continue
+        for key in ("start_date", "end_date"):
+            value = str(row.get(key) or "").strip()
+            if re.fullmatch(r"20\d{2}-\d{2}-\d{2}", value):
+                items.append((value, 0, "date", value, key))
+        note = _flat(row.get("note"))
+        if not note or _DAY_IN_NOTE.search(note):
+            continue  # 备注里写到了日，说明日期本该在 start/end 上，别从备注猜
+        hit = _MONTH_WITH_YEAR.search(note)
+        if hit:
+            year, month = int(hit.group(1)), int(hit.group(2))
+        else:
+            hit = _MONTH_ONLY.search(note)
+            if not hit:
+                continue
+            year, month = today.year, int(hit.group(1))
+        if not (1 <= month <= 12) or not (lo <= year <= hi):
+            continue
+        items.append(("%04d-%02d-01" % (year, month), 1, "month", (year, month), "note"))
+    return items
+
+
+def derive_span(stages: list, *, today: Optional[date] = None) -> dict:
+    """顶部总跨度：精确到日就写 date 列，只到月就写 month 列（只给有值的一侧）。"""
+    items = span_candidates(stages, today=today)
+    if not items:
+        return {}
+    items.sort(key=lambda item: (item[0], item[1]))
+    patch = {}
+
+    def _put(candidate, side: str) -> None:
+        _, _, kind, value, _ = candidate
+        if kind == "date":
+            patch["contest_%s_date" % side] = value
+        else:
+            patch["contest_%s_month" % side] = value[1]
+
+    first, last = items[0], items[-1]
+    if first is last:
+        # 只有一个时间点：知道的是「结束」就只写结束，否则只写开始（单日赛事）
+        _put(first, "end" if str(first[4]).startswith("end") else "start")
+        return patch
+    _put(first, "start")
+    _put(last, "end")
+    start, end = patch.get("contest_start_date"), patch.get("contest_end_date")
+    if start and end and end < start:
+        patch.pop("contest_end_date", None)
+        patch.pop("contest_end_month", None)
+    return patch
+
+
 def dumps(stages: list) -> str:
     """数组 -> 入库字符串（ensure_ascii=False，便于人工排查）。"""
     return json.dumps(stages or [], ensure_ascii=False, separators=(",", ":"))
@@ -184,20 +252,24 @@ def loads(raw) -> list:
 
 def plan_writes(current: dict, stages: list, raw_text: str, *,
                 today: Optional[date] = None) -> dict:
-    """返回可写入的 patch：stage_schedule + 顶部总跨度（只补空）。"""
+    """返回可写入的 patch：stage_schedule + 顶部总跨度（只补空）。
+
+    顶部跨度双轨：抽到精确日期就写 ``contest_*_date``；阶段只写到月（备注里的
+    「2025年11月」）就写 ``contest_*_month``，避免详情页出现「暂未收录」。
+    """
     patch = {}
     if not loads(current.get(COLUMN)) and stages:
         patch[COLUMN] = dumps(stages)
 
-    start, end = span(stages or [])
-    wanted = {}
-    if start:
-        wanted["contest_start_date"] = start
-    if end:
-        wanted["contest_end_date"] = end
-    if wanted:
+    wanted = derive_span(stages or [], today=today)
+    dates = {k: v for k, v in wanted.items() if k.endswith("_date")}
+    months = {k: v for k, v in wanted.items() if k.endswith("_month")}
+    if dates:
         patch.update(contest_dates.plan_date_writes(
-            current, wanted, raw_text, today=today))
+            current, dates, raw_text, today=today))
+    for field, value in months.items():
+        if current.get(field) in (None, ""):
+            patch.setdefault(field, value)
     return patch
 
 

@@ -39,7 +39,7 @@ watch(
 // ---- 后端字段格式化 ----
 // 双轨制：日期轨（reg_*_date / contest_*_date）优先，为空时降级到月份轨；
 // 统一实现在 utils/timeFormat，避免各页面文案漂移。
-import { toMonth, parseDate, formatSignUp, formatContest, formatStageRange } from '../utils/timeFormat'
+import { toMonth, parseDate, formatSignUp, formatContest, formatStageRange, formatStageSpan } from '../utils/timeFormat'
 
 // 封面图：只接受 http(s) 绝对地址，其余回落大图占位
 function resolveImage(item) {
@@ -331,7 +331,15 @@ const regTimeText = computed(() => {
 })
 const contestTimeText = computed(() => {
   const legacy = String(detail.value?.contest_time || '').trim()
-  return legacy || formatContest(detail.value || {})
+  if (legacy) return legacy
+  const data = detail.value || {}
+  const hasDateTrack = Boolean(parseDate(data.contest_start_date) || parseDate(data.contest_end_date))
+  // 只有月份轨时，阶段表里的「YYYY年M月」能补回年份（2025年11月 – 2026年3月）
+  if (!hasDateTrack) {
+    const stageSpan = formatStageSpan(data.stage_schedule)
+    if (stageSpan) return stageSpan
+  }
+  return formatContest(data)
 })
 
 const hasRegTime = computed(() =>
