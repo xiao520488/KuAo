@@ -782,10 +782,35 @@ function applyFavoriteFlags() {
   })
 }
 
+/* 兜底清洗：模型偶尔仍把 id 写进正文（老缓存里尤其多）。
+   形如 `[id:1782]`、`id 12、16、24`、`（1782、2350、2918）` 一律移除，
+   避免「满屏 ID」再次出现。后端已清洗，这里只为历史数据兜底。 */
+const ID_CITE_RE = /[（(\[【]?\s*(?:作品|参考|样本)?\s*id\s*[:：]?\s*\d+(?:\s*[、,，/]\s*\d+)*\s*[)）\]】]?/gi
+const NUM_LIST_RE = /[（(\[【]\s*\d{2,6}(?:\s*[、,，/]\s*\d{2,6}){1,}\s*[)）\]】]/g
+
+function stripIdClutter(text) {
+  if (!text) return ''
+  return String(text)
+    .replace(ID_CITE_RE, '')
+    .replace(NUM_LIST_RE, '')
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
+
+/** 引用 id 只保留少量代表性样本；超长数字数组直接丢弃（视为无意义）。 */
+function cleanRefs(list) {
+  if (!Array.isArray(list)) return []
+  const nums = list.map((v) => Number(v)).filter((n) => Number.isFinite(n))
+  if (nums.length > 6) return []
+  return nums.slice(0, 3)
+}
+
 /** 后端返回的 insights / ideas -> 页面统一卡片结构（key 跨表唯一） */
 function normalizeInspirationItems(payload) {
   const insights = (payload?.insights || []).map((r) => {
     const tag = INSIGHT_TAGS[r.kind] || '赛事洞察'
+    const md = stripIdClutter(r.content_md)
     return {
       key: `insight-${r.id}`,
       id: r.id,
@@ -794,8 +819,8 @@ function normalizeInspirationItems(payload) {
       tag,
       title: tag,
       text: '',
-      html: r.content_md ? renderMarkdown(r.content_md) : '',
-      refs: Array.isArray(r.evidence) ? r.evidence : [],
+      html: md ? renderMarkdown(md) : '',
+      refs: cleanRefs(r.evidence),
       favorite: false
     }
   })
@@ -806,13 +831,13 @@ function normalizeInspirationItems(payload) {
     source: 'idea',
     tag: '选题灵感',
     title: r.title || '（无标题）',
-    text: r.pitch || '',
+    text: stripIdClutter(r.pitch || ''),
     html: '',
-    detail: r.detail_md || '',
-    detailHtml: r.detail_md ? renderMarkdown(r.detail_md) : '',
-    novelty: r.novelty || '',
-    risk: r.risk || '',
-    refs: Array.isArray(r.ref_awards) ? r.ref_awards : [],
+    detail: stripIdClutter(r.detail_md || ''),
+    detailHtml: r.detail_md ? renderMarkdown(stripIdClutter(r.detail_md)) : '',
+    novelty: stripIdClutter(r.novelty || ''),
+    risk: stripIdClutter(r.risk || ''),
+    refs: cleanRefs(r.ref_awards),
     favorite: false
   }))
 
@@ -2061,7 +2086,7 @@ onBeforeUnmount(() => {
               ></div>
 
               <p v-if="item.refs && item.refs.length" class="mt-3 text-[11px] font-medium text-slate-500 dark:text-slate-400">
-                引用作品 ID：{{ item.refs.join('、') }}
+                参考样本 ID：{{ item.refs.join('、') }}
               </p>
 
               <div class="mt-auto flex items-center justify-end pt-4">
@@ -2131,7 +2156,7 @@ onBeforeUnmount(() => {
                 <span class="font-bold text-slate-700 dark:text-slate-200">风险：</span>{{ item.risk }}
               </p>
               <p v-if="item.refs && item.refs.length" class="mt-2 text-[11px] font-medium text-slate-500 dark:text-slate-400">
-                引用作品 ID：{{ item.refs.join('、') }}
+                参考样本 ID：{{ item.refs.join('、') }}
               </p>
 
               <div class="mt-auto flex items-center justify-end pt-4">

@@ -326,6 +326,9 @@ class InspirationRequestResponse(BaseModel):
     awards_count: Optional[int] = Field(None, description="获奖作品数")
     insights_count: Optional[int] = Field(None, description="已有洞察条数")
     ideas_count: Optional[int] = Field(None, description="已有选题条数")
+    cached: bool = Field(
+        False, description="True=直接命中已有结果（零成本），未调用大模型"
+    )
     reason: Optional[str] = Field(
         None, description="拒绝原因：no_awards / daily_budget / queue_full / cooldown"
     )

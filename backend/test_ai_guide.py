@@ -31,6 +31,7 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 import ai_content
+import ai_jobs_runner
 import config
 import db
 import main
@@ -497,6 +498,54 @@ class InspirationApiTests(_Base):
         assert body["insights_count"] == 1
         with db.get_conn() as conn:
             assert conn.execute("SELECT COUNT(*) FROM ai_jobs").fetchone()[0] == 0
+
+    def test_cached_fingerprint_returns_200_without_llm(self) -> None:
+        """缓存命中：底层数据与 prompt 版本都没变，绝不再建任务、不再调模型。"""
+        cid = self._new_competition()
+        self._add_award(cid)
+        _, token = self._new_user()
+        fp = ai_jobs_runner.inspiration_fingerprint(cid)
+        with db.get_conn() as conn:
+            conn.execute(
+                "INSERT INTO insights (competition_id, kind, content_md) "
+                "VALUES (?, 'experience', '已有洞察')", (cid,)
+            )
+        db.save_ai_analysis("inspiration", cid, fp, "cached", model="test")
+
+        with patch.object(
+            ai_content, "generate_inspiration", side_effect=self._fake_inspiration
+        ) as mocked:
+            resp = self.client.post(
+                f"/api/competitions/{cid}/generate_inspirations",
+                headers=self._auth(token),
+            )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["cached"] is True
+        assert mocked.call_count == 0
+        with db.get_conn() as conn:
+            assert conn.execute("SELECT COUNT(*) FROM ai_jobs").fetchone()[0] == 0
+
+    def test_stale_cache_allows_regeneration(self) -> None:
+        """底层数据变了（指纹不再匹配）才允许重新生成。"""
+        cid = self._new_competition()
+        self._add_award(cid)
+        _, token = self._new_user()
+        with db.get_conn() as conn:
+            conn.execute(
+                "INSERT INTO insights (competition_id, kind, content_md) "
+                "VALUES (?, 'experience', '旧洞察')", (cid,)
+            )
+        db.save_ai_analysis("inspiration", cid, "stale-hash", "cached", model="test")
+
+        with patch.object(
+            ai_content, "generate_inspiration", side_effect=self._fake_inspiration
+        ):
+            resp = self.client.post(
+                f"/api/competitions/{cid}/generate_inspirations",
+                headers=self._auth(token),
+            )
+            assert resp.status_code == 202, resp.text
+            self._wait_job(resp.json()["job_id"])
 
     def test_queue_full_returns_429(self) -> None:
         config.AI_INSPIRATION_QUEUE_MAX = 1

@@ -289,8 +289,7 @@ def generate_guide_for(competition_id: int, *, force: bool = False,
 # 灵感生成（insights + ideas，复用 analyzer.py 的成熟实现）
 # ---------------------------------------------------------------------------
 def generate_inspiration(competition_id: int, *, idea_n: int = 4,
-                         force: bool = False, max_tokens: int = 8000,
-                         quiet: bool = True) -> dict:
+                         force: bool = False, quiet: bool = True) -> dict:
     """生成该赛事的 insights + ideas，返回新增条数与 token 用量。
 
     `analyzer.py` 仍是唯一实现（3 次 insight + 按批 ideas、容错解析都在里面），
@@ -308,12 +307,10 @@ def generate_inspiration(competition_id: int, *, idea_n: int = 4,
         with contextlib.redirect_stdout(buffer), contextlib.redirect_stderr(buffer):
             code = analyzer.generate(
                 cid, only="all", idea_n=int(idea_n), force=bool(force),
-                max_tokens=int(max_tokens),
             )
     else:
         code = analyzer.generate(
             cid, only="all", idea_n=int(idea_n), force=bool(force),
-            max_tokens=int(max_tokens),
         )
 
     after_usage = llm.get_usage()

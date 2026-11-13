@@ -30,6 +30,27 @@ import llm
 
 logger = logging.getLogger(__name__)
 
+
+# ---------------------------------------------------------------------------
+# 灵感缓存指纹（成本防线）
+# ---------------------------------------------------------------------------
+def inspiration_fingerprint(competition_id: int) -> str:
+    """获奖数据 + prompt 版本 + 模型 的指纹，只有它变了才允许重新生成。"""
+    import analyzer  # 延迟导入：analyzer 依赖 db/llm，放在模块顶部易成环
+
+    return analyzer.inspiration_fingerprint(int(competition_id))
+
+
+def _mark_inspiration_cache(competition_id: int, fingerprint: str) -> None:
+    """写入缓存标记（纯标记，不存正文；正文在 insights/ideas 表）。"""
+    try:
+        db.save_ai_analysis(
+            "inspiration", int(competition_id), fingerprint,
+            "insights+ideas cached", model=getattr(llm, "MODEL", None),
+        )
+    except Exception as exc:  # noqa: BLE001 - 缓存失败不影响主流程
+        logger.warning("写灵感缓存标记失败 cid=%s: %r", competition_id, exc)
+
 # 串行执行：一篇攻略 20-60s，串行足够且能把并发成本锁死
 _EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="guide-gen")
 
@@ -112,7 +133,7 @@ def run_guide_job(job_id: int, competition_id: int, *,
 
 
 def run_inspiration_job(job_id: int, competition_id: int, *,
-                        idea_n: int = 4, max_tokens: int = 8000) -> dict:
+                        idea_n: int = 4, force: bool = False) -> dict:
     """执行一个已抢占的灵感任务（insights + ideas），异常同样不向外抛。"""
     if not db.start_ai_job(job_id):
         return {"job_id": job_id, "status": "skipped"}
@@ -120,7 +141,7 @@ def run_inspiration_job(job_id: int, competition_id: int, *,
     before = llm.get_usage()
     try:
         result = ai_content.generate_inspiration(
-            competition_id, idea_n=idea_n, max_tokens=max_tokens
+            competition_id, idea_n=idea_n, force=force
         )
         tokens = _tokens_delta(before, llm.get_usage())
         if result.get("exit_code") != 0:
@@ -305,12 +326,33 @@ def request_inspiration(competition_id: int, *, user_id: Optional[int] = None,
             },
         }
 
-    if state["insights_count"] or state["ideas_count"]:
+    # 缓存防线：同赛事只要生成过、且底层获奖数据与 prompt 版本都没变，
+    # 直接返回 200，绝不再次调用大模型（不扣费）。
+    fingerprint = inspiration_fingerprint(cid)
+    cached = db.get_ai_analysis("inspiration", cid)
+    has_content = bool(state["insights_count"] or state["ideas_count"])
+
+    if has_content and cached and cached.get("input_hash") == fingerprint:
         return {
             "http": 200,
             "payload": {
                 "competition_id": cid,
                 "status": "ready",
+                "cached": True,
+                "insights_count": state["insights_count"],
+                "ideas_count": state["ideas_count"],
+            },
+        }
+
+    if has_content and not cached:
+        # 历史数据（升级前生成，没有缓存标记）：补写指纹，视为已就绪。
+        _mark_inspiration_cache(cid, fingerprint)
+        return {
+            "http": 200,
+            "payload": {
+                "competition_id": cid,
+                "status": "ready",
+                "cached": True,
                 "insights_count": state["insights_count"],
                 "ideas_count": state["ideas_count"],
             },
@@ -375,7 +417,7 @@ def request_inspiration(competition_id: int, *, user_id: Optional[int] = None,
     _EXECUTOR.submit(
         run_inspiration_job, job_id, cid,
         idea_n=int(config.AI_INSPIRATION_IDEA_N),
-        max_tokens=int(config.AI_INSPIRATION_MAX_TOKENS),
+        force=has_content,  # 只有内容过期（数据已更新）时才覆盖重写
     )
     return {
         "http": 202,

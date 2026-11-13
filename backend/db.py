@@ -1182,6 +1182,25 @@ def get_award_by_id(award_id: int) -> Optional[dict]:
     return _award_row_to_dict(row, url_map)
 
 
+def awards_fingerprint(competition_id: int) -> str:
+    """该赛事获奖数据指纹：条数/最大 id/最后更新时间/标题总长。
+
+    用于判断「底层数据是否变过」：没变就复用缓存，绝不重复调用大模型。
+    单条聚合查询，走 competition_id 索引，1.3 万条耗时 < 5ms。
+    """
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) AS c, COALESCE(MAX(id), 0) AS mx, "
+            "COALESCE(MAX(updated_at), '') AS ut, "
+            "COALESCE(SUM(LENGTH(COALESCE(title, ''))), 0) AS tl "
+            "FROM awards WHERE competition_id = ?",
+            (int(competition_id),),
+        ).fetchone()
+    if not row:
+        return "n=0|mx=0|ut=|tl=0"
+    return f"n={row['c']}|mx={row['mx']}|ut={row['ut']}|tl={row['tl']}"
+
+
 def count_awards_by_competition(competition_id: int) -> int:
     """统计某竞赛下的获奖作品数量。"""
     with get_conn() as conn:
@@ -1744,12 +1763,14 @@ def delete_award(award_id: int) -> bool:
 # 老库（competitions.db）不会自动重跑 schema_v2.sql，故这里对
 # "no such table" 做一次建表重试，保证首次调用即可自愈。
 
-AI_ANALYSIS_TARGET_TYPES = ("work", "competition")
+AI_ANALYSIS_TARGET_TYPES = ("work", "competition", "inspiration")
 
-_AI_ANALYSIS_CACHE_DDL = """
+# 灵感缓存：同一赛事只要生成过，后续请求直接读此标记，命中则绝不再调用大模型。
+# input_hash 由「获奖数据指纹 + prompt 版本 + 模型」组成，只有底层数据变化才失效。
+_INSPIRATION_CACHE_DDL = """
 CREATE TABLE IF NOT EXISTS ai_analysis_cache (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    target_type TEXT    NOT NULL CHECK (target_type IN ('work', 'competition')),
+    target_type TEXT    NOT NULL CHECK (target_type IN ('work', 'competition', 'inspiration')),
     target_id   INTEGER NOT NULL,
     input_hash  TEXT    NOT NULL,
     content_md  TEXT    NOT NULL,
@@ -1761,9 +1782,39 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_ai_analysis_cache_target
     ON ai_analysis_cache (target_type, target_id);
 """
 
+_AI_ANALYSIS_CACHE_DDL = _INSPIRATION_CACHE_DDL
+
 
 def _ensure_ai_analysis_cache(conn: sqlite3.Connection) -> None:
-    """幂等建表：创建 ai_analysis_cache 及其唯一索引。"""
+    """幂等建表：创建 ai_analysis_cache 及其唯一索引。
+
+    老库的 CHECK 约束只允许 work/competition，新增 inspiration 时无法插入。
+    该表是纯缓存（内容可随时重建），因此旧表 CHECK 不含 inspiration 时
+    直接重建：建新表 -> 迁移旧行 -> 删旧表 -> 改名。
+    """
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='ai_analysis_cache'"
+    ).fetchone()
+    old_sql = (row[0] or "") if row else ""
+    if old_sql and "'inspiration'" not in old_sql:
+        try:
+            conn.execute("ALTER TABLE ai_analysis_cache RENAME TO ai_analysis_cache_old")
+            conn.executescript(_AI_ANALYSIS_CACHE_DDL)
+            conn.execute(
+                "INSERT INTO ai_analysis_cache "
+                "(id, target_type, target_id, input_hash, content_md, model, created_at, updated_at) "
+                "SELECT id, target_type, target_id, input_hash, content_md, model, created_at, updated_at "
+                "FROM ai_analysis_cache_old"
+            )
+            conn.execute("DROP TABLE ai_analysis_cache_old")
+            logger.info("ai_analysis_cache CHECK 已升级，新增 inspiration 缓存类型")
+            return
+        except sqlite3.Error as exc:  # 迁移失败则保持旧表，灵感缓存降级为无缓存
+            logger.warning("ai_analysis_cache 升级失败（降级为无缓存）: %r", exc)
+            try:
+                conn.execute("DROP TABLE IF EXISTS ai_analysis_cache_old")
+            except sqlite3.Error:
+                pass
     conn.executescript(_AI_ANALYSIS_CACHE_DDL)
 
 
