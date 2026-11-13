@@ -21,6 +21,7 @@ from fastapi import APIRouter, Depends, HTTPException, Path, Query, Response
 from pydantic import BaseModel, Field
 
 import ai_jobs_runner
+import stage_schedule
 from db import get_categories as db_get_categories
 from db import get_competition as db_get_competition
 from db import get_guide_state as db_get_guide_state
@@ -116,6 +117,7 @@ def _row_to_detail(row: Dict[str, Any]) -> CompetitionDetail:
         participants=row.get("participants") or "",
         content_scope=row.get("content_scope") or "",
         exam_schedule=row.get("exam_schedule") or "",
+        stage_schedule=stage_schedule.loads(row.get("stage_schedule")),
     )
 
 

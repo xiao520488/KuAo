@@ -58,7 +58,7 @@ DEFAULT_BACKUP_PATH = os.path.join(BASE_DIR, "competitions.db.bak")
 TARGET_COLUMNS = (
     "image_url", "short_name", "contest_start_month", "contest_end_month",
     "guide_generated_at", "guide_model", "guide_prompt_ver", "guide_input_hash",
-    "participants", "content_scope", "exam_schedule",
+    "participants", "content_scope", "exam_schedule", "stage_schedule",
     "reg_start_date", "reg_end_date", "contest_start_date", "contest_end_date",
 )
 

@@ -955,3 +955,74 @@ backend\venv\Scripts\python.exe backend\backfill_contest_dates.py --apply --allo
 ```
 
 **注意**：`--ids 34` 这类重跑前先确认库里该行确实为空；护栏只补空，已有值不会刷新。若发现写错（如年份推断失误），先把该行 `contest_*_date/month` 置 NULL 再重跑。
+
+## 十三、阶段结构化 `stage_schedule` 与「抓不到数据」的 P0 修复（2026-11-13 下午）
+
+### 13.1 三个线上问题的结论
+
+| 现象 | 根因 |
+|---|---|
+| 详情页有比赛时间、列表卡片没有 | **本地代码链路没问题**：`/api/competitions` 实测返回 `contest_start_date`（22 字段里包含四个日期列），`CompetitionsView/HomeView/PreparationView` 都映射了 `contestStartDate`，`formatContest()` 日期优先。线上差异来自部署/数据不同步（云端 DB 未同步回填、或前端包早于 `071589d`） |
+| 时间阶段混乱 | 数据模型只有单个 `contest_start_date` 区间，表达不了「报名 9/10-11/30、初赛 12/1-12/20、复赛…」。本次新增阶段级 `stage_schedule` |
+| 资料齐全却抓不到（国际大学生智能农业装备创新大赛） | 三连断点：① `saikr_map.json` 只有 32 条存量，该赛事不在 map 里，名称兜底又只在 map 内比对 → 判成「无映射」，**从未抓取**；② 即使抓到，赛氪 `contest_stage.list` 是空的，而章节关键词表没有「进度安排」→ `exam_schedule` 抽不到；③ `max_tokens=2000` 装不下三字段+日期+阶段表，JSON 被截断后走 repair，**尾部的 `exam_schedule`/`stage_schedule` 被丢掉** |
+
+### 13.2 P0：让「抓得到」
+
+* `resolve_contest_id()` 在 map 未命中后调用 `saikr_match.resolve()`，用本地索引
+  `saikr_index.json`（5164 条，归一化 + 唯一性判定）兜底；实测 107 → 60025「索引匹配(exact/1.00)」；
+* `_FIELD_RULES` 扩容：`exam_schedule` 增加「进度安排 / 大赛进度 / 赛事进度 / 时间节点 / 工作安排 / 时间表」，
+  `content_scope` 增加「大赛要求 / 作品要求 / 参赛作品 / 作品类别 / 赛项设置 / 选题」；
+* 章节没命中时用 `content_text(detail)` 全文（4000 字）兜底喂 AI；
+* `AI_MAX_TOKENS` 2000 → **4000**（三字段 + 日期 + 阶段表写在同一份 JSON）。
+
+### 13.3 P1：`stage_schedule` 阶段时间表
+
+存储：`competitions.stage_schedule TEXT`（JSON 数组，`ensure_ascii=False`）::
+
+    [{"stage":"报名","start_date":"2026-09-10","end_date":"2026-11-30","note":"每校限填1份报名表"},
+     {"stage":"作品申报","start_date":"2026-12-01","end_date":"2026-12-20","note":"汇总表11月30日前报送"},
+     {"stage":"复赛","start_date":"2027-01-01","end_date":"2027-03-05","note":"网络评审"},
+     {"stage":"决赛","start_date":null,"end_date":null,"note":"预计2027年5月"}]
+
+护栏（`stage_schedule.py`，与 `contest_dates` 同口径）：
+
+1. 日期必须能在原文里找到「月+日」佐证，否则置 NULL；
+2. 年份必须落在 `[今年-1, 今年+1]`；正文没写年份时按「优先今年」重算；
+3. `end < start` 丢弃 end；
+4. 只有备注的阶段，备注里没有「年/月/日/上旬/下旬/预计」→ 丢弃（「以官网为准」这类空话不占行）；
+5. 备注里的年份越界（往年届次）→ 整条丢弃；
+6. 阶段名归一化：报名 / 校赛 / 省赛 / 初赛 / 复赛 / 决赛，其余保留原文（≤10 字）；
+7. 排序：报名永远第一，其余按日期，无日期沉底；
+8. **只补空**：已有 `stage_schedule` 不覆盖。
+
+顶部「比赛时间」= 阶段跨度（**不含报名**）：取最早 start 与最晚 end；若 end 早于 start
+（如「名单公布 6/10」落在决赛前）则只保留 start。前端 `CompetitionCard` 的倒计时与详情页
+顶部时间都继续读 `contest_start_date`，无需改动。
+
+接口：`GET /api/competitions/{id}` 的 `stage_schedule` 由后端 `stage_schedule.loads()` 解析成数组
+（坏数据返回 `[]`）；**列表接口不返回**该字段，避免 80+ 条 × N 阶段的体积膨胀。
+
+前端：`CompetitionDetailView.vue` 的「时间安排」卡片内新增时间轴（阶段名 + 起止 + 备注），
+`timeFormat.formatStageRange()` 负责「2026年9月10日 – 11月30日」这类同年省略格式。
+
+### 13.4 回填与现状
+
+```bat
+:: 只看结果
+backend\venv\Scripts\python.exe backend\backfill_stage_schedule.py --limit 20
+:: 写生产库（先备份，只补空）
+backend\venv\Scripts\python.exe backend\backfill_stage_schedule.py --apply --allow-production
+```
+
+2026-11-13 首轮回填：46 行有正文 → 抽出阶段 42 行 → 写入 34 行（8 行被护栏全部拒绝：
+正文只有月份/往年届次/无佐证）。`stage_schedule` 非空的赛事 **35 条**（含本次重新抓取的 107）。
+`国际大学生智能农业装备创新大赛`(id=107) 现已补全：赛氪 60025 → 参赛对象 / 内容范围 / 考试安排 /
+5 个阶段 / 顶部 2026-12-01 ~ 2027-03-05。
+
+**注意**：回填只补空，重新抓取（`enrich_saikr_details.py --ids N --apply --allow-production`）
+才会刷新正文；已有阶段表不会被覆盖，确需重做请先把该行 `stage_schedule` 置 NULL。
+
+### 13.5 上云口径（再次强调）
+
+**只用 `sync_prod_safe.py` 合并**，禁止整库覆盖；上云顺序：先 `migrate_production.py --apply`
+（补 `stage_schedule` 列），再合并数据。

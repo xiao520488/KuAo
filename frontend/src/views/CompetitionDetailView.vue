@@ -39,7 +39,7 @@ watch(
 // ---- 后端字段格式化 ----
 // 双轨制：日期轨（reg_*_date / contest_*_date）优先，为空时降级到月份轨；
 // 统一实现在 utils/timeFormat，避免各页面文案漂移。
-import { toMonth, parseDate, formatSignUp, formatContest } from '../utils/timeFormat'
+import { toMonth, parseDate, formatSignUp, formatContest, formatStageRange } from '../utils/timeFormat'
 
 // 封面图：只接受 http(s) 绝对地址，其余回落大图占位
 function resolveImage(item) {
@@ -354,6 +354,29 @@ const hasContestTime = computed(() =>
 )
 const hasAnyTime = computed(() => hasRegTime.value || hasContestTime.value)
 
+// 阶段时间表：后端已过「原文佐证 + 年份」护栏，这里只做展示格式化
+const STAGE_TONE = {
+  报名: 'border-blue-400 text-blue-700 dark:text-blue-300',
+  校赛: 'border-sky-400 text-sky-700 dark:text-sky-300',
+  省赛: 'border-teal-400 text-teal-700 dark:text-teal-300',
+  初赛: 'border-indigo-400 text-indigo-700 dark:text-indigo-300',
+  复赛: 'border-violet-400 text-violet-700 dark:text-violet-300',
+  决赛: 'border-rose-400 text-rose-700 dark:text-rose-300'
+}
+const stageList = computed(() => {
+  const raw = detail.value?.stage_schedule
+  if (!Array.isArray(raw)) return []
+  return raw
+    .filter((row) => row && row.stage)
+    .map((row) => ({
+      stage: String(row.stage),
+      range: formatStageRange(row.start_date, row.end_date),
+      note: String(row.note || '').trim(),
+      tone: STAGE_TONE[String(row.stage)] || 'border-slate-400 text-slate-700 dark:text-slate-300'
+    }))
+    .filter((row) => row.range || row.note)
+})
+
 const guideReady = computed(() => Boolean(detail.value?.full_process_guide))
 </script>
 
@@ -575,6 +598,43 @@ const guideReady = computed(() => Boolean(detail.value?.full_process_guide))
                   <p class="text-xs font-bold tracking-wide text-slate-500 dark:text-slate-400">比赛阶段</p>
                   <p class="mt-1 text-sm font-bold text-slate-500 dark:text-slate-400">暂未收录</p>
                 </div>
+                <!-- 阶段时间表：报名 -> 初赛 -> 复赛 -> 决赛 的时间轴 -->
+                <div
+                  v-if="stageList.length"
+                  class="mt-5 border-t border-blue-200/70 pt-4 dark:border-blue-400/20"
+                >
+                  <p class="text-xs font-bold tracking-wide text-blue-500 dark:text-blue-400">
+                    阶段时间表
+                  </p>
+                  <ol class="mt-3 space-y-4 border-l border-blue-300/60 pl-4 dark:border-blue-400/25">
+                    <li
+                      v-for="(row, index) in stageList"
+                      :key="row.stage + '-' + index"
+                      class="relative"
+                    >
+                      <span
+                        class="absolute -left-[21px] top-1.5 h-2.5 w-2.5 rounded-full border-2 bg-white dark:bg-slate-900"
+                        :class="row.tone.split(' ')[0]"
+                        aria-hidden="true"
+                      ></span>
+                      <div class="flex flex-wrap items-baseline gap-x-2">
+                        <span class="text-sm font-black" :class="row.tone.split(' ').slice(1).join(' ')">
+                          {{ row.stage }}
+                        </span>
+                        <span
+                          v-if="row.range"
+                          class="text-xs font-bold text-slate-600 dark:text-slate-300"
+                        >
+                          {{ row.range }}
+                        </span>
+                      </div>
+                      <p v-if="row.note" class="mt-0.5 text-xs leading-5 text-slate-500 dark:text-slate-400">
+                        {{ row.note }}
+                      </p>
+                    </li>
+                  </ol>
+                </div>
+
                 <p class="text-xs leading-5 text-slate-500 dark:text-slate-400">
                   时间来自平台采集：原文写到「日」就显示精确日期，只写到月份则显示月份；
                   具体起止日期与校内选拔安排请以官网当年通知为准。

@@ -107,7 +107,7 @@ def test_purify_fields_calls_llm_once_for_all_fields(monkeypatch):
         "exam_schedule": {"text": "报名截止 5 月 1 日，决赛于 7 月举行。",
                           "source": "章节：赛程安排"},
     }
-    result, dates = enrich.purify_fields("测试赛", raw)
+    result, dates, stages = enrich.purify_fields("测试赛", raw)
 
     assert len(calls) == 1  # 三字段共用一次调用
     assert result["participants"]["text"] == "1. 全日制在校生；2. 团队 2-5 人"
@@ -125,7 +125,7 @@ def test_purify_fields_drops_copied_field(monkeypatch):
         enrich.llm, "chat_json",
         lambda *a, **k: {"participants": raw_text[:45]},
     )
-    result, dates = enrich.purify_fields(
+    result, dates, stages = enrich.purify_fields(
         "测试赛", {"participants": {"text": raw_text, "source": "章节"}}
     )
     assert result == {} and dates == {}  # 照抄 -> 丢弃，绝不回落写原文
@@ -149,7 +149,7 @@ def test_purify_fields_returns_extracted_contest_dates(monkeypatch):
         "extracted_contest_date": "2026-11-14",
         "extracted_contest_end_date": None,
     })
-    _fields, dates = enrich.purify_fields(
+    _fields, dates, _stages = enrich.purify_fields(
         "测试赛", {"exam_schedule": {"text": "报名截止 5 月 1 日，决赛于11月14日举行。",
                                     "source": "章节"}}
     )
@@ -168,6 +168,7 @@ def test_enrich_competition_writes_date_from_schedule_text(monkeypatch, tmpdb):
         {"exam_schedule": {"text": "1. 5 月报名截止；2. 11 月 14 日决赛",
                            "source": "AI提纯"}},
         {"contest_start_date": "2026-11-14"},
+        [],
     ))
 
     result = enrich.enrich_competition(tmpdb, comp_id, contest_id=123)
@@ -178,6 +179,54 @@ def test_enrich_competition_writes_date_from_schedule_text(monkeypatch, tmpdb):
             "SELECT contest_start_date, contest_start_month FROM competitions "
             "WHERE id = ?", (comp_id,)).fetchone()
     assert row[0] == "2026-11-14" and row[1] == 11
+
+
+def test_enrich_competition_writes_stage_schedule(monkeypatch, tmpdb):
+    """AI 阶段表 + 正文佐证 -> 写 stage_schedule，并用阶段跨度补顶部日期。"""
+    comp_id = db.add_competition({"name": "阶段反写测试赛", "category": "程序设计"})
+    raw = "报名 2026年9月10日至11月30日；初赛 2026年12月1日至12月20日"
+    monkeypatch.setattr(enrich, "fetch_detail", lambda session, cid: {"contest_name": "x"})
+    monkeypatch.setattr(enrich, "extract_fields", lambda detail: {
+        "exam_schedule": {"text": raw, "source": "章节：进度安排"},
+    })
+    monkeypatch.setattr(enrich, "purify_fields", lambda name, needed, **kw: (
+        {},
+        {},
+        [{"stage": "报名", "start_date": "2026-09-10", "end_date": "2026-11-30"},
+         {"stage": "初赛", "start_date": "2026-12-01", "end_date": "2026-12-20"}],
+    ))
+
+    result = enrich.enrich_competition(
+        tmpdb, comp_id, contest_id=123,
+        now=datetime(2026, 11, 13, 12, 0, tzinfo=enrich.SHANGHAI))
+
+    assert result["stages"][0]["stage"] == "报名"
+    assert result["stage_patch"]["contest_start_date"] == "2026-12-01"
+    with sqlite3.connect(tmpdb) as conn:
+        row = conn.execute(
+            "SELECT stage_schedule, contest_start_date, contest_end_date "
+            "FROM competitions WHERE id = ?", (comp_id,)).fetchone()
+    stored = json.loads(row[0])
+    assert [r["stage"] for r in stored] == ["报名", "初赛"]
+    assert row[1] == "2026-12-01" and row[2] == "2026-12-20"
+
+
+def test_resolve_contest_id_falls_back_to_saikr_index(monkeypatch):
+    """saikr_map 没有、但本地索引里有 -> 走索引匹配（P0 修复点）。"""
+    monkeypatch.setattr(enrich.saikr_match, "resolve", lambda name: {
+        "contest_id": 60025, "score": 1.0, "method": "exact",
+        "matched_name": "第十二届国际大学生智能农业装备创新大赛", "url": "vse/60025",
+    })
+    cid, match = enrich.resolve_contest_id(
+        {"id": 107, "name": "国际大学生智能农业装备创新大赛"}, {}, [])
+    assert cid == 60025
+    assert "索引匹配" in match
+
+
+def test_resolve_contest_id_returns_none_when_index_misses(monkeypatch):
+    monkeypatch.setattr(enrich.saikr_match, "resolve", lambda name: None)
+    cid, match = enrich.resolve_contest_id({"id": 1, "name": "查无此赛"}, {}, [])
+    assert cid is None and match == ""
 
 
 # ---------------------------------------------------------------------------
@@ -242,7 +291,7 @@ def test_enrich_competition_only_fills_empty(monkeypatch, tmpdb):
     monkeypatch.setattr(enrich, "purify_fields", lambda name, needed, **kw: ({
         "content_scope": {"text": "1. 算法设计；2. 软件开发", "source": "AI提纯"},
         "exam_schedule": {"text": "1. 5 月报名截止；2. 7 月决赛", "source": "AI提纯"},
-    }, {}))
+    }, {}, []))
 
     result = enrich.enrich_competition(tmpdb, comp_id, contest_id=123)
     assert result["status"] == "updated"
@@ -273,7 +322,7 @@ def _fake_detail_pipeline(monkeypatch):
         "participants": {"text": "1. 全日制在校生；2. 团队 2-5 人", "source": "AI提纯"},
         "content_scope": {"text": "1. 算法设计；2. 软件开发", "source": "AI提纯"},
         "exam_schedule": {"text": "1. 5 月报名截止；2. 7 月决赛", "source": "AI提纯"},
-    }, {}))
+    }, {}, []))
 
 
 def test_cli_daily_update_only_touches_recent(monkeypatch, tmpdb, tmp_path):

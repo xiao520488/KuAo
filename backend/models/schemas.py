@@ -18,6 +18,19 @@ from typing import List, Literal, Optional
 from pydantic import BaseModel, Field
 
 
+class StageItem(BaseModel):
+    """赛程中的一个阶段（报名/初赛/复赛/决赛/其他）。
+
+    start_date / end_date 均可为 None：原文只给月份时保留 note 里的原话，
+    绝不用猜测的具体日期填充。
+    """
+
+    stage: str = Field(..., description="阶段名，如 报名/初赛/复赛/决赛")
+    start_date: Optional[str] = Field(None, description="阶段开始日 YYYY-MM-DD")
+    end_date: Optional[str] = Field(None, description="阶段结束日 YYYY-MM-DD")
+    note: str = Field("", description="补充说明（原文未给具体日期时保留原话）")
+
+
 class Competition(BaseModel):
     """竞赛信息返回模型（列表项）。"""
 
@@ -137,6 +150,13 @@ class CompetitionDetail(Competition):
     exam_schedule: str = Field(
         "",
         description="考试/赛程安排（赛氪详情清洗文本），未采集时为空串",
+    )
+    stage_schedule: List[StageItem] = Field(
+        default_factory=list,
+        description=(
+            "阶段级时间表：[{stage, start_date, end_date, note}]；"
+            "日期已过「原文佐证 + 年份合理」护栏，未采集时为空数组"
+        ),
     )
 
 

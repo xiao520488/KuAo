@@ -421,10 +421,15 @@ _MIGRATION_COLUMNS = {
     "participants": "TEXT",
     "content_scope": "TEXT",
     "exam_schedule": "TEXT",
+    # 阶段级时间表（2026-11-13）：JSON 数组
+    # [{"stage":"初赛","start_date":"2026-12-01","end_date":"2026-12-20","note":""}]
+    # 由 stage_schedule.py 护栏后写入，前端详情页按时间轴渲染。
+    "stage_schedule": "TEXT",
 }
 
 # 详情补充文本字段（只由详情接口返回，列表接口不返回）
-_DETAIL_TEXT_FIELDS = ("participants", "content_scope", "exam_schedule")
+_DETAIL_TEXT_FIELDS = ("participants", "content_scope", "exam_schedule",
+                       "stage_schedule")
 
 # awards 表补列：列名 -> DDL 片段（ALTER TABLE ADD COLUMN 用）
 #
@@ -690,7 +695,7 @@ def update_competition(cid: int, data: dict, *,
                "full_process_guide", "image_url", "short_name",
                "contest_start_month", "contest_end_month", "discover_source",
                "last_checked_at", "is_active", "participants", "content_scope",
-               "exam_schedule",
+               "exam_schedule", "stage_schedule",
                "reg_start_date", "reg_end_date",
                "contest_start_date", "contest_end_date")
     fields, values = [], []

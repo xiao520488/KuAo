@@ -69,6 +69,7 @@ import discover_common as common
 import image_guard
 import llm
 import saikr_match
+import stage_schedule
 
 SAIKR_DETAIL = "https://apiv4buffer.saikr.com/api/pc/contest/info"
 MAP_PATH = os.path.join(common.BASE_DIR, "saikr_map.json")
@@ -90,8 +91,8 @@ STALE_DAYS = 400          # 报名结束超过 400 天视为往年届次，整�
 DAILY_WINDOW_DAYS = 7     # --daily-update 只处理最近 N 天新入库的赛事
 
 # AI 提纯（防版权）：每个 contest_id 只调用一次，三字段一起改写
-AI_PROMPT_VER = "saikr-enrich-v2"
-AI_MAX_TOKENS = 2000
+AI_PROMPT_VER = "saikr-enrich-v3"
+AI_MAX_TOKENS = 4000      # 三字段 + 日期 + 阶段表写在同一份 JSON 里，2000 会截断
 AI_ITEM_MAX_CHARS = 50    # 单条短句上限（不含「1. 」编号）
 AI_MAX_ITEMS = 8          # 单字段最多保留条目，避免列表失控
 AI_COPY_WINDOW = 40       # 与原文连续重合 >= 40 字视为照抄，整字段丢弃（短专有名词列表不算）
@@ -107,11 +108,14 @@ _FIELD_RULES = (
         "大赛赛项", "比赛赛项", "赛题介绍", "赛道介绍", "赛事分类",
         "赛道设置", "赛道划分", "参赛项目类型", "项目类型",
         "竞赛主题", "比赛主题", "大赛主题", "竞赛方式", "竞赛形式",
-        "竞赛规则",
+        "竞赛规则", "大赛要求", "比赛要求", "作品要求", "参赛作品",
+        "作品类别", "赛项设置", "选题方向", "选题范围",
     )),
     ("exam_schedule", (
         "赛程安排", "比赛时间安排", "竞赛时间安排", "赛事时间安排",
-        "赛段安排", "时间安排", "竞赛安排", "比赛安排", "赛事安排",
+        "赛段安排", "进度安排", "大赛进度", "赛事进度", "赛程进度",
+        "时间节点", "工作安排", "时间表",
+        "时间安排", "竞赛安排", "比赛安排", "赛事安排",
         "大赛安排", "赛制安排", "比赛赛制", "竞赛赛制", "赛制",
         "竞赛日程", "日程安排", "考试安排", "竞赛阶段", "比赛阶段",
         "赛程",
@@ -509,7 +513,10 @@ AI_PURIFY_SYSTEM = (
 AI_PURIFY_SCHEMA_HINT = (
     '{"participants": "1. ...\\n2. ...", "content_scope": "1. ...", '
     '"exam_schedule": "1. ...", "extracted_contest_date": "2026-11-14", '
-    '"extracted_contest_end_date": null}'
+    '"extracted_contest_end_date": null, '
+    '"stage_schedule": [{"stage": "报名", "start_date": "2026-09-10",'
+    ' "end_date": "2026-11-30", "note": ""}, '
+    '{"stage": "决赛", "start_date": null, "end_date": null, "note": "预计2027年5月"}]}'
 )
 
 # 模型输出的比赛日期键 -> 主表日期列（2026-11-13：赛氪 API 的 contest_*_time
@@ -624,14 +631,23 @@ def build_purify_prompt(name: str, raw_fields: dict) -> str:
         "  报名起止、材料提交截止、缴费截止都不算比赛日期；",
         "  原文只写「11月14日」没有年份的，按赛程推断（报名在 2025 年、决赛在次年春天就写 2026）；",
         "  只有月份没有具体某一天（如「7月至8月」）或正文没写，就输出 null，绝不编造。",
+        "- stage_schedule（阶段时间表）：数组，把赛程按阶段拆开，"
+        "元素为 {\"stage\", \"start_date\", \"end_date\", \"note\"}；",
+        "  stage 用标准名：报名 / 初赛 / 复赛 / 决赛，其他阶段保留原文说法（10 字以内）；",
+        "  日期一律 YYYY-MM-DD，且必须是原文写了「X月X日」的；"
+        "原文只给月份（如「预计5月」）时 start_date/end_date 都设 null，"
+        "把原话写进 note（如「预计2027年5月」）；",
+        "  原文没提到阶段就不要输出，找不到任何阶段就给空数组 []。",
         "",
         "硬性要求：",
         "1. 必须用自己的话概括，禁止整句照抄；除赛事/赛项等专有名词外，连续引用不超过 12 个字。",
-        "2. 每个字段输出 1~%d 条，每条一行，用「1. 」「2. 」编号。" % AI_MAX_ITEMS,
+        "2. 每个文本字段输出 1~%d 条，每条一行，用「1. 」「2. 」编号。" % AI_MAX_ITEMS,
         "3. 每条不超过 %d 个汉字；只写原文有的事实，原文没有的日期/人数不要猜测。" % AI_ITEM_MAX_CHARS,
         "4. 某个字段没有对应信息就返回空字符串，不要编造；日期没有就返回 null。",
         "5. extracted_contest_date 必须与 exam_schedule 里的说法一致，不能凭空多出一个日期。",
-        "6. 不要输出 Markdown、标题或解释。",
+        "6. stage_schedule 里出现的每个日期，都必须在原文里能找到对应的「月+日」；"
+        "找不到就不写日期（只留 note），宁可空着也不能猜。",
+        "7. 不要输出 Markdown、标题或解释。",
         "",
         "原始文本：",
     ]
@@ -659,12 +675,14 @@ def _pick_ai_value(data: dict, field: str):
 
 def purify_fields(name: str, raw_fields: dict,
                   *, max_chars: int = MAX_FIELD_LEN) -> tuple:
-    """调用一次 llm.py，把原始章节提炼为结构化短句，并顺带抽取比赛日期。
+    """调用一次 llm.py，把原始章节提炼为结构化短句，并顺带抽取日期与阶段表。
 
-    返回 ``(fields, dates)``：
+    返回 ``(fields, dates, stages)``：
         fields: ``{field: {"text", "source", "raw_chars"}}``
         dates:  ``{"contest_start_date": "2026-11-14", ...}``（未经护栏校验，
                 调用方必须过 ``contest_dates.plan_date_writes`` 才能入库）
+        stages: 原始阶段数组（未经护栏，调用方必须过
+                ``stage_schedule.guard_stages``）
 
     LLM 失败时抛 llm.LLMError，调用方必须保留 NULL，**绝不能回落写原文**。
     """
@@ -679,7 +697,7 @@ def purify_fields(name: str, raw_fields: dict,
         source = item.get("source") if isinstance(item, dict) else ""
         needed[field] = {"text": text, "source": source or "赛氪详情"}
     if not needed:
-        return {}, {}
+        return {}, {}, []
 
     data = llm.chat_json(
         build_purify_prompt(name, needed),
@@ -718,7 +736,12 @@ def purify_fields(name: str, raw_fields: dict,
         if value in (None, "", "null", "None", "无"):
             continue
         dates[column] = str(value).strip()
-    return result, dates
+
+    stages = []
+    raw_stages = _pick_ai_value(data, "stage_schedule")
+    if isinstance(raw_stages, list):
+        stages = [row for row in raw_stages if isinstance(row, dict)]
+    return result, dates, stages
 
 
 # ============================================================
@@ -835,6 +858,21 @@ def fill_dates_and_cover(target_db: str, competition_id: int, detail: dict) -> d
     return {"dates": dates, "cover": cover}
 
 
+def content_text(detail: dict, limit: int = 4000) -> str:
+    """详情 ``content`` HTML -> 纯文本段落（章节没命中时的 AI 全文兜底）。
+
+    赛氪正文里「六、大赛进度安排」这类标题不一定命中章节关键词，
+    但整段文字里时间信息是完整的，所以再给 AI 一次全文机会。
+    """
+    blocks = html_to_blocks(detail.get("content") or "")
+    lines = []
+    for _tag, text in blocks:
+        line = _clean_inline(text)
+        if line and (not lines or lines[-1] != line):
+            lines.append(line)
+    return "\n".join(lines)[:limit]
+
+
 def _norm_name(name: str) -> str:
     return db.normalize_competition_name(name or "")
 
@@ -881,6 +919,15 @@ def resolve_contest_id(row: dict, mapping: dict, by_name: list) -> tuple:
     if scored and scored[0][0] >= MIN_NAME_RATIO \
             and (len(scored) == 1 or scored[0][0] - scored[1][0] >= 0.03):
         return int(scored[0][1]), "名称匹配(%.2f)" % scored[0][0]
+
+    # P0（2026-11-13）：saikr_map 只覆盖 32 条存量，而本地索引 saikr_index.json
+    # 有 5000+ 条（saikr_match 负责归一化 + 唯一性判定）。map 里没有、但索引里
+    # 明明存在的赛事（如「国际大学生智能农业装备创新大赛」= 60025）在这里兜底，
+    # 否则会被判成「无映射」，永远抓不到详情。
+    hit = saikr_match.resolve(row.get("name") or "")
+    if hit:
+        return int(hit["contest_id"]), "索引匹配(%s/%.2f)" % (
+            hit["method"], hit["score"])
     return None, ""
 
 
@@ -1064,15 +1111,22 @@ def enrich_competition(target_db: str, competition_id: int, *,
                 "contest_id": contest_id, "reason": stale}
 
     raw = extract_fields(detail)
+    full_text = content_text(detail)
     needed = {field: raw[field] for field in DETAIL_FIELDS
               if field in missing and field in raw}
+    # P0（2026-11-13）：章节关键词没命中（如「六、大赛进度安排」）时，
+    # 用正文全文兜底喂 AI——资料在正文里，别因为标题不认识就整条空着。
+    if full_text:
+        for field in ("content_scope", "exam_schedule"):
+            if field in missing and field not in needed:
+                needed[field] = {"text": full_text, "source": "全文"}
     if not needed:
         return {"status": "no_fields", "competition_id": int(competition_id),
                 "contest_id": contest_id, "reason": "页面无可用章节"}
 
-    purified, extracted_dates = purify_fields(
+    purified, extracted_dates, raw_stages = purify_fields(
         row.get("name") or "", needed, max_chars=max_chars or MAX_FIELD_LEN)
-    if not purified and not extracted_dates:
+    if not purified and not extracted_dates and not raw_stages:
         return {"status": "ai_empty", "competition_id": int(competition_id),
                 "contest_id": contest_id, "reason": "AI 未产出可用短句"}
 
@@ -1085,13 +1139,25 @@ def enrich_competition(target_db: str, competition_id: int, *,
     # 顺手补「空的日期字段 + 封面」：审核入库的新赛事通常这两类也是空壳，
     # 只补空、封面过 image_guard 闸门，失败保持 NULL 走前端兜底。
     extra = fill_dates_and_cover(target_db, int(competition_id), detail)
+    raw_text = (raw.get("exam_schedule") or {}).get("text") or full_text
+    # 阶段表先写：顶部「比赛时间」优先取阶段跨度（初赛~决赛）而不是模型给的
+    # 单个比赛日；随后 contest_dates 只补剩下的空格。
+    stages = stage_schedule.guard_stages(
+        raw_stages, raw_text, today=now.date()) if raw_stages else []
+    stage_patch = {}
+    if stages:
+        stage_patch = stage_schedule.apply(
+            target_db, int(competition_id), stages, raw_text, today=now.date())
     date_patch = {}
     if extracted_dates:
-        raw_text = (raw.get("exam_schedule") or {}).get("text") or ""
         date_patch = contest_dates.apply(
             target_db, int(competition_id), extracted_dates, raw_text)
+    # 阶段跨度已经填上的列，日期候选不再重复报告
+    for column in ("contest_start_date", "contest_end_date"):
+        if column in stage_patch and column in date_patch:
+            date_patch.pop(column, None)
     changed = (bool(written) or bool(extra["dates"]) or bool(extra["cover"])
-               or bool(date_patch))
+               or bool(date_patch) or bool(stage_patch))
     return {
         "status": "updated" if changed else "exists",
         "competition_id": int(competition_id),
@@ -1100,6 +1166,8 @@ def enrich_competition(target_db: str, competition_id: int, *,
         "written": sorted(written),
         "extra": extra,
         "date_patch": date_patch,
+        "stage_patch": stage_patch,
+        "stages": stages,
         "fields": purified,
     }
 
@@ -1156,6 +1224,7 @@ def main(argv=None) -> int:
 
     session = _session()
     extracted = {}
+    full_texts = {}
     stale_map = {}
     fetch_ok = fetch_failed = 0
     now = datetime.now(SHANGHAI)
@@ -1163,6 +1232,7 @@ def main(argv=None) -> int:
         try:
             detail = fetch_detail(session, contest_id)
             extracted[contest_id] = extract_fields(detail)
+            full_texts[contest_id] = content_text(detail)
             stale_map[contest_id] = stale_reason(detail, now)
             fetch_ok += 1
             got = sum(1 for value in extracted[contest_id].values() if value)
@@ -1181,6 +1251,7 @@ def main(argv=None) -> int:
     # AI 提纯：每个 contest_id 一次；失败/照抄一律保留 NULL，绝不写原文
     purified = {}
     dates_by_contest = {}
+    stages_by_contest = {}
     ai_calls = ai_failed = 0
     usage_before = llm.get_usage()
     if args.no_llm:
@@ -1193,23 +1264,33 @@ def main(argv=None) -> int:
                 wanted.update(target["missing_fields"])
             needed = {field: fields[field] for field in DETAIL_FIELDS
                       if field in wanted and field in fields}
+            full_text = full_texts.get(contest_id) or ""
+            if full_text:
+                for field in ("content_scope", "exam_schedule"):
+                    if field in wanted and field not in needed:
+                        needed[field] = {"text": full_text, "source": "全文"}
             if not needed:
                 continue
             name = by_contest[contest_id][0]["name"]
             try:
-                result, dates = purify_fields(name, needed, max_chars=MAX_FIELD_LEN)
+                result, dates, stages = purify_fields(
+                    name, needed, max_chars=MAX_FIELD_LEN)
                 purified[contest_id] = result
                 dates_by_contest[contest_id] = dates
+                stages_by_contest[contest_id] = stages
                 ai_calls += 1
                 log("[AI] contest_id=%s -> 提纯 %d/%d 字段%s"
                     % (contest_id, len(result), len(needed),
                        "" if result else "（⚠ 无可用短句，保留 NULL）"))
                 if dates:
                     log("[AI] contest_id=%s -> 比赛日期候选 %s" % (contest_id, dates))
+                if stages:
+                    log("[AI] contest_id=%s -> 赛程阶段候选 %d 个" % (contest_id, len(stages)))
             except Exception as exc:  # noqa: BLE001 - 单条 AI 失败不阻断批量
                 ai_failed += 1
                 purified[contest_id] = {}
                 dates_by_contest[contest_id] = {}
+                stages_by_contest[contest_id] = []
                 log("[AI] ✗ contest_id=%s：%s（保留 NULL，不写原文）"
                     % (contest_id, exc))
     usage_after = llm.get_usage()
@@ -1228,6 +1309,7 @@ def main(argv=None) -> int:
         "ai_fields": sum(len(value) for value in purified.values()),
         "updated_competitions": 0,
         "date_written": 0,
+        "stage_written": 0,
         "field_written": {field: 0 for field in DETAIL_FIELDS},
         "field_extracted": {field: 0 for field in DETAIL_FIELDS},
     }
@@ -1287,16 +1369,40 @@ def main(argv=None) -> int:
                 info.get("written") for info in entry["fields"].values()):
             stats["updated_competitions"] += 1
 
+        # 赛程阶段先写：顶部「比赛时间」优先取阶段跨度，再让日期补空
+        raw_text = ((raw_fields.get("exam_schedule") or {}).get("text")
+                    or full_texts.get(contest_id) or "")
+        ai_stages = stages_by_contest.get(contest_id) or []
+        if ai_stages:
+            stages = stage_schedule.guard_stages(ai_stages, raw_text, today=now.date())
+            if stages:
+                entry["stages"] = stages
+                if args.apply:
+                    stage_patch = stage_schedule.apply(
+                        target_db, target["target_id"], stages, raw_text,
+                        today=now.date())
+                else:
+                    stage_patch = stage_schedule.plan_from_db(
+                        target_db, target["target_id"], stages, raw_text,
+                        today=now.date())
+                if stage_patch:
+                    entry["stage_patch"] = stage_patch
+                    if args.apply:
+                        stats["stage_written"] += 1
+                        stats["updated_competitions"] += 1
         # 比赛日期：AI 从「考试安排」正文里提的候选值，过 contest_dates 护栏后只补空
         ai_dates = dates_by_contest.get(contest_id) or {}
         if ai_dates:
-            raw_text = (raw_fields.get("exam_schedule") or {}).get("text") or ""
             if args.apply:
                 date_patch = contest_dates.apply(
                     target_db, target["target_id"], ai_dates, raw_text)
             else:
                 date_patch = contest_dates.plan_from_db(
                     target_db, target["target_id"], ai_dates, raw_text)
+            if stage_patch.get("contest_start_date"):
+                ai_dates.pop("contest_start_date", None)
+            if stage_patch.get("contest_end_date"):
+                ai_dates.pop("contest_end_date", None)
             if date_patch:
                 entry["date_patch"] = date_patch
                 if args.apply:
@@ -1331,7 +1437,9 @@ def main(argv=None) -> int:
     if args.apply:
         log("[写入] 更新比赛 %d 条｜" % stats["updated_competitions"] + " / ".join(
             "%s %d 个" % (FIELD_LABELS[field], stats["field_written"][field])
-            for field in DETAIL_FIELDS) + "｜比赛日期 %d 条" % stats["date_written"])
+            for field in DETAIL_FIELDS)
+        + "｜比赛日期 %d 条｜赛程阶段 %d 条"
+        % (stats["date_written"], stats["stage_written"]))
     else:
         log("[预演] 未写库；确认预览后加 --apply 执行")
     if stats["stale_skipped"]:

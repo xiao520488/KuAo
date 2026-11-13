@@ -61,6 +61,30 @@ export function parseDate(value) {
 
 const DAY_MS = 24 * 60 * 60 * 1000
 
+// 中文日期："2026年9月10日"（无年份时 "9月10日"）
+export function formatCnDate(value) {
+  const parsed = parseDate(value)
+  if (!parsed) return ''
+  const year = parsed.hasYear ? `${String(value).trim().slice(0, 4)}年` : ''
+  return `${year}${parsed.month}月${parsed.day}日`
+}
+
+// 阶段的起止区间："2026年9月10日 – 11月30日" / "2027年1月1日 – 3月5日"
+// 同年省略后半段年份；只有一端时只显示那一端；都没有返回空串。
+export function formatStageRange(startValue, endValue) {
+  const start = parseDate(startValue)
+  const end = parseDate(endValue)
+  if (!start && !end) return ''
+  if (start && end) {
+    if (start.text === end.text) return formatCnDate(startValue)
+    const startYear = start.hasYear ? String(startValue).trim().slice(0, 4) : ''
+    const endYear = end.hasYear ? String(endValue).trim().slice(0, 4) : ''
+    if (startYear && startYear === endYear) return `${formatCnDate(startValue)} – ${end.month}月${end.day}日`
+    return `${formatCnDate(startValue)} – ${formatCnDate(endValue)}`
+  }
+  return formatCnDate(start ? startValue : endValue)
+}
+
 // 本地零点，避免「今天 23 点 vs 明天 0 点」被算成 1 天
 function startOfDay(date) {
   return new Date(date.getFullYear(), date.getMonth(), date.getDate())
