@@ -28,6 +28,7 @@ httpx==0.28.1
 requests==2.34.2
 beautifulsoup4==4.13.4
 lxml==5.4.0
+pdfplumber==0.11.10
 # 封面图闸门：Pillow 解码图片，zxing-cpp 识别二维码/条码（见 image_guard.py）
 Pillow==13.0.0
 zxing-cpp==3.1.1
