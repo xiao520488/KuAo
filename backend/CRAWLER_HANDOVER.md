@@ -904,3 +904,54 @@ SQL
 - 若某天首页太空，正确的解法是补真实的在招赛事数据（`discover_saikr` + 审核），不是放宽筛选口径。
 
 同批次还修了主列表的 `limit`：`db.list_competitions()` 原先**没有** limit 参数，`GET /api/competitions?limit=N` 被 FastAPI 静默忽略（`?limit=1` 返回全部 84 条）。现补为 `Query(None, ge=1, le=500)`，并**在 `month` 的 Python 过滤之后**再切片——若把 `LIMIT` 写进 SQL 就是「先截断再过滤」，会返回比 limit 更少的行。回归测试 `backend/test_competition_list_limit.py`（4 条）专门锁这个坑。
+
+## 十二、比赛时间（`contest_*_date`）从哪来（2026-11-13 排查与重构）
+
+### 12.1 结论先说：赛氪接口根本没有比赛时间
+
+实测 `GET https://apiv4buffer.saikr.com/api/pc/contest/info?contest_id=58040`（中国大学生计算机设计大赛 / 蓝桥杯 58069 同样），72 个字段里与时间有关的只有 5 个：
+
+| 字段 | 实测值 | 含义 |
+|---|---|---|
+| `regist_start_time` | `'2026/04/01 00:00:00'` | 报名开始（**字符串，不是时间戳**） |
+| `regist_end_time` | `'2026/04/30 00:00:00'` | 报名截止 |
+| `contest_start_time` | `'-0001/11/30 00:00:00'` | **占位符 = 未设置** |
+| `contest_end_time` | `'-0001/11/30 00:00:00'` | **占位符 = 未设置** |
+| `is_show_regist_time` | `1` | 是否展示报名时间 |
+
+赛氪网页上的「比赛时间」是它自己的运营字段，不在这个接口里。所以 `_parse_api_time` 对 `-0001/...` 返回 `None` 是**正确**的，`fill_dates_and_cover` 每次都在「只补空」却永远补不到比赛日期——不是解析 bug。
+
+**也没有护栏误伤**：`backfill_dates._plan_writes` 的年份窗口 `[今年-1, 今年+1]` 只拦截往年届次；`enrich_saikr_details.STALE_DAYS=400` 只作用于整条赛事的写入，不置空任何日期。历史数据里比赛日期为空的唯一原因就是**从来没写过**。
+
+### 12.2 真正的断层：AI 文本里有日期，结构化字段没接上
+
+排查时的存量：91 行 / 84 在架；`exam_schedule` 有正文 46 行；正文含「X月X日」26 行；但 `contest_start_date` 只有 5 行——AI 把「决赛于11月14日举行」写进了正文，却没有回写结构化列。
+
+### 12.3 修复：先护栏，再反写
+
+新增 `backend/contest_dates.py`（四道护栏 + 年份推断）：
+
+1. **原文佐证**：正文必须真的出现该「月+日」（`11月14日`/`11-14`/`11/14`/`11.14`），否则丢弃（防模型编造）；
+2. **年份护栏**：只接受 `[今年-1, 今年+1]`；**正文没写年份时不信模型猜的年份**，按「优先今年 → 明年 → 去年」重新推断（这条是修 `id=34` 时踩出来的：模型给 2025，正文无年份）；
+3. **只补空**：`contest_start_date` / `contest_end_date` 已有值一律不覆盖；
+4. **起止有序**：`end < start` 时丢弃 end。
+
+链路改造：
+
+* `enrich_saikr_details.py`（Prompt v2）：`purify_fields` 在三字段之外，额外抽取 `extracted_contest_date` / `extracted_contest_end_date`，返回 `(fields, dates)`；`enrich_competition` 与批量主循环都会过护栏后写回 `contest_*_date` + 补空的 `contest_*_month`；
+* `backend/backfill_contest_dates.py`：对**存量**「有正文、无比赛日期」的行补做一次抽取；默认 dry-run，`--apply` 只补 NULL，写生产库必须 `--allow-production`，写前自动备份；报告落在 `workspace/backfill_contest_dates_*.json`。
+
+**首轮回填结果**（2026-11-13 12:48）：处理 24 行 → 模型抽出 12 行 → 写入 9 行；另 3 行（`70/91/103`）是正文里的 2020/2021/2023 旧届日期，被年份护栏拒绝。`contest_start_date` 从 5 条增至 **13 条**，剩余 34 行「有正文仍无日期」里 15 行只写了报名截止或「7月至8月」这种月份区间——按「宁缺毋滥」保持 NULL，前端会自动降级成月份区间或「待公布」。
+
+前端无需改动：`frontend/src/utils/timeFormat.js` 的 `formatContest()` 已经按「日期 → 月份 → 待公布」降级，`CompetitionCard.vue` 的倒计时徽章只在有精确日期时出现。
+
+**重跑命令**：
+
+```bat
+:: 只看结果（不写库）
+backend\venv\Scripts\python.exe backend\backfill_contest_dates.py --limit 20
+:: 写生产库
+backend\venv\Scripts\python.exe backend\backfill_contest_dates.py --apply --allow-production
+```
+
+**注意**：`--ids 34` 这类重跑前先确认库里该行确实为空；护栏只补空，已有值不会刷新。若发现写错（如年份推断失误），先把该行 `contest_*_date/month` 置 NULL 再重跑。
