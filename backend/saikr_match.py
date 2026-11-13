@@ -1,4 +1,4 @@
-"""赛氪赛事「名称 -> contest_id」解析器（本地索引 + 相似度匹配）。
+﻿"""赛氪赛事「名称 -> contest_id」解析器（本地索引 + 相似度匹配）。
 
 为什么需要它：教育部门名录（`edu-roster`）来源的候选，`source_url` 全部指向
 同一个目录页（如 `https://www.sdaeu.edu.cn/jwc/info/1047/2528.htm`），
@@ -212,6 +212,49 @@ def load_index(rebuild_if_missing: bool = True) -> dict:
 # ---------------------------------------------------------------------------
 # 名称匹配
 # ---------------------------------------------------------------------------
+_CN_DIGITS = {"零": 0, "〇": 0, "一": 1, "二": 2, "两": 2, "三": 3, "四": 4,
+              "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
+_EDITION_NUM = re.compile(r"第\s*([0-9零〇一二三四五六七八九十百两]{1,6})\s*届")
+_EDITION_YEAR = re.compile(r"(19|20)\d{2}")
+
+
+def _cn_to_int(text: str) -> int:
+    """「十二」「二十四」「11」-> int；无数字返回 0。"""
+    text = str(text or "").strip()
+    if not text:
+        return 0
+    if text.isdigit():
+        return int(text)
+    total, num = 0, 0
+    for ch in text:
+        if ch in _CN_DIGITS:
+            num = _CN_DIGITS[ch]
+        elif ch == "十":
+            total += (num or 1) * 10
+            num = 0
+        elif ch == "百":
+            total += (num or 1) * 100
+            num = 0
+    return total + num
+
+
+def edition_rank(name: str) -> tuple:
+    """(届数, 年份)：同名多届次时用来挑「最新一届」。
+
+    届数是主信号（「第17届」比「2021第13届」新）；没写届次但带年份的页面
+    用年份兜底；两者都没有的页面（赛氪多数「当届」页就是这样）按最新处理，
+    否则会被往届的编号页压过去。
+    """
+    text = str(name or "")
+    year_hit = _EDITION_YEAR.search(text)
+    edition_hit = _EDITION_NUM.search(text)
+    year = int(year_hit.group(0)) if year_hit else 0
+    ordinal = _cn_to_int(edition_hit.group(1)) if edition_hit else 0
+    if not ordinal and not year:
+        ordinal = 999  # 无届次无年份 = 当届页
+    return (ordinal, year)
+
+
 def _score(query: str, candidate: str) -> tuple:
     """返回 (分数, 方式)；包含关系额外加分。"""
     if not query or not candidate:
@@ -245,7 +288,10 @@ def resolve(name: str, *, index: dict | None = None,
             ranked.append((score, method, item))
     if not ranked:
         return None
-    ranked.sort(key=lambda entry: entry[0], reverse=True)
+    # 同分多届次（「第十二届」「第11届」「第十届」归一化后完全一样）：取最新一届，
+    # 否则会按索引顺序随机落到往届，enrich 随后因「往年届次」把数据整条跳过。
+    ranked.sort(key=lambda entry: (entry[0],) + edition_rank(entry[2].get("name") or ""),
+                reverse=True)
     best_score, best_method, best = ranked[0]
     # 第二名太接近 => 有歧义，宁可放弃（避免把 A 赛事的详情写到 B 上）
     if len(ranked) > 1 and best_score < 1.0 and best_score - ranked[1][0] < 0.02:
