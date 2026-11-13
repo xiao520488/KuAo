@@ -391,5 +391,158 @@ class GuideApiTests(_Base):
         assert self.client.get(f"/api/competitions/{cid}").json()["guide_status"] == "failed"
 
 
+class InspirationApiTests(_Base):
+    """灵感按需生成：无素材防呆 / 幂等 / 完成态 / 限流。"""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self._orig_insp = (
+            config.AI_INSPIRATION_DAILY_LIMIT,
+            config.AI_INSPIRATION_QUEUE_MAX,
+            config.AI_INSPIRATION_FAIL_COOLDOWN_MIN,
+        )
+        config.AI_INSPIRATION_DAILY_LIMIT = 6
+        config.AI_INSPIRATION_QUEUE_MAX = 2
+        config.AI_INSPIRATION_FAIL_COOLDOWN_MIN = 30
+
+    def tearDown(self) -> None:
+        (
+            config.AI_INSPIRATION_DAILY_LIMIT,
+            config.AI_INSPIRATION_QUEUE_MAX,
+            config.AI_INSPIRATION_FAIL_COOLDOWN_MIN,
+        ) = self._orig_insp
+        super().tearDown()
+
+    def _add_award(self, cid: int, title: str = "获奖作品") -> int:
+        return db.create_award({"competition_id": cid, "title": title})
+
+    def _fake_inspiration(self, *args, **kwargs) -> dict:
+        return {"exit_code": 0, "insights_new": 3, "ideas_new": 4,
+                "tokens": 5200, "log": ""}
+
+    def test_requires_login(self) -> None:
+        cid = self._new_competition()
+        assert self.client.post(
+            f"/api/competitions/{cid}/generate_inspirations"
+        ).status_code == 401
+        assert self.client.get(
+            f"/api/competitions/{cid}/generate_inspirations"
+        ).status_code == 401
+
+    def test_no_awards_is_rejected(self) -> None:
+        cid = self._new_competition()
+        _, token = self._new_user()
+        resp = self.client.post(
+            f"/api/competitions/{cid}/generate_inspirations",
+            headers=self._auth(token),
+        )
+        assert resp.status_code == 409, resp.text
+        body = resp.json()
+        assert body["status"] == "no_awards"
+        assert body["reason"] == "no_awards"
+        assert body["awards_count"] == 0
+        # 一个任务都不该建出来
+        with db.get_conn() as conn:
+            assert conn.execute("SELECT COUNT(*) FROM ai_jobs").fetchone()[0] == 0
+        # 状态接口同样报告 0 素材，前端据此置灰按钮
+        status = self.client.get(
+            f"/api/competitions/{cid}/generate_inspirations",
+            headers=self._auth(token),
+        ).json()
+        assert status["status"] == "idle"
+        assert status["awards_count"] == 0
+
+    def test_generate_flow_and_ready(self) -> None:
+        cid = self._new_competition()
+        self._add_award(cid)
+        _, token = self._new_user()
+
+        with patch.object(
+            ai_content, "generate_inspiration", side_effect=self._fake_inspiration
+        ):
+            first = self.client.post(
+                f"/api/competitions/{cid}/generate_inspirations",
+                headers=self._auth(token),
+            )
+            assert first.status_code == 202, first.text
+            job_id = first.json()["job_id"]
+            assert job_id
+            job = self._wait_job(job_id)
+            assert job["status"] == "done", job
+
+        status = self.client.get(
+            f"/api/competitions/{cid}/generate_inspirations",
+            headers=self._auth(token),
+        ).json()
+        assert status["awards_count"] == 1
+        # fake 不真的写库，因此状态仍为 idle；真实流程由 analyzer 落库后变 ready
+        assert status["status"] in ("idle", "ready")
+
+    def test_existing_insights_returns_200_and_no_new_job(self) -> None:
+        cid = self._new_competition()
+        self._add_award(cid)
+        _, token = self._new_user()
+        with db.get_conn() as conn:
+            conn.execute(
+                "INSERT INTO insights (competition_id, kind, content_md) "
+                "VALUES (?, 'experience', '已有洞察')", (cid,)
+            )
+        resp = self.client.post(
+            f"/api/competitions/{cid}/generate_inspirations",
+            headers=self._auth(token),
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "ready"
+        assert body["insights_count"] == 1
+        with db.get_conn() as conn:
+            assert conn.execute("SELECT COUNT(*) FROM ai_jobs").fetchone()[0] == 0
+
+    def test_queue_full_returns_429(self) -> None:
+        config.AI_INSPIRATION_QUEUE_MAX = 1
+        busy = self._new_competition("占用队列的赛事")
+        target = self._new_competition("待生成赛事")
+        self._add_award(busy)
+        self._add_award(target)
+        _, token = self._new_user()
+        db.claim_ai_job("inspiration", busy)
+        resp = self.client.post(
+            f"/api/competitions/{target}/generate_inspirations",
+            headers=self._auth(token),
+        )
+        assert resp.status_code == 429
+        assert resp.json()["reason"] == "queue_full"
+
+    def test_failure_marks_failed_and_cooldown(self) -> None:
+        cid = self._new_competition()
+        self._add_award(cid)
+        _, token = self._new_user()
+
+        def boom(*args, **kwargs):
+            raise RuntimeError("mock analyzer down")
+
+        with patch.object(ai_content, "generate_inspiration", side_effect=boom):
+            resp = self.client.post(
+                f"/api/competitions/{cid}/generate_inspirations",
+                headers=self._auth(token),
+            )
+            assert resp.status_code == 202
+            job = self._wait_job(resp.json()["job_id"])
+        assert job["status"] == "failed"
+
+        status = self.client.get(
+            f"/api/competitions/{cid}/generate_inspirations",
+            headers=self._auth(token),
+        ).json()
+        assert status["status"] == "failed"
+
+        cooled = self.client.post(
+            f"/api/competitions/{cid}/generate_inspirations",
+            headers=self._auth(token),
+        )
+        assert cooled.status_code == 409
+        assert cooled.json()["reason"] == "cooldown"
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

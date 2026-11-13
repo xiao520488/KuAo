@@ -284,6 +284,56 @@ export function getGuideStatus(competitionId) {
 }
 
 /**
+ * 按需生成专属灵感（登录 + 异步）
+ * POST /api/competitions/:id/generate_inspirations
+ *
+ * 灵感全部来自该赛事获奖作品，后端在入库前就会检查 awards 数量：
+ *   - 200 { status: 'ready' }                          已有灵感，无需生成
+ *   - 202 { status: 'queued'|'running', job_id }       已入队/已在跑（幂等）
+ *   - 409 { status: 'no_awards', reason: 'no_awards' } 没有获奖作品，无素材可提炼
+ *   - 409 { reason: 'cooldown' }                       刚失败过，冷却中
+ *   - 429 { reason: 'queue_full'|'daily_budget' }      限流
+ *   - 401                                              未登录（拦截器会清 token）
+ *
+ * @param {string|number} competitionId
+ * @returns {Promise<{status:string, job_id:number|null, awards_count:number, reason:string|null, poll_after_ms:number}>}
+ */
+export function requestInspirations(competitionId) {
+  const cid = normalizeCompetitionId(competitionId)
+  if (cid === null) return Promise.reject(new Error('竞赛 ID 无效'))
+  return api.post(`/competitions/${cid}/generate_inspirations`).then((data) => ({
+    status: String(data?.status || 'queued'),
+    job_id: data?.job_id ?? null,
+    awards_count: Number(data?.awards_count) || 0,
+    insights_count: Number(data?.insights_count) || 0,
+    ideas_count: Number(data?.ideas_count) || 0,
+    reason: data?.reason ?? null,
+    poll_after_ms: Number(data?.poll_after_ms) || 0
+  }))
+}
+
+/**
+ * 查询灵感生成状态（登录，只读）
+ * GET /api/competitions/:id/generate_inspirations
+ * @param {string|number} competitionId
+ * @returns {Promise<{status:string, job_id:number|null, awards_count:number, insights_count:number, ideas_count:number}>}
+ */
+export function getInspirationStatus(competitionId) {
+  const cid = normalizeCompetitionId(competitionId)
+  if (cid === null) return Promise.reject(new Error('竞赛 ID 无效'))
+  return api.get(`/competitions/${cid}/generate_inspirations`).then((data) => ({
+    status: String(data?.status || 'idle'),
+    job_id: data?.job_id ?? null,
+    attempts: Number(data?.attempts) || 0,
+    awards_count: Number(data?.awards_count) || 0,
+    insights_count: Number(data?.insights_count) || 0,
+    ideas_count: Number(data?.ideas_count) || 0,
+    error: data?.error ?? null,
+    generated_at: data?.generated_at ?? null
+  }))
+}
+
+/**
  * 单个获奖作品 AI 解析
  * POST /api/ai/analyze-work  body: { work_id, competition_id }
  *

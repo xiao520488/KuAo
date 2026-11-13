@@ -2,7 +2,18 @@
 import { ref, computed, reactive, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import { useRoute } from 'vue-router'
 import Header from '@/components/Header.vue'
-import { analyzeWork, analyzeWorks, generatePlan, getCompetitionAwards, getCompetitionDetail, getInspirations } from '@/services/api'
+import {
+  analyzeWork,
+  analyzeWorks,
+  generatePlan,
+  getCompetitionAwards,
+  getCompetitionDetail,
+  getInspirationStatus,
+  getInspirations,
+  requestInspirations
+} from '@/services/api'
+import { isLoggedIn } from '@/services/auth'
+import { openAuthModal } from '@/composables/useAuthModal'
 import { renderMarkdown } from '@/services/markdown'
 import { clearPlanCache, getPlanCache, setPlanCache } from '@/services/planCache'
 import { loadFavoriteIds, saveFavoriteIds } from '@/services/favorites'
@@ -72,6 +83,11 @@ async function loadCompetition() {
 
 // 路由切换到另一场竞赛时，重新拉取顶部信息
 watch(routedId, () => {
+  // 上一场赛事的生成进度与定时器必须作废，避免串台
+  stopInspirePolling()
+  inspireState.value = 'idle'
+  inspireError.value = ''
+  awardsCount.value = 0
   loadCompetition()
   loadWorks()
   loadInspirations()
@@ -822,7 +838,12 @@ async function loadInspirations() {
     const data = await getInspirations(cid)
     if (routedId.value !== cid) return
     inspirations.value = normalizeInspirationItems(data)
+    awardsCount.value = Number(data?.work_count) || 0
     applyFavoriteFlags()
+    // 没有任何灵感时，顺带恢复「正在生成」进度（刷新页面不丢）
+    if (!inspirations.value.length && inspireState.value === 'idle') {
+      syncInspirationState()
+    }
   } catch (e) {
     if (routedId.value !== cid) return
     inspirations.value = []
@@ -839,6 +860,149 @@ function persist() {
 // 刷新灵感：重新请求后端（数据由离线 analyzer.py 生成并落库）
 function refreshInspiration() {
   loadInspirations()
+}
+
+/* =========================================================
+   灵感生成（awards 是唯一素材来源，先看有没有获奖作品）
+   ========================================================= */
+const awardsCount = ref(0)        // 该赛事获奖作品数：为 0 时按钮置灰
+const inspireState = ref('idle')  // idle | queued | running | ready | failed
+const inspireError = ref('')
+let inspireTimer = null
+let inspirePollCount = 0
+
+const INSPIRE_POLL_FAST_MS = 4000   // 前 20 次 4s
+const INSPIRE_POLL_SLOW_MS = 9000   // 之后放慢，避免长任务空转
+const INSPIRE_POLL_FAST_LIMIT = 20
+const INSPIRE_POLL_MAX = 45         // 约 5 分钟上限
+
+const inspireBusy = computed(
+  () => inspireState.value === 'queued' || inspireState.value === 'running'
+)
+const canGenerateInspiration = computed(
+  () => awardsCount.value > 0 && !inspireBusy.value
+)
+const hasInspiration = computed(() => inspirations.value.length > 0)
+
+function stopInspirePolling() {
+  if (inspireTimer) {
+    clearTimeout(inspireTimer)
+    inspireTimer = null
+  }
+}
+
+function scheduleInspirePoll() {
+  stopInspirePolling()
+  const delay =
+    inspirePollCount < INSPIRE_POLL_FAST_LIMIT
+      ? INSPIRE_POLL_FAST_MS
+      : INSPIRE_POLL_SLOW_MS
+  inspireTimer = setTimeout(pollInspiration, delay)
+}
+
+async function pollInspiration() {
+  const cid = routedId.value
+  if (!cid) return
+  inspirePollCount += 1
+  try {
+    const state = await getInspirationStatus(cid)
+    if (routedId.value !== cid) return
+    awardsCount.value = state.awards_count || awardsCount.value
+    inspireState.value = state.status
+
+    if (state.status === 'ready') {
+      stopInspirePolling()
+      await loadInspirations()
+      return
+    }
+    if (state.status === 'failed') {
+      stopInspirePolling()
+      inspireError.value = 'AI 这次没能提炼出灵感，请稍后重试'
+      return
+    }
+    if (inspirePollCount >= INSPIRE_POLL_MAX) {
+      stopInspirePolling()
+      inspireState.value = 'idle'
+      inspireError.value = '生成时间较长，可稍后刷新页面查看结果'
+      return
+    }
+    scheduleInspirePoll()
+  } catch (e) {
+    stopInspirePolling()
+    inspireState.value = 'idle'
+    if (e?.status === 401) {
+      inspireError.value = '登录状态已失效，请重新登录后再生成'
+    } else {
+      inspireError.value = e?.message || '查询生成状态失败'
+    }
+  }
+}
+
+/**
+ * 进入工作台时恢复「正在生成」状态：
+ * 刷新页面后不应丢失进度条，也不能重复入队（后端幂等）。
+ */
+async function syncInspirationState() {
+  const cid = routedId.value
+  if (!cid || !isLoggedIn()) return
+  try {
+    const state = await getInspirationStatus(cid)
+    if (routedId.value !== cid) return
+    awardsCount.value = state.awards_count || awardsCount.value
+    if (state.status === 'queued' || state.status === 'running') {
+      inspireState.value = state.status
+      inspirePollCount = 0
+      scheduleInspirePoll()
+    } else if (state.status === 'ready' && !hasInspiration.value) {
+      await loadInspirations()
+    }
+  } catch (e) {
+    // 状态探测失败不影响页面：按钮仍可点击，由 POST 结果兜底
+  }
+}
+
+async function onGenerateInspiration() {
+  if (!canGenerateInspiration.value) return
+
+  if (!isLoggedIn()) {
+    openAuthModal('login')
+    return
+  }
+
+  const cid = routedId.value
+  if (!cid) return
+
+  inspireError.value = ''
+  inspirePollCount = 0
+
+  try {
+    const result = await requestInspirations(cid)
+    if (routedId.value !== cid) return
+    if (result.status === 'ready') {
+      await loadInspirations()
+      return
+    }
+    inspireState.value = result.status === 'running' ? 'running' : 'queued'
+    scheduleInspirePoll()
+  } catch (e) {
+    if (e?.status === 401) {
+      openAuthModal('login')
+      inspireError.value = '请先登录后再生成灵感'
+    } else if (e?.status === 409 && e?.data?.reason === 'no_awards') {
+      awardsCount.value = 0
+      inspireError.value = '该赛事暂无公开的历年获奖作品，AI 缺少提炼素材'
+    } else if (e?.status === 409) {
+      inspireError.value = '该赛事刚生成失败过，请稍后再试'
+    } else if (e?.status === 429) {
+      inspireError.value =
+        e?.data?.reason === 'queue_full'
+          ? '灵感生成队列已满，请稍后再试'
+          : '今日 AI 生成额度已用完，请明天再试'
+    } else {
+      inspireError.value = e?.message || '生成失败，请稍后重试'
+    }
+    inspireState.value = 'idle'
+  }
 }
 
 function toggleFavorite(item) {
@@ -900,6 +1064,8 @@ onMounted(() => {
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKeydown)
   window.removeEventListener('auth:local-data-cleared', onLocalDataCleared)
+  // 定时器必须清掉，否则离开页面后仍会继续轮询
+  stopInspirePolling()
   // 离开页面时解除全屏阅读的滚动锁，避免影响其他路由
   document.body.style.overflow = ''
 })
@@ -1696,6 +1862,26 @@ onBeforeUnmount(() => {
           </button>
           <button
             type="button"
+            class="inline-flex items-center gap-2 rounded-full px-4 py-2 text-xs font-bold transition-colors"
+            :class="canGenerateInspiration
+              ? 'bg-blue-600 text-white shadow-sm shadow-blue-600/25 hover:bg-blue-700 dark:hover:bg-blue-600'
+              : 'cursor-not-allowed bg-slate-200 text-slate-400 dark:bg-slate-700 dark:text-slate-500'"
+            :disabled="!canGenerateInspiration"
+            :title="awardsCount > 0 ? '' : '该赛事暂无公开的历年获奖作品，AI 缺少提炼素材'"
+            @click="onGenerateInspiration"
+          >
+            <svg v-if="inspireBusy" class="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
+              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+            </svg>
+            <svg v-else class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round"
+                d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z" />
+            </svg>
+            {{ inspireBusy ? 'AI 正在深度挖掘获奖套路…' : '生成专属灵感' }}
+          </button>
+          <button
+            type="button"
             class="inline-flex items-center gap-2 rounded-full bg-white dark:bg-slate-800 px-4 py-2 text-xs font-bold
                    text-blue-700 dark:text-blue-300 ring-1 ring-blue-200 dark:ring-blue-500/30 transition-colors hover:bg-blue-100 dark:hover:bg-blue-500/25"
             @click="refreshInspiration"
@@ -1708,16 +1894,19 @@ onBeforeUnmount(() => {
         </div>
       </div>
 
-      <!-- 加载中 -->
+      <!-- 加载中 / AI 提炼中 -->
       <div
-        v-if="inspirationLoading"
-        class="flex items-center justify-center gap-3 rounded-2xl bg-white dark:bg-slate-800 py-16 text-sm font-bold text-slate-500 dark:text-slate-400 ring-1 ring-slate-200/70 dark:ring-slate-700"
+        v-if="inspirationLoading || inspireBusy"
+        class="flex flex-col items-center justify-center gap-3 rounded-2xl bg-white dark:bg-slate-800 py-16 text-center text-sm font-bold text-slate-500 dark:text-slate-400 ring-1 ring-slate-200/70 dark:ring-slate-700"
       >
         <svg class="h-5 w-5 animate-spin text-blue-600" fill="none" viewBox="0 0 24 24">
           <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
           <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
         </svg>
-        正在加载该赛事的灵感数据…
+        <span>{{ inspireBusy ? 'AI 正在深度挖掘获奖套路…' : '正在加载该赛事的灵感数据…' }}</span>
+        <span v-if="inspireBusy" class="max-w-md text-xs font-medium leading-5 text-slate-400 dark:text-slate-500">
+          正在通读该赛事 {{ awardsCount }} 件获奖作品，提炼评审偏好、选题趋势与可复用的创新点，通常需要 1–3 分钟。
+        </span>
       </div>
 
       <!-- 加载失败 -->
@@ -1763,28 +1952,75 @@ onBeforeUnmount(() => {
         v-else-if="!showFavorites && inspirations.length === 0"
         class="flex flex-col items-center justify-center rounded-2xl bg-white dark:bg-slate-800 py-16 text-center ring-1 ring-slate-200/70 dark:ring-slate-700"
       >
-        <div class="flex h-14 w-14 items-center justify-center rounded-2xl bg-blue-50 dark:bg-blue-500/15">
-          <svg class="h-7 w-7 text-blue-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M12 3v2m0 14v2M5 12H3m18 0h-2M7.05 7.05L5.64 5.64m12.72 12.72l-1.41-1.41M7.05 16.95l-1.41 1.41m12.72-12.72l-1.41 1.41" />
+        <div
+          class="flex h-14 w-14 items-center justify-center rounded-2xl"
+          :class="awardsCount > 0 ? 'bg-blue-50 dark:bg-blue-500/15' : 'bg-amber-50 dark:bg-amber-500/15'"
+        >
+          <svg
+            class="h-7 w-7"
+            :class="awardsCount > 0 ? 'text-blue-500' : 'text-amber-500'"
+            fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"
+          >
+            <path v-if="awardsCount > 0" stroke-linecap="round" stroke-linejoin="round"
+              d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z" />
+            <path v-else stroke-linecap="round" stroke-linejoin="round"
+              d="M12 9v4m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
           </svg>
         </div>
-        <h3 class="mt-4 text-base font-bold text-slate-900 dark:text-slate-100">该赛事还没有生成灵感</h3>
-        <p class="mt-2 max-w-xl text-sm leading-6 text-slate-500 dark:text-slate-400">
-          后端只返回 competition_id 严格匹配的数据。<br />
-          请先在 backend 目录运行
-          <code class="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-xs text-slate-700 dark:bg-slate-700 dark:text-slate-200">
-            python analyzer.py --competition_id {{ routedId }}
-          </code>
-          ，生成后点「刷新」。
+
+        <template v-if="awardsCount > 0">
+          <h3 class="mt-4 text-base font-bold text-slate-900 dark:text-slate-100">还没有生成专属灵感</h3>
+          <p class="mt-2 max-w-xl text-sm leading-6 text-slate-500 dark:text-slate-400">
+            平台已收录该赛事 {{ awardsCount }} 件获奖作品。点一下，AI 会通读这些作品，
+            提炼评审偏好、选题趋势与可以直接借鉴的创新点。
+          </p>
+          <div class="mt-5 flex flex-wrap items-center justify-center gap-3">
+            <button
+              type="button"
+              class="inline-flex h-10 items-center gap-2 rounded-full bg-blue-600 px-6 text-sm font-bold text-white
+                     shadow-sm shadow-blue-600/25 transition-colors hover:bg-blue-700 dark:hover:bg-blue-600
+                     disabled:cursor-not-allowed disabled:opacity-60"
+              :disabled="!canGenerateInspiration"
+              @click="onGenerateInspiration"
+            >
+              <svg v-if="inspireBusy" class="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+              </svg>
+              生成专属灵感
+            </button>
+            <button
+              type="button"
+              class="h-10 rounded-full px-5 text-sm font-bold text-slate-500 dark:text-slate-400 transition-colors hover:bg-slate-100 dark:hover:bg-slate-700/60"
+              @click="refreshInspiration"
+            >
+              刷新看看
+            </button>
+          </div>
+        </template>
+
+        <template v-else>
+          <h3 class="mt-4 text-base font-bold text-slate-900 dark:text-slate-100">该赛事暂无灵感素材</h3>
+          <p class="mt-2 max-w-xl text-sm leading-6 text-slate-500 dark:text-slate-400">
+            该赛事暂无公开的历年获奖作品，AI 缺少提炼素材。请等待平台数据补全后再试。
+          </p>
+          <button
+            type="button"
+            class="mt-5 inline-flex h-10 cursor-not-allowed items-center gap-2 rounded-full bg-slate-200 px-6 text-sm font-bold
+                   text-slate-400 dark:bg-slate-700 dark:text-slate-500"
+            disabled
+            title="该赛事暂无公开的历年获奖作品，AI 缺少提炼素材"
+          >
+            生成专属灵感
+          </button>
+          <p class="mt-3 text-xs font-medium text-slate-400 dark:text-slate-500">
+            已有获奖作品公示的赛事，会随数据补全自动解锁这个按钮。
+          </p>
+        </template>
+
+        <p v-if="inspireError" class="mt-4 text-xs font-bold text-rose-600 dark:text-rose-400">
+          {{ inspireError }}
         </p>
-        <button
-          type="button"
-          class="mt-5 h-10 rounded-full bg-blue-600 px-6 text-sm font-bold text-white
-                 shadow-sm shadow-blue-600/25 transition-colors hover:bg-blue-700 dark:hover:bg-blue-600"
-          @click="refreshInspiration"
-        >
-          刷新看看
-        </button>
       </div>
 
       <!-- 灵感卡片列表（全部 / 收藏）：按板块分区渲染 -->

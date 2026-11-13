@@ -9,6 +9,8 @@
   * GET  /api/competitions/{id}/awards           获奖作品
   * POST /api/competitions/{id}/generate_guide   按需生成攻略（登录 + 异步）
   * GET  /api/competitions/{id}/generate_guide   查询攻略生成状态
+  * POST /api/competitions/{id}/generate_inspirations  按需生成专属灵感（登录 + 异步）
+  * GET  /api/competitions/{id}/generate_inspirations  查询灵感生成状态
   * GET  /api/categories                         分类列表
 
 注意（2026-11-08）：full_process_guide 只在详情接口返回，列表接口不再带长文。
@@ -288,6 +290,112 @@ def get_generate_guide_status(
     if db_get_competition(id) is None:
         raise HTTPException(status_code=404, detail=f"竞赛 ID={id} 不存在")
     return GuideStatusResponse(**ai_jobs_runner.get_guide_status(id))
+
+
+# ---------------------------------------------------------------------------
+# 按需生成灵感（2026-11-13）
+# ---------------------------------------------------------------------------
+class InspirationStatusResponse(BaseModel):
+    """灵感生成状态查询的响应体。"""
+
+    competition_id: int = Field(..., description="竞赛 ID")
+    status: str = Field(
+        ..., description="idle / queued / running / ready / failed"
+    )
+    job_id: Optional[int] = Field(None, description="最近一次 ai_jobs.id")
+    attempts: int = Field(0, description="该任务已尝试次数")
+    awards_count: int = Field(0, description="该赛事获奖作品数（素材基础）")
+    insights_count: int = Field(0, description="已生成的洞察条数")
+    ideas_count: int = Field(0, description="已生成的选题灵感条数")
+    error: Optional[str] = Field(None, description="最近一次失败原因")
+    generated_at: Optional[str] = Field(None, description="最近一次生成时间")
+
+
+class InspirationRequestResponse(BaseModel):
+    """POST 生成灵感的响应体（状态码随场景变化）。"""
+
+    competition_id: int = Field(..., description="竞赛 ID")
+    status: str = Field(
+        ...,
+        description=(
+            "ready=已生成；queued=已入队；running=已在执行；"
+            "no_awards=无获奖作品不可生成；throttled=被限流"
+        ),
+    )
+    job_id: Optional[int] = Field(None, description="入队后的任务 id，用于轮询")
+    awards_count: Optional[int] = Field(None, description="获奖作品数")
+    insights_count: Optional[int] = Field(None, description="已有洞察条数")
+    ideas_count: Optional[int] = Field(None, description="已有选题条数")
+    reason: Optional[str] = Field(
+        None, description="拒绝原因：no_awards / daily_budget / queue_full / cooldown"
+    )
+    poll_after_ms: int = Field(
+        0, description="建议前端轮询间隔（毫秒）；0 表示无需轮询"
+    )
+
+
+@router.post(
+    "/api/competitions/{id}/generate_inspirations",
+    response_model=InspirationRequestResponse,
+    status_code=202,
+    summary="按需生成专属灵感（登录 + 异步）",
+    description=(
+        "登录用户触发。灵感全部从该赛事的获奖作品提炼，因此没有获奖作品时"
+        "直接 409（reason=no_awards），不会白烧额度。\n\n"
+        "已有 insights/ideas 返回 200；否则写 ai_jobs 后立即 202，由后台线程池"
+        "串行生成（约 60–180s）。前端用 GET 同路径轮询状态。\n\n"
+        "幂等：同一赛事已有 queued/running 任务时返回同一个 job_id。\n"
+        "限流：全站每日上限 / 队列上限 / 失败冷却，命中时返回 429 或 409。"
+    ),
+    responses={
+        401: {"description": "未登录或 Token 失效"},
+        404: {"description": "竞赛不存在"},
+        409: {"description": "无获奖作品（no_awards）或刚失败冷却中"},
+        429: {"description": "超出每日预算或队列已满"},
+    },
+)
+def generate_inspirations(
+    response: Response,
+    id: int = Path(..., description="竞赛 ID"),
+    user: dict = Depends(get_current_user),
+) -> InspirationRequestResponse:
+    """触发一次灵感生成（幂等、异步、无素材即拒绝）。"""
+    try:
+        result = ai_jobs_runner.request_inspiration(
+            id,
+            user_id=int(user["id"]),
+            request_ip=None,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    payload = dict(result["payload"])
+    payload.setdefault("poll_after_ms", result.get("poll_after_ms", 0))
+    response.status_code = int(result["http"])
+    retry_after = result.get("retry_after_sec")
+    if retry_after:
+        response.headers["Retry-After"] = str(int(retry_after))
+    return InspirationRequestResponse(**payload)
+
+
+@router.get(
+    "/api/competitions/{id}/generate_inspirations",
+    response_model=InspirationStatusResponse,
+    summary="查询灵感生成状态（登录）",
+    description="前端轮询用；只读，不触发任何生成，也不消耗配额。",
+    responses={
+        401: {"description": "未登录或 Token 失效"},
+        404: {"description": "竞赛不存在"},
+    },
+)
+def get_generate_inspirations_status(
+    id: int = Path(..., description="竞赛 ID"),
+    _user: dict = Depends(get_current_user),
+) -> InspirationStatusResponse:
+    """返回灵感生成状态（含 awards_count，供前端防呆）。"""
+    if db_get_competition(id) is None:
+        raise HTTPException(status_code=404, detail=f"竞赛 ID={id} 不存在")
+    return InspirationStatusResponse(**ai_jobs_runner.get_inspiration_status(id))
 
 
 # ---------------------------------------------------------------------------

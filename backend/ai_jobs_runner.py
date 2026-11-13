@@ -269,3 +269,136 @@ def request_guide(competition_id: int, *, user_id: Optional[int] = None,
 def get_guide_status(competition_id: int) -> dict:
     """GET 状态：直接复用详情接口的同一份计算，避免两处口径漂移。"""
     return _job_status_payload(competition_id)
+
+
+# ---------------------------------------------------------------------------
+# 灵感按需生成（insights + ideas）
+# ---------------------------------------------------------------------------
+def request_inspiration(competition_id: int, *, user_id: Optional[int] = None,
+                        request_ip: Optional[int | str] = None) -> dict:
+    """处理一次「生成专属灵感」请求，返回 HTTP 语义结果。
+
+    返回 ``{"http": 200/202/409/429, "payload": {...}}``：
+
+      * 200 已有 insights / ideas（无需重复生成）
+      * 202 已入队 / 已在跑（幂等，返回同一个 job_id）
+      * 409 reason=no_awards：该赛事没有获奖作品，AI 无素材可提炼
+      * 409 reason=cooldown：刚失败过，冷却中
+      * 429 当日预算或队列已满
+
+    灵感全部来自 awards，所以「有没有获奖作品」必须在入队前挡掉：
+    否则 analyzer 必然 exit != 0，只会白烧一次任务额度。
+    """
+    cid = int(competition_id)
+    state = db.get_inspiration_state(cid)
+    if state is None:
+        raise LookupError("竞赛 ID=%s 不存在" % cid)
+
+    if state["awards_count"] <= 0:
+        return {
+            "http": 409,
+            "payload": {
+                "competition_id": cid,
+                "status": "no_awards",
+                "awards_count": 0,
+                "reason": "no_awards",
+            },
+        }
+
+    if state["insights_count"] or state["ideas_count"]:
+        return {
+            "http": 200,
+            "payload": {
+                "competition_id": cid,
+                "status": "ready",
+                "insights_count": state["insights_count"],
+                "ideas_count": state["ideas_count"],
+            },
+        }
+
+    if db.count_active_ai_jobs("inspiration") >= max(
+        config.AI_INSPIRATION_QUEUE_MAX, 1
+    ):
+        return {
+            "http": 429,
+            "payload": {
+                "competition_id": cid,
+                "status": "throttled",
+                "reason": "queue_full",
+            },
+            "retry_after_sec": 60,
+        }
+
+    if db.count_ai_jobs_today("inspiration") >= max(
+        config.AI_INSPIRATION_DAILY_LIMIT, 1
+    ):
+        return {
+            "http": 429,
+            "payload": {
+                "competition_id": cid,
+                "status": "throttled",
+                "reason": "daily_budget",
+            },
+            "retry_after_sec": _seconds_until_midnight(),
+        }
+
+    claim = db.claim_ai_job(
+        "inspiration", cid,
+        trigger="on_demand",
+        requested_by=user_id,
+        request_ip=request_ip,
+        cooldown_minutes=max(config.AI_INSPIRATION_FAIL_COOLDOWN_MIN, 0),
+    )
+
+    if not claim.get("claimed"):
+        if claim.get("reason") == "cooldown":
+            return {
+                "http": 409,
+                "payload": {
+                    "competition_id": cid,
+                    "status": "failed",
+                    "reason": "cooldown",
+                },
+                "retry_after_sec": int(claim.get("retry_after_sec") or 60),
+            }
+        return {
+            "http": 202,
+            "payload": {
+                "competition_id": cid,
+                "status": "running",
+                "job_id": claim.get("job_id"),
+            },
+            "poll_after_ms": 4000,
+        }
+
+    job_id = int(claim["job_id"])
+    _EXECUTOR.submit(
+        run_inspiration_job, job_id, cid,
+        idea_n=int(config.AI_INSPIRATION_IDEA_N),
+        max_tokens=int(config.AI_INSPIRATION_MAX_TOKENS),
+    )
+    return {
+        "http": 202,
+        "payload": {
+            "competition_id": cid,
+            "status": "queued",
+            "job_id": job_id,
+        },
+        "poll_after_ms": 4000,
+    }
+
+
+def get_inspiration_status(competition_id: int) -> dict:
+    """GET 状态：与详情接口同一个 db 函数，口径不会漂。"""
+    state = db.get_inspiration_state(int(competition_id)) or {}
+    return {
+        "competition_id": int(competition_id),
+        "status": state.get("status", "idle"),
+        "job_id": state.get("job_id"),
+        "attempts": state.get("attempts", 0),
+        "awards_count": state.get("awards_count", 0),
+        "insights_count": state.get("insights_count", 0),
+        "ideas_count": state.get("ideas_count", 0),
+        "error": state.get("error"),
+        "generated_at": state.get("generated_at"),
+    }

@@ -3071,6 +3071,66 @@ def get_guide_state(competition_id: int) -> Optional[dict]:
     }
 
 
+def get_inspiration_state(competition_id: int) -> Optional[dict]:
+    """返回某赛事灵感生成（insights + ideas）的对外状态。
+
+    status: idle | queued | running | ready | failed
+
+    额外返回 awards_count：灵感是从获奖作品里提炼的，没有获奖作品就没有
+    可提炼的素材，前端据此把「生成专属灵感」按钮置灰（2026-11-13 新增）。
+    """
+    cid = int(competition_id)
+    with get_conn() as conn:
+        comp = conn.execute(
+            "SELECT id FROM competitions WHERE id = ?", (cid,)
+        ).fetchone()
+        if comp is None:
+            return None
+        awards = conn.execute(
+            "SELECT COUNT(*) AS n FROM awards WHERE competition_id = ?", (cid,)
+        ).fetchone()
+        ins = conn.execute(
+            "SELECT COUNT(*) AS n, MAX(created_at) AS t FROM insights "
+            "WHERE competition_id = ?", (cid,)
+        ).fetchone()
+        ideas = conn.execute(
+            "SELECT COUNT(*) AS n FROM ideas WHERE competition_id = ?", (cid,)
+        ).fetchone()
+        job = None
+        if _table_exists(conn, "ai_jobs"):
+            job = conn.execute(
+                "SELECT * FROM ai_jobs WHERE kind = 'inspiration' "
+                "AND competition_id = ? ORDER BY id DESC LIMIT 1",
+                (cid,),
+            ).fetchone()
+
+    insights_count = int(ins["n"] or 0) if ins is not None else 0
+    ideas_count = int(ideas["n"] or 0) if ideas is not None else 0
+    if job is not None and job["status"] in AI_JOB_ACTIVE_STATUSES:
+        status = job["status"]
+    elif insights_count or ideas_count:
+        status = "ready"
+    elif job is not None and job["status"] == "failed":
+        status = "failed"
+    else:
+        status = "idle"
+
+    return {
+        "status": status,
+        "job_id": int(job["id"]) if job is not None else None,
+        "attempts": int(job["attempts"]) if job is not None else 0,
+        "awards_count": int(awards["n"] or 0) if awards is not None else 0,
+        "insights_count": insights_count,
+        "ideas_count": ideas_count,
+        "error": (
+            job["error"]
+            if job is not None and job["status"] == "failed"
+            else None
+        ),
+        "generated_at": (ins["t"] if ins is not None else None),
+    }
+
+
 def count_orphan_ai_content(db_path: Optional[str] = None) -> dict:
     """统计 competition_id 为空或指向不存在赛事的 insights / ideas。
 

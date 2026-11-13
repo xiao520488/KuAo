@@ -143,3 +143,17 @@ AI_GUIDE_DAILY_LIMIT = _get_int("AI_GUIDE_DAILY_LIMIT", 8)
 AI_GUIDE_QUEUE_MAX = _get_int("AI_GUIDE_QUEUE_MAX", 5)
 # 同一赛事失败后的按需冷却（分钟）；定时任务另有 3 天冷却
 AI_GUIDE_FAIL_COOLDOWN_MIN = _get_int("AI_GUIDE_FAIL_COOLDOWN_MIN", 30)
+
+# ------------------------------------------------------------
+# 灵感按需生成（2026-11-13 新增）
+# ------------------------------------------------------------
+# 一次灵感生成 = 3 次 insight + 若干批 ideas，token 消耗约为攻略的 2 倍，
+# 因此全站每日上限与队列上限都收得比攻略更紧；没有获奖作品的赛事直接拒绝。
+AI_INSPIRATION_DAILY_LIMIT = _get_int("AI_INSPIRATION_DAILY_LIMIT", 6)
+AI_INSPIRATION_QUEUE_MAX = _get_int("AI_INSPIRATION_QUEUE_MAX", 2)
+AI_INSPIRATION_FAIL_COOLDOWN_MIN = _get_int(
+    "AI_INSPIRATION_FAIL_COOLDOWN_MIN", 30
+)
+# 每次生成几条选题灵感（insights 固定 3 条由 analyzer 内部决定）
+AI_INSPIRATION_IDEA_N = _get_int("AI_INSPIRATION_IDEA_N", 4)
+AI_INSPIRATION_MAX_TOKENS = _get_int("AI_INSPIRATION_MAX_TOKENS", 8000)
