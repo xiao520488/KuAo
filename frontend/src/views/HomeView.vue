@@ -2,6 +2,7 @@
 import { computed, ref, watch, onMounted, onBeforeUnmount } from 'vue'
 import Header from '@/components/Header.vue'
 import CompetitionCard from '@/components/CompetitionCard.vue'
+import CoverArt from '@/components/CoverArt.vue'
 import BackToTop from '@/components/BackToTop.vue'
 import { useRoute, useRouter } from 'vue-router'
 import { getHotCompetitions, searchCompetitions, checkPrepared } from '@/services/api'
@@ -359,25 +360,14 @@ watch(
       class="relative flex flex-col overflow-hidden"
       :class="theme === 'official' ? 'min-h-[calc(100vh_-_6rem)]' : 'min-h-screen'"
     >
-      <!-- 「官方风」Hero 背景：校园主题背景图，上方只盖一层很轻的白色薄纱 + 轻微模糊，
-           既保留底图原本的样子，又保证标题、副标题与搜索框清晰可读 -->
-      <div
-        v-if="theme === 'official'"
-        class="pointer-events-none absolute inset-0 z-0"
-        aria-hidden="true"
-      >
-        <div class="hero-official-bg absolute inset-0"></div>
-        <div class="absolute inset-0 bg-white/25 backdrop-blur-sm"></div>
-      </div>
-
-      <!-- 背景装饰光晕（极简风 / 科技蓝） -->
-      <div v-else class="pointer-events-none absolute inset-0 -z-10">
-        <div class="absolute -top-32 left-1/2 -translate-x-1/2 h-[420px] w-[820px]
-                    rounded-full bg-blue-300/30 blur-3xl"></div>
-        <div class="absolute top-40 -left-24 h-[320px] w-[320px]
-                    rounded-full bg-sky-200/40 blur-3xl"></div>
-        <div class="absolute top-24 -right-24 h-[320px] w-[320px]
-                    rounded-full bg-indigo-200/40 blur-3xl"></div>
+      <!-- Hero 背景：与列表卡片、详情页同一套封面材质（CoverArt banner 变体）
+           只当底片用，上面压一层径向白纱，中间文字区干净、四周露出纸纹/点阵/母题 -->
+      <div class="pointer-events-none absolute inset-0 z-0" aria-hidden="true">
+        <CoverArt variant="banner" class="absolute inset-0" title="库奥 大学生竞赛智库" />
+        <div
+          class="absolute inset-0"
+          :class="theme === 'tech' ? 'hero-wash hero-wash--dark' : 'hero-wash hero-wash--light'"
+        ></div>
       </div>
 
       <!-- 「官方风」专属：Hero 底部的多层渐变波浪过渡
@@ -686,22 +676,17 @@ watch(
 </template>
 
 <style scoped>
-/* 「官方风」Hero 背景：
- * - 移动端（< 768px）完全不加载大图，用同色系渐变兜底，避免首屏被图片拖慢；
- * - 桌面端才请求压缩后的 2560px 背景图（已从 4K/965 KB 压到约 90 KB）。
- * 图片只写在媒体查询内，手机端不会发起该资源请求。 */
-.hero-official-bg {
-  background-color: #eaf6f2;
-  background-image: linear-gradient(160deg, #eef8f5 0%, #e2f2ec 52%, #f7fbf9 100%);
-  background-position: center;
-  background-repeat: no-repeat;
-  background-size: cover;
+/* Hero 底片的纱层：中间留白给标题和搜索框，四周逐步露出材质 */
+.hero-wash--light {
+  background:
+    radial-gradient(120% 92% at 50% 38%, rgb(255 255 255 / 0.9) 0%, rgb(255 255 255 / 0.78) 40%,
+      rgb(255 255 255 / 0.42) 68%, rgb(255 255 255 / 0.12) 100%);
 }
 
-@media (min-width: 768px) {
-  .hero-official-bg {
-    background-image: url('@/assets/hero-bg.jpg');
-  }
+.hero-wash--dark {
+  background:
+    radial-gradient(120% 92% at 50% 38%, rgb(7 16 38 / 0.88) 0%, rgb(7 16 38 / 0.74) 42%,
+      rgb(7 16 38 / 0.42) 70%, rgb(7 16 38 / 0.16) 100%);
 }
 
 /* 多层波浪持续交错流动：整组左移一个完整周期（1440 用户单位）后无缝回到起点。

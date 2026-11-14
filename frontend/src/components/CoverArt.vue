@@ -114,12 +114,22 @@ const sealY = computed(() => Math.round((drift.value.glowY / 100) * 900 + 150))
 const styleVars = computed(() => ({ '--accent-h': hue.value }))
 
 const sizeClass = computed(() => (
-  props.variant === 'hero' ? 'cover-art--hero' : props.variant === 'thumb' ? 'cover-art--thumb' : ''
+  props.variant === 'hero'
+    ? 'cover-art--hero'
+    : props.variant === 'thumb'
+      ? 'cover-art--thumb'
+      : props.variant === 'banner'
+        ? 'cover-art--banner'
+        : ''
 ))
 
 // 详情页头图是超宽画幅（约 4.8:1），16:9 的上下边会被裁掉：
 // 边框类装饰在头图里改成「页边线 + 左侧色条」，否则只剩两条断掉的竖线
 const isHero = computed(() => props.variant === 'hero')
+
+// 首页首屏横幅：只当材质底片用，不放徽记/标签，也不画任何边框
+const isBanner = computed(() => props.variant === 'banner')
+const showFrame = computed(() => !isHero.value && !isBanner.value)
 </script>
 
 <template>
@@ -260,18 +270,18 @@ const isHero = computed(() => props.variant === 'hero')
           <path d="M-40 722 C 230 668, 470 776, 760 722 S 1290 668, 1660 722" />
         </g>
 
-        <!-- 双线内框：卡片用完整边框，头图只留页边线 -->
-        <g v-if="!isHero">
+        <!-- 双线内框：卡片用完整边框，头图只留页边线，首屏横幅不画框 -->
+        <g v-if="showFrame">
           <rect x="28" y="28" width="1544" height="844" fill="none" :stroke="ink" stroke-opacity="0.36" stroke-width="2.5" />
           <rect x="46" y="46" width="1508" height="808" fill="none" :stroke="ink" stroke-opacity="0.2" stroke-width="1.2" />
         </g>
-        <template v-else>
+        <template v-else-if="isHero">
           <rect x="0" y="452" width="1600" height="2" :fill="ink" opacity="0.14" />
           <rect x="0" y="0" width="10" height="900" :fill="accent" opacity="0.55" />
         </template>
 
         <!-- 印章环：双环 + 齿边 + 竖排大类名，整体微倾、环有断口，像真盖上去的 -->
-        <g :transform="`translate(1352 ${sealY}) rotate(${drift.rotate - 6.5})`" fill="none" :stroke="accent" stroke-opacity="0.42">
+        <g v-if="!isBanner" :transform="`translate(1352 ${sealY}) rotate(${drift.rotate - 6.5})`" fill="none" :stroke="accent" stroke-opacity="0.42">
           <circle r="116" :fill="accent" fill-opacity="0.05" stroke="none" />
           <circle r="140" stroke-width="3.6" stroke-dasharray="742 34" stroke-dashoffset="120" />
           <circle r="116" stroke-width="1.6" stroke-dasharray="4 10" />
@@ -306,7 +316,7 @@ const isHero = computed(() => props.variant === 'hero')
         <rect v-if="isHero" x="0" y="0" width="10" height="900" :fill="accent" opacity="0.5" />
         <rect x="0" y="897" width="1600" height="3" fill="#0f172a" fill-opacity="0.07" />
         <!-- 对角对齐角标：极简海报的定位记号 -->
-        <g v-if="!isHero" fill="none" :stroke="accent" stroke-opacity="0.5" stroke-width="2">
+        <g v-if="showFrame" fill="none" :stroke="accent" stroke-opacity="0.5" stroke-width="2">
           <path d="M56 96V56h40" />
           <path d="M1544 804v40h-40" />
         </g>
@@ -525,6 +535,11 @@ const isHero = computed(() => props.variant === 'hero')
 
 .cover-art__row {
   gap: 2.4cqw;
+}
+
+/* 首屏横幅只当材质底片用：徽记和标签交给页面自己排版 */
+.cover-art--banner .cover-art__row {
+  display: none;
 }
 
 .cover-mark--wide {
