@@ -381,7 +381,7 @@ watch(
            pointer-events-none 保证不拦截首屏交互。 -->
       <svg
         v-if="theme === 'official'"
-        class="pointer-events-none absolute inset-x-0 bottom-0 z-[1] h-[72px] w-full md:h-[104px]"
+        class="hero-waves pointer-events-none absolute inset-x-0 bottom-0 z-[1] h-[64px] w-full md:h-[92px]"
         viewBox="0 0 1440 140"
         preserveAspectRatio="none"
         aria-hidden="true"
@@ -676,6 +676,11 @@ watch(
 </template>
 
 <style scoped>
+/* 波浪压在纸面地平线上，压到 0.6 才不会在浅底上跳出来 */
+.hero-waves {
+  opacity: 0.6;
+}
+
 /* Hero 底片的纱层：中间留白给标题和搜索框，四周逐步露出材质 */
 .hero-wash--light {
   background:

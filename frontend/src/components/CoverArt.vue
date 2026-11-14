@@ -199,6 +199,13 @@ const showFrame = computed(() => !isHero.value && !isBanner.value)
         <pattern :id="`${uid}-dots`" width="26" height="26" patternUnits="userSpaceOnUse">
           <circle cx="1.6" cy="1.6" r="1.1" fill="#1f3a5f" fill-opacity="0.16" />
         </pattern>
+        <!-- 首屏横幅专用：底部一层很淡的薄荷地平线，让外部的动态波浪有落点 -->
+        <linearGradient :id="`${uid}-horizon`" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="#dcf1ec" stop-opacity="0" />
+          <stop offset="40%" stop-color="#d8f0ea" stop-opacity="0.5" />
+          <stop offset="76%" stop-color="#cfeae4" stop-opacity="0.62" />
+          <stop offset="100%" stop-color="#eef8f5" stop-opacity="0.06" />
+        </linearGradient>
 
         <!-- 极简风：微网格 + 极浅纸面 -->
         <pattern :id="`${uid}-micro`" width="48" height="48" patternUnits="userSpaceOnUse">
@@ -260,7 +267,8 @@ const showFrame = computed(() => !isHero.value && !isBanner.value)
           ry="520"
           :fill="`url(#${uid}-paperwash)`"
         />
-        <rect width="1600" height="900" :fill="`url(#${uid}-dots)`" opacity="0.55" />
+        <rect width="1600" height="900" :fill="`url(#${uid}-dots)`" :opacity="isBanner ? 0.85 : 0.55" />
+        <rect v-if="isBanner" x="0" y="640" width="1600" height="260" :fill="`url(#${uid}-horizon)`" />
 
         <!-- 证书波纹：两条相位错开的正弦，极低透明度 -->
         <g fill="none" :stroke="ink" stroke-opacity="0.1" stroke-width="1.6">
@@ -302,6 +310,7 @@ const showFrame = computed(() => !isHero.value && !isBanner.value)
           >{{ fb.major || fb.catLabel }}</text>
         </g>
 
+        <!-- 首屏横幅：官方风不再加任何装饰，靠纸纹 + 地平线 + 外部动态波浪收尾 -->
         <!-- 顶部类别色细条 -->
         <rect x="0" y="0" width="1600" height="7" :fill="accent" opacity="0.9" />
       </template>
@@ -315,6 +324,17 @@ const showFrame = computed(() => !isHero.value && !isBanner.value)
         <rect x="520" y="0" width="1080" height="4" fill="#0f172a" fill-opacity="0.08" />
         <rect v-if="isHero" x="0" y="0" width="10" height="900" :fill="accent" opacity="0.5" />
         <rect x="0" y="897" width="1600" height="3" fill="#0f172a" fill-opacity="0.07" />
+        <!-- 首屏横幅专用：底部一条刻度尺代替环形母题（极简风不用圆） -->
+        <g v-if="isBanner" :stroke="ink" stroke-opacity="0.2" stroke-width="1.2">
+          <path d="M96 806H1504" />
+          <path d="M184 806v40" /><path d="M272 806v22" /><path d="M360 806v40" />
+          <path d="M448 806v22" /><path d="M536 806v40" /><path d="M624 806v22" />
+          <path d="M712 806v40" /><path d="M800 806v22" /><path d="M888 806v40" />
+          <path d="M976 806v22" /><path d="M1064 806v40" /><path d="M1152 806v22" />
+          <path d="M1240 806v40" /><path d="M1328 806v22" /><path d="M1416 806v40" />
+        </g>
+        <rect v-if="isBanner" x="96" y="802" width="88" height="4" :fill="accent" opacity="0.75" />
+
         <!-- 对角对齐角标：极简海报的定位记号 -->
         <g v-if="showFrame" fill="none" :stroke="accent" stroke-opacity="0.5" stroke-width="2">
           <path d="M56 96V56h40" />
@@ -323,7 +343,9 @@ const showFrame = computed(() => !isHero.value && !isBanner.value)
       </template>
 
       <!-- ================= 几何母题（三套材质共用同一套形状） ================= -->
+      <!-- 首屏横幅：浅色材质不用环形母题（在大画幅上会变成星空感），只有科技蓝保留 -->
       <g
+        v-if="!isBanner || mode === 'tech'"
         fill="none"
         :stroke="motifStroke"
         :stroke-width="motifWidth"
