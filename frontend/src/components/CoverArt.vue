@@ -74,7 +74,7 @@ const inkHair = 'rgb(31 58 95 / 0.16)'
 const motifStroke = computed(() => (
   mode.value === 'tech' ? `url(#${uid}-stroke)` : mode.value === 'official' ? accent.value : accent.value
 ))
-const motifWidth = computed(() => (mode.value === 'tech' ? 4 : mode.value === 'official' ? 3 : 2.2))
+const motifWidth = computed(() => (mode.value === 'tech' ? 4 : mode.value === 'official' ? 3 : 1.8))
 const motifFilter = computed(() => (mode.value === 'tech' ? 'drop-shadow(0 4px 22px rgb(120 170 255 / 0.45))' : 'none'))
 const motifOpacity = computed(() => (mode.value === 'tech' ? 1 : 0.95))
 // 官方风右侧要留印章位，线稿整体左移一点，避免压住印章文字
@@ -269,17 +269,22 @@ const isHero = computed(() => props.variant === 'hero')
           <rect x="0" y="0" width="10" height="900" :fill="accent" opacity="0.55" />
         </template>
 
-        <!-- 印章环：双环 + 齿边 + 竖排大类名，颜色跟类别走 -->
-        <g :transform="`translate(1352 ${sealY})`" fill="none" :stroke="accent" stroke-opacity="0.4">
-          <circle r="140" stroke-width="4" />
+        <!-- 印章环：双环 + 齿边 + 竖排大类名，整体微倾、环有断口，像真盖上去的 -->
+        <g :transform="`translate(1352 ${sealY}) rotate(${drift.rotate - 6.5})`" fill="none" :stroke="accent" stroke-opacity="0.42">
+          <circle r="116" :fill="accent" fill-opacity="0.05" stroke="none" />
+          <circle r="140" stroke-width="3.6" stroke-dasharray="742 34" stroke-dashoffset="120" />
           <circle r="116" stroke-width="1.6" stroke-dasharray="4 10" />
+          <circle r="128" stroke-width="0.8" stroke-opacity="0.6" />
+          <g stroke-width="1.8" stroke-opacity="0.5">
+            <path d="M-150 -46h-11" /><path d="M-150 46h-11" />
+            <path d="M150 -46h11" /><path d="M150 46h11" />
+          </g>
           <text
             y="18"
             text-anchor="middle"
             :fill="accent"
-            :fill-opacity="0.55"
+            :fill-opacity="0.58"
             stroke="none"
-            :transform="`rotate(${drift.rotate - 4})`"
             font-size="52"
             font-weight="700"
             letter-spacing="4"
@@ -294,10 +299,16 @@ const isHero = computed(() => props.variant === 'hero')
         <rect width="1600" height="900" :fill="`url(#${uid}-plain)`" />
         <ellipse cx="1120" cy="420" rx="620" ry="430" :fill="`url(#${uid}-soft)`" />
         <rect width="1600" height="900" :fill="`url(#${uid}-micro)`" />
-        <!-- 顶边发丝线：唯一的类别色锚点，细到像印刷对位线 -->
-        <rect x="0" y="0" width="1600" height="3" :fill="accent" opacity="0.75" />
+        <!-- 索引条：类别色只占左上三分之一，右侧留灰线接住 -->
+        <rect x="0" y="0" width="520" height="4" :fill="accent" opacity="0.8" />
+        <rect x="520" y="0" width="1080" height="4" fill="#0f172a" fill-opacity="0.08" />
         <rect v-if="isHero" x="0" y="0" width="10" height="900" :fill="accent" opacity="0.5" />
         <rect x="0" y="897" width="1600" height="3" fill="#0f172a" fill-opacity="0.07" />
+        <!-- 对角对齐角标：极简海报的定位记号 -->
+        <g v-if="!isHero" fill="none" :stroke="accent" stroke-opacity="0.5" stroke-width="2">
+          <path d="M56 96V56h40" />
+          <path d="M1544 804v40h-40" />
+        </g>
       </template>
 
       <!-- ================= 几何母题（三套材质共用同一套形状） ================= -->
