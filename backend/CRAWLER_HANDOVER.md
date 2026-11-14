@@ -1272,3 +1272,21 @@ venv\Scripts\python.exe crawler_official_awards.py --source jzz --apply         
 
 **结果**：`awards` 364 行（2025 159 + 2026 205），`/api/competitions/120/awards` 返回 `total=364`、
 `offset=340` 取到 20 条；全库 awards 14,612。
+
+### 13.9 金种子杯 `tech_stack` 批量补全（2026-11-14）
+
+官方名单 PDF **只带赛道，不带技术栈**（赛道 364 条已 100% 齐全），真正的空白是 `awards.tech_stack`。
+
+`backfill_jzz_tech_stack.py`：
+
+| 参数 | 作用 |
+|---|---|
+| `--batch 12` | 每批 12 条项目一起问模型，省 token |
+| `--limit N` / `--max-batches N` | 试跑用 |
+| `--apply` | 真写 `awards.tech_stack`（JSON 数组） |
+| `--force` | 覆盖已有值 |
+| 缓存 | `workspace/jzz_techstack_cache.json`，中断可续跑 |
+
+Prompt 约束：2–6 个标签、英文技术名 + 中文领域词、禁泛词；返回 `{"items":[{"id":..,"tech_stack":[..]}]}`，
+经 `_clean_tags()` 校验（去重、≤24 字、屏蔽「人工智能/软件」这类空话）。
+单批 12 条约 1.1k tokens，全量 364 条约 30 批。
