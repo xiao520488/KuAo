@@ -390,20 +390,20 @@ watch(
         <defs>
           <!-- 第一层：浅蓝渐变 -->
           <linearGradient id="official-wave-layer-blue" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stop-color="#8fd0e6" stop-opacity="0.9" />
-            <stop offset="45%" stop-color="#b6e2ee" stop-opacity="0.55" />
-            <stop offset="100%" stop-color="#e6f6fb" stop-opacity="0" />
+            <stop offset="0%" stop-color="#7fb0d6" stop-opacity="0.85" />
+            <stop offset="45%" stop-color="#b8d1e6" stop-opacity="0.5" />
+            <stop offset="100%" stop-color="#e9f1f8" stop-opacity="0" />
           </linearGradient>
           <!-- 第二层：薄荷绿渐变 -->
           <linearGradient id="official-wave-layer-mint" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stop-color="#8fd8b8" stop-opacity="0.85" />
-            <stop offset="45%" stop-color="#bfead4" stop-opacity="0.5" />
-            <stop offset="100%" stop-color="#f0fbf5" stop-opacity="0" />
+            <stop offset="0%" stop-color="#9fb6d4" stop-opacity="0.7" />
+            <stop offset="45%" stop-color="#c8d7e8" stop-opacity="0.4" />
+            <stop offset="100%" stop-color="#f1f5fa" stop-opacity="0" />
           </linearGradient>
           <!-- 第三层（最前）：浅绿 → 纯白，底部与竞赛列表白底融为一体 -->
           <linearGradient id="official-hero-wave" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stop-color="#d3f2e4" />
-            <stop offset="50%" stop-color="#effbf6" />
+            <stop offset="0%" stop-color="#dce7f6" />
+            <stop offset="50%" stop-color="#eff3fa" />
             <stop offset="100%" stop-color="#ffffff" />
           </linearGradient>
         </defs>
@@ -441,41 +441,25 @@ watch(
 
       <!-- 内容区：官方风左对齐排成「文件头」，其余主题保持水平居中 -->
       <div
-        class="relative z-10 flex flex-1 flex-col justify-center px-6 pt-16 pb-52"
+        class="relative z-10 flex flex-1 flex-col justify-center px-6 pt-16 pb-52 lg:px-0"
         :class="theme === 'official'
           ? 'mx-auto w-full max-w-6xl items-start text-left'
           : 'items-center text-center'"
       >
-        <!-- 官方风：右侧目录索引，把公文语汇立起来 -->
-        <aside
+        <!-- 官方风：小型大写眉标 -->
+        <p
           v-if="theme === 'official'"
-          class="absolute right-0 top-[104px] hidden w-[286px] lg:block"
-          aria-hidden="true"
-        >
-          <p class="doc-index__label">目录 / Contents</p>
-          <ul class="doc-index">
-            <li><span class="doc-index__no">Ⅰ</span><span class="doc-index__t">赛事检索</span><span class="doc-index__v">85</span></li>
-            <li><span class="doc-index__no">Ⅱ</span><span class="doc-index__t">备战工作台</span><span class="doc-index__v">AI</span></li>
-            <li><span class="doc-index__no">Ⅲ</span><span class="doc-index__t">获奖作品库</span><span class="doc-index__v">档案</span></li>
-          </ul>
-        </aside>
-        <!-- 官方风：文件头（双线 + 刊名 + 汇编号） -->
-        <div
-          v-if="theme === 'official'"
-          class="hero-in doc-head mb-12 w-full lg:pr-[330px]"
+          class="hero-in iss-eyebrow mb-7"
           :style="{ animationDelay: '0ms' }"
         >
-          <div class="doc-head__row">
-            <span class="doc-head__name">库奥 · 竞赛智库</span>
-            <span class="doc-head__no">NO. 2027 / 汇编第一卷</span>
-          </div>
-        </div>
+          竞赛情报 · Competition Intelligence
+        </p>
 
         <!-- 大标题 -->
         <h1
           class="hero-in"
           :class="theme === 'official'
-            ? 'font-serif text-4xl leading-[1.18] font-bold tracking-normal md:text-5xl lg:text-[56px]'
+            ? 'text-4xl leading-[1.08] font-bold tracking-[-0.03em] md:text-5xl lg:text-[54px]'
             : 'text-3xl sm:text-4xl md:text-5xl lg:text-6xl font-extrabold tracking-tight text-slate-900 dark:text-slate-100'"
           :style="{ animationDelay: '0ms' }"
         >
@@ -486,7 +470,7 @@ watch(
         <p
           class="hero-in mt-6 leading-relaxed font-medium"
           :class="theme === 'official'
-            ? 'max-w-[46ch] text-sm text-slate-600 md:text-[15px]'
+            ? 'max-w-[52ch] text-[15px] leading-[1.75] text-slate-600'
             : 'max-w-none text-xs text-slate-500 dark:text-slate-400 sm:whitespace-nowrap sm:text-sm md:text-base'"
           :style="{ animationDelay: '120ms' }"
         >
@@ -551,6 +535,26 @@ watch(
           </button>
         </div>
 
+        <!-- 官方风：首屏数据条（情报台的量感，不用文档编号那套） -->
+        <div
+          v-if="theme === 'official'"
+          class="hero-in stat-strip mt-12 w-full"
+          :style="{ animationDelay: '320ms' }"
+        >
+          <div class="stat-strip__item">
+            <span class="stat-strip__num">4<small>类</small></span>
+            <span class="stat-strip__label">学科门类</span>
+          </div>
+          <div class="stat-strip__item">
+            <span class="stat-strip__num">AI</span>
+            <span class="stat-strip__label">语义检索引擎</span>
+          </div>
+          <div class="stat-strip__item">
+            <span class="stat-strip__num">全周期</span>
+            <span class="stat-strip__label">报名 · 备赛 · 复盘</span>
+          </div>
+        </div>
+
         <!-- 检索失败提示 -->
         <p v-if="searchError" class="mt-3 flex items-center gap-1.5 text-sm font-medium text-rose-600">
           <svg class="h-4 w-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
@@ -590,7 +594,7 @@ watch(
         class="mb-10"
         :class="theme === 'official' ? 'doc-section-head' : 'text-center'"
       >
-        <span v-if="theme === 'official'" class="doc-kicker mb-3">Index</span>
+        <span v-if="theme === 'official'" class="doc-kicker mb-3">01 · 赛事索引</span>
         <h2 class="text-2xl font-extrabold tracking-tight text-slate-900 dark:text-slate-100">
           {{ searched ? '检索结果' : '热门竞赛' }}
         </h2>

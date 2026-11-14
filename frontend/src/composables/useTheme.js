@@ -22,7 +22,7 @@ export const THEMES = [
   {
     id: 'official',
     label: '官方风',
-    hint: '纸张质感 + 会流动的地平线波浪'
+    hint: '冷灰蓝纸面 + 数据条 + 墨蓝强调'
   },
   {
     id: 'minimal',

@@ -201,10 +201,10 @@ const showFrame = computed(() => !isHero.value && !isBanner.value)
         </pattern>
         <!-- 首屏横幅专用：底部一层很淡的薄荷地平线，让外部的动态波浪有落点 -->
         <linearGradient :id="`${uid}-horizon`" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stop-color="#dcf1ec" stop-opacity="0" />
-          <stop offset="40%" stop-color="#d8f0ea" stop-opacity="0.5" />
-          <stop offset="76%" stop-color="#cfeae4" stop-opacity="0.62" />
-          <stop offset="100%" stop-color="#eef8f5" stop-opacity="0.06" />
+          <stop offset="0%" stop-color="#dbe5f4" stop-opacity="0" />
+          <stop offset="40%" stop-color="#d6e1f2" stop-opacity="0.5" />
+          <stop offset="76%" stop-color="#ccdaee" stop-opacity="0.6" />
+          <stop offset="100%" stop-color="#eff4fb" stop-opacity="0.06" />
         </linearGradient>
 
         <!-- 极简风：微网格 + 极浅纸面 -->
