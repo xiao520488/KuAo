@@ -8,6 +8,10 @@
 // 具体明度/饱和度不在这里定，交给 CSS 统一控制，保证任何色相下的对比度达标。
 import { resolveCategory } from './competitionCategory'
 
+// 是否允许用爬来的外站海报当封面。false = 全站只用统一的程序化封面（CoverArt），
+// 保证 85 张卡片风格一致；以后要接 AI 生成的本地图片，改成 true 并写 image_url 即可。
+export const COVER_USE_REMOTE = false
+
 const LEADING_NOISE = /^[\s"'“”‘’《》〈〉【】\[\]（）()\-—·]+/
 const GLYPH = /[\u3400-\u4dbf\u4e00-\u9fffA-Za-z0-9]/
 const HAN = /[\u3400-\u4dbf\u4e00-\u9fff]/g

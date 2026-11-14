@@ -7,7 +7,8 @@ import Header from '@/components/Header.vue'
 import { getCompetitionDetail, requestGuide, getGuideStatus } from '@/services/api'
 import { isLoggedIn } from '@/services/auth'
 import { openAuthModal } from '@/composables/useAuthModal'
-import { coverFallback } from '@/utils/coverFallback'
+import { COVER_USE_REMOTE } from '@/utils/coverFallback'
+import CoverArt from '@/components/CoverArt.vue'
 
 const route = useRoute()
 
@@ -15,15 +16,9 @@ const detail = ref(null)
 const loading = ref(true)
 const errorMsg = ref('')
 
-// 详情页大图兜底：无图 / 加载失败时按赛事大类取色的徽记（图标 + 分类），尺寸保持不变
+// 详情页大图：与列表统一的程序化封面（CoverArt），除非开启 COVER_USE_REMOTE 且确有图片
 const heroFailed = ref(false)
-const heroFallback = computed(() =>
-  coverFallback({
-    title: detail.value?.title || '竞赛',
-    shortName: detail.value?.short_name || '',
-    category: detail.value?.category || ''
-  })
-)
+const heroArt = computed(() => !COVER_USE_REMOTE || !detail.value?.image || heroFailed.value)
 
 function onHeroError() {
   heroFailed.value = true
@@ -421,29 +416,24 @@ const guideReady = computed(() => Boolean(detail.value?.full_process_guide))
              只 shrink 不 crop：object-contain 保证海报上的标题/文字完整可见，
              比例不匹配时的留白由容器背景色兜住，不再切掉核心文字。 -->
         <div class="mt-8 w-full">
-          <div class="w-full overflow-hidden rounded-2xl bg-[#f8f9fa] ring-1 ring-slate-200/60 dark:bg-slate-800/60 dark:ring-slate-700/60">
-            <img
-              v-if="detail?.image && !heroFailed"
-              :src="detail.image"
-              alt=""
-              class="block h-auto w-full object-contain object-center"
-              style="max-height: 400px"
-              @error="onHeroError"
-            />
-            <!-- 无图 / 加载失败：容器固定高度保证兜底色块有尺寸，渐变压暗后与页面协调 -->
-            <div v-else class="h-[240px] w-full sm:h-[320px]">
-              <div
-                class="cover-fallback cover-fallback--hero"
-                :data-tone="heroFallback.tone"
-                :style="{ '--cover-hue': heroFallback.hue }"
-                aria-hidden="true"
-              >
-                <span
-                  class="cover-fallback__mark"
-                  :class="{ 'cover-fallback__mark--short': heroFallback.isShortName }"
-                >{{ heroFallback.glyph }}</span>
-                <span class="cover-fallback__label">{{ heroFallback.catLabel }}</span>
-              </div>
+          <div class="w-full overflow-hidden rounded-2xl bg-[#0a1730] ring-1 ring-slate-200/60 dark:ring-slate-700/60">
+            <div class="h-[220px] w-full sm:h-[300px]">
+              <CoverArt
+                v-if="heroArt"
+                :title="detail?.name || ''"
+                :short-name="detail?.short_name || ''"
+                :category="detail?.category || ''"
+                :seed="detail?.id || route.params.id"
+                variant="hero"
+                class="h-full w-full"
+              />
+              <img
+                v-else
+                :src="detail.image"
+                alt=""
+                class="block h-full w-full object-cover object-center"
+                @error="onHeroError"
+              />
             </div>
           </div>
         </div>
