@@ -439,11 +439,44 @@ watch(
         </g>
       </svg>
 
-      <!-- 内容区：水平居中，整体上移，使胶囊搜索框落在视口垂直正中 -->
-      <div class="relative z-10 flex flex-1 flex-col items-center justify-center px-6 pt-16 pb-52 text-center">
+      <!-- 内容区：官方风左对齐排成「文件头」，其余主题保持水平居中 -->
+      <div
+        class="relative z-10 flex flex-1 flex-col justify-center px-6 pt-16 pb-52"
+        :class="theme === 'official'
+          ? 'mx-auto w-full max-w-6xl items-start text-left'
+          : 'items-center text-center'"
+      >
+        <!-- 官方风：右侧目录索引，把公文语汇立起来 -->
+        <aside
+          v-if="theme === 'official'"
+          class="absolute right-0 top-[104px] hidden w-[286px] lg:block"
+          aria-hidden="true"
+        >
+          <p class="doc-index__label">目录 / Contents</p>
+          <ul class="doc-index">
+            <li><span class="doc-index__no">Ⅰ</span><span class="doc-index__t">赛事检索</span><span class="doc-index__v">85</span></li>
+            <li><span class="doc-index__no">Ⅱ</span><span class="doc-index__t">备战工作台</span><span class="doc-index__v">AI</span></li>
+            <li><span class="doc-index__no">Ⅲ</span><span class="doc-index__t">获奖作品库</span><span class="doc-index__v">档案</span></li>
+          </ul>
+        </aside>
+        <!-- 官方风：文件头（双线 + 刊名 + 汇编号） -->
+        <div
+          v-if="theme === 'official'"
+          class="hero-in doc-head mb-12 w-full lg:pr-[330px]"
+          :style="{ animationDelay: '0ms' }"
+        >
+          <div class="doc-head__row">
+            <span class="doc-head__name">库奥 · 竞赛智库</span>
+            <span class="doc-head__no">NO. 2027 / 汇编第一卷</span>
+          </div>
+        </div>
+
         <!-- 大标题 -->
         <h1
-          class="hero-in text-3xl sm:text-4xl md:text-5xl lg:text-6xl font-extrabold tracking-tight text-slate-900 dark:text-slate-100"
+          class="hero-in"
+          :class="theme === 'official'
+            ? 'font-serif text-4xl leading-[1.18] font-bold tracking-normal md:text-5xl lg:text-[56px]'
+            : 'text-3xl sm:text-4xl md:text-5xl lg:text-6xl font-extrabold tracking-tight text-slate-900 dark:text-slate-100'"
           :style="{ animationDelay: '0ms' }"
         >
           大学生竞赛智库
@@ -451,7 +484,10 @@ watch(
 
         <!-- 副标题 -->
         <p
-          class="hero-in mt-6 max-w-none text-xs leading-relaxed text-slate-500 dark:text-slate-400 font-medium sm:whitespace-nowrap sm:text-sm md:text-base"
+          class="hero-in mt-6 leading-relaxed font-medium"
+          :class="theme === 'official'
+            ? 'max-w-[46ch] text-sm text-slate-600 md:text-[15px]'
+            : 'max-w-none text-xs text-slate-500 dark:text-slate-400 sm:whitespace-nowrap sm:text-sm md:text-base'"
           :style="{ animationDelay: '120ms' }"
         >
           库奥 | 这是一个融合大学生竞赛信息与AI技术的智库，致力于助你科学、系统地完成整个竞赛周期。
@@ -459,12 +495,12 @@ watch(
 
         <!-- 搜索框 -->
         <div
-          class="hero-in mx-auto mt-12 flex w-[90%] max-w-4xl items-center gap-3 md:w-full
+          class="hero-in hero-search mt-12 flex items-center gap-3 px-6 py-3
                  rounded-full bg-white/90 dark:bg-slate-800/90 backdrop-blur
-                 px-6 py-3
                  shadow-xl shadow-slate-900/10 ring-1 ring-slate-200/70 dark:ring-slate-700
                  transition-shadow focus-within:shadow-2xl focus-within:shadow-blue-600/10
                  focus-within:ring-blue-300/60"
+          :class="theme === 'official' ? 'w-full max-w-3xl' : 'mx-auto w-[90%] max-w-4xl md:w-full'"
           :style="{ animationDelay: '240ms' }"
         >
           <!-- 放大镜 Icon -->
@@ -528,10 +564,10 @@ watch(
       <!-- 首屏底部居中：向下探索 -->
       <button
         type="button"
-        class="absolute bottom-24 left-1/2 z-10 -translate-x-1/2
-               flex flex-col items-center gap-2 text-slate-500 dark:text-slate-400
+        class="absolute bottom-24 z-10 flex flex-col items-center gap-2 text-slate-500 dark:text-slate-400
                transition-colors hover:text-blue-600 dark:hover:text-blue-400
                focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 rounded-lg"
+        :class="theme === 'official' ? 'left-1/2 hidden -translate-x-[576px] md:flex' : 'left-1/2 -translate-x-1/2'"
         @click="scrollToList"
       >
         <span class="text-sm font-bold tracking-widest">向下探索</span>
@@ -550,7 +586,11 @@ watch(
       id="competition-list"
       class="mx-auto w-[85%] max-w-6xl pt-24 pb-28 scroll-mt-24"
     >
-      <div class="mb-10 text-center">
+      <div
+        class="mb-10"
+        :class="theme === 'official' ? 'doc-section-head' : 'text-center'"
+      >
+        <span v-if="theme === 'official'" class="doc-kicker mb-3">Index</span>
         <h2 class="text-2xl font-extrabold tracking-tight text-slate-900 dark:text-slate-100">
           {{ searched ? '检索结果' : '热门竞赛' }}
         </h2>

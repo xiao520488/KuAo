@@ -324,16 +324,7 @@ const showFrame = computed(() => !isHero.value && !isBanner.value)
         <rect x="520" y="0" width="1080" height="4" fill="#0f172a" fill-opacity="0.08" />
         <rect v-if="isHero" x="0" y="0" width="10" height="900" :fill="accent" opacity="0.5" />
         <rect x="0" y="897" width="1600" height="3" fill="#0f172a" fill-opacity="0.07" />
-        <!-- 首屏横幅专用：底部一条刻度尺代替环形母题（极简风不用圆） -->
-        <g v-if="isBanner" :stroke="ink" stroke-opacity="0.2" stroke-width="1.2">
-          <path d="M96 806H1504" />
-          <path d="M184 806v40" /><path d="M272 806v22" /><path d="M360 806v40" />
-          <path d="M448 806v22" /><path d="M536 806v40" /><path d="M624 806v22" />
-          <path d="M712 806v40" /><path d="M800 806v22" /><path d="M888 806v40" />
-          <path d="M976 806v22" /><path d="M1064 806v40" /><path d="M1152 806v22" />
-          <path d="M1240 806v40" /><path d="M1328 806v22" /><path d="M1416 806v40" />
-        </g>
-        <rect v-if="isBanner" x="96" y="802" width="88" height="4" :fill="accent" opacity="0.75" />
+        <!-- 首屏横幅：极简风不加任何装饰，留白本身就是它的语言 -->
 
         <!-- 对角对齐角标：极简海报的定位记号 -->
         <g v-if="showFrame" fill="none" :stroke="accent" stroke-opacity="0.5" stroke-width="2">

@@ -1,0 +1,242 @@
+/* ==========================================================================
+   官方风（theme-official）专属视觉系统 —— 「公文 / 档案」语汇
+   只在 <html class="theme-official"> 下生效，不影响极简风、科技蓝。
+   与极简风的差别不是颜色深浅，而是排版语法：
+     · 居中大留白 → 左对齐的文件头 + 双线分隔
+     · 卡片圆角阴影 → 表格条目 + 墨线
+     · 无衬线标题 → 宋体/衬线标题 + 大写小字标签
+     · 蓝色 CTA → 印章朱红
+   ========================================================================== */
+
+.theme-official {
+  --off-paper: #fdfcf8;
+  --off-paper-2: #f7f5ee;
+  --off-ink: #17222e;
+  --off-ink-2: #5b6673;
+  --off-rule: rgb(23 34 46 / 0.16);
+  --off-rule-strong: rgb(23 34 46 / 0.55);
+  --off-seal: #b3261e;
+  --off-seal-dark: #8e1d17;
+  --off-serif: ui-serif, Georgia, 'Songti SC', 'STSong', 'Noto Serif SC', 'SimSun', serif;
+}
+
+/* ---------- 纸面：暖白，取代冷白 ---------- */
+.theme-official body,
+.theme-official .bg-white {
+  background-color: var(--off-paper);
+}
+
+.theme-official .bg-slate-50 {
+  background-color: var(--off-paper-2);
+}
+
+/* ---------- 标题：衬线 + 收紧字距 ---------- */
+.theme-official h1,
+.theme-official h2,
+.theme-official h3 {
+  font-family: var(--off-serif);
+  letter-spacing: 0.02em;
+  color: var(--off-ink);
+}
+
+/* ---------- 顶栏：公文头的粗细分隔线 ---------- */
+.theme-official header {
+  border-bottom: 3px double var(--off-rule-strong);
+  box-shadow: none;
+}
+
+/* ---------- 首屏文件头 ---------- */
+.doc-head {
+  border-top: 1px solid var(--off-ink);
+  border-bottom: 1px solid var(--off-rule);
+  padding: 10px 0 12px;
+}
+
+/* 桌面端给右侧目录让位，标题栏不与索引压在一起 */
+@media (min-width: 1024px) {
+  .doc-head {
+    padding-right: 340px;
+  }
+}
+
+.doc-head__no {
+  white-space: nowrap;
+}
+
+.doc-head__row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 24px;
+}
+
+.doc-head__name {
+  font-family: var(--off-serif);
+  font-size: 15px;
+  letter-spacing: 0.32em;
+  color: var(--off-ink);
+}
+
+.doc-head__no {
+  font-size: 11px;
+  letter-spacing: 0.24em;
+  color: var(--off-ink-2);
+  font-variant-numeric: tabular-nums;
+  text-transform: uppercase;
+}
+
+.doc-kicker {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  letter-spacing: 0.3em;
+  color: var(--off-seal);
+  text-transform: uppercase;
+}
+
+.doc-kicker::before {
+  content: '';
+  width: 22px;
+  height: 1px;
+  background: var(--off-seal);
+}
+
+/* 首屏搜索框：方角、墨线，不用浮动阴影 */
+.theme-official .hero-search {
+  border-radius: 0;
+  border: 1px solid rgb(23 34 46 / 0.28);
+  background: #fff;
+  box-shadow: none;
+}
+
+.theme-official .hero-search:focus-within {
+  border-color: var(--off-ink);
+  box-shadow: 4px 4px 0 rgb(23 34 46 / 0.06);
+}
+
+.theme-official .hero-search button {
+  border-radius: 0;
+}
+
+/* ---------- 首屏右侧目录索引 ---------- */
+.doc-index__label {
+  font-size: 10px;
+  letter-spacing: 0.34em;
+  text-transform: uppercase;
+  color: var(--off-ink-2);
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--off-ink);
+}
+
+.doc-index {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.doc-index li {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--off-rule);
+  font-family: var(--off-serif);
+}
+
+.doc-index__no {
+  font-size: 13px;
+  color: var(--off-seal);
+  width: 20px;
+}
+
+.doc-index__t {
+  flex: 1;
+  font-size: 15px;
+  letter-spacing: 0.08em;
+  color: var(--off-ink);
+}
+
+.doc-index__v {
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  color: var(--off-ink-2);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- 区块标题：双线压头、左对齐 ---------- */
+.doc-section-head {
+  border-top: 3px double var(--off-rule-strong);
+  padding-top: 16px;
+  text-align: left;
+}
+
+.doc-section-head h2 {
+  font-size: 22px;
+}
+
+/* ---------- 列表：卡片 → 表格条目 ---------- */
+.theme-official .card-in {
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  border-top: 1px solid var(--off-rule);
+  padding-top: 22px;
+  padding-bottom: 22px;
+}
+
+.theme-official .card-in:hover {
+  background: rgb(23 34 46 / 0.022);
+}
+
+.theme-official .cover-media,
+.theme-official .rounded-xl,
+.theme-official .rounded-2xl {
+  border-radius: 0;
+}
+
+.theme-official .cover-media {
+  box-shadow: inset 0 0 0 1px rgb(23 34 46 / 0.14);
+}
+
+/* ---------- 按钮与标签：官方风不用胶囊 ---------- */
+.theme-official .card-in .rounded-full,
+.theme-official .rounded-full.bg-blue-600,
+.theme-official .countdown-badge {
+  border-radius: 0;
+}
+
+/* 头像保持圆形（方形头像像坏掉的按钮） */
+.theme-official .rounded-full.h-8.w-8,
+.theme-official .rounded-full.h-9.w-9,
+.theme-official .rounded-full.h-10.w-10 {
+  border-radius: 9999px;
+}
+
+/* ---------- 强调色：蓝 → 印章朱红 ---------- */.theme-official .bg-blue-600 {
+  background-color: var(--off-seal);
+}
+
+.theme-official .hover\:bg-blue-700:hover {
+  background-color: var(--off-seal-dark);
+}
+
+.theme-official .text-blue-600,
+.theme-official .text-blue-700 {
+  color: var(--off-seal);
+}
+
+.theme-official .border-blue-600 {
+  border-color: var(--off-seal);
+}
+
+/* 左侧强调竖条（列表卡片上那类 3px 蓝条）也跟着换 */
+.theme-official .bg-blue-500 {
+  background-color: var(--off-seal);
+}
+
+/* ---------- 详情页：文章式排版 ---------- */
+.theme-official .prose-tight h1,
+.theme-official article h1 {
+  font-family: var(--off-serif);
+}
