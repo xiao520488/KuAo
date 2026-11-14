@@ -107,6 +107,47 @@ EXCLUDE_TOKENS = (
 
 
 # --------------------------------------------------------------------------- 基础工具
+# --------------------------------------------------------------------------- 大创（全国大学生创业服务网）
+# 官网：https://cy.ncss.cn —— 获奖名单在「大赛动态」列表（SSR HTML 片段接口）里，
+# 正文挂 /picture?path=xxx&name=yyy 形式的附件：2025 为单个 xlsx（5 个赛道分 sheet），
+# 2024/2023 为按赛道拆分的 docx 表格，教育部最终公布版常为 PDF（暂不解析）。
+NCSS_BASE = "https://cy.ncss.cn"
+NCSS_LIST_API = NCSS_BASE + "/information/dsdtlist"
+NCSS_TYPE_CODE = "CYDS_2TH_DSDT"
+NCSS_COMPETITION_NAME = "中国国际大学生创新大赛"
+NCSS_TITLE_HINTS = ("中国国际大学生创新大赛", "互联网+")
+NCSS_AWARD_TITLE_RE = re.compile(r"(拟获奖项目名单|获奖项目名单|获奖名单)")
+NCSS_GRADES = ("冠军", "亚军", "季军", "创新潜力奖", "金奖", "银奖", "铜奖")
+NCSS_TRACK_HINTS = (
+    ("高教", "高教主赛道"),
+    ("红色筑梦", "青年红色筑梦之旅赛道"),
+    ("职教", "职教赛道"),
+    ("产业", "产业赛道"),
+    ("萌芽", "萌芽赛道"),
+)
+NCSS_SKIP_ATTACHMENT_TOKENS = (
+    "优秀组织奖",
+    "集体奖",
+    "信息核对",
+    "操作手册",
+    "评审规则",
+)
+NCSS_HEADER_FIELDS = (
+    ("title", ("参赛项目", "参赛命题", "项目名称")),
+    ("province", ("省（区、市）", "省份", "省区市", "省")),
+    ("school", ("学校",)),
+    ("leader", ("负责人",)),
+    ("members", ("参赛队员", "团队成员", "队员")),
+    ("advisors", ("指导教师", "指导老师")),
+    ("enterprise", ("命题企业",)),
+)
+NCSS_LIST_RE = re.compile(
+    r'<a href="(/information/[0-9a-f]{20,})"[^>]*>(.*?)</a>.*?发布日期：<span>([\d-]+)</span>',
+    re.S,
+)
+NCSS_SECTION_RE = re.compile(r"^[一二三四五六七八九十]+、")
+
+
 def log(msg: str) -> None:
     print(msg, flush=True)
 
@@ -535,6 +576,7 @@ INSERT_COLUMNS = (
     "confidence",
     "review_status",
     "content_hash",
+    "advisor",
 )
 
 
@@ -546,7 +588,7 @@ def insert_awards(con, rows: Sequence[dict]) -> tuple[int, int]:
         f"INSERT OR IGNORE INTO awards ({', '.join(INSERT_COLUMNS)}) "
         f"VALUES ({', '.join('?' for _ in INSERT_COLUMNS)})"
     )
-    con.executemany(sql, [tuple(r[c] for c in INSERT_COLUMNS) for r in rows])
+    con.executemany(sql, [tuple(r.get(c) for c in INSERT_COLUMNS) for r in rows])
     con.commit()
     inserted = con.total_changes - before
     return inserted, len(rows) - inserted
@@ -666,17 +708,424 @@ def crawl_lanqiao(args) -> list[dict]:
     return all_rows
 
 
+def ncss_track_name(text: str) -> str:
+    for hint, label in NCSS_TRACK_HINTS:
+        if hint in (text or ""):
+            return label
+    return ""
+
+
+def _ncss_text(cell: Any) -> str:
+    # 只压空白、不删空格：英文姓名（CHEN WILLIAM）与「A B 组」这类内容要保持词间距
+    return re.sub(r"\s+", " ", str(cell if cell is not None else "")).strip()
+
+
+def _ncss_dedupe_adjacent(values: Sequence[str]) -> list[str]:
+    """docx 合并单元格会让同一段文本在相邻列重复出现；保留首个、其余置空，列位不位移。"""
+    out: list[str] = []
+    prev = None
+    for value in values:
+        out.append("" if (value and value == prev) else value)
+        prev = value
+    return out
+
+
+def _ncss_grade(text: str) -> str | None:
+    for grade in NCSS_GRADES:
+        if text.startswith(grade):
+            return grade
+    return None
+
+
+def _ncss_header_map(cells: Sequence[str]) -> dict | None:
+    mapping: dict[str, int] = {}
+    for idx, text in enumerate(cells):
+        if not text:
+            continue
+        for field, keys in NCSS_HEADER_FIELDS:
+            if field in mapping:
+                continue
+            if any(key in text for key in keys):
+                mapping[field] = idx
+                break
+    return mapping if {"title", "school"} <= set(mapping) else None
+
+
+def _ncss_row(cells: Sequence[str], mapping: dict, grade: str, track: str) -> dict | None:
+    def get(field: str) -> str:
+        idx = mapping.get(field)
+        return cells[idx] if idx is not None and idx < len(cells) else ""
+
+    serial = cells[0] if cells else ""
+    title = get("title")
+    school = get("school")
+    if not title or not school or len(title) < 3:
+        return None
+    if title in {"参赛项目", "参赛命题", "项目名称"}:
+        return None
+    if not re.fullmatch(r"[A-Za-z]?\d{1,5}", serial or ""):
+        return None
+    return {
+        "title": title,
+        "school": school,
+        "province": get("province"),
+        "leader": get("leader"),
+        "members": get("members"),
+        "advisors": get("advisors"),
+        "enterprise": get("enterprise"),
+        "grade": grade,
+        "track": track,
+    }
+
+
+def _ncss_iter_rows(
+    rows: Iterator[Sequence[Any]] | Any, track: str, stats: dict | None = None
+) -> Iterator[dict]:
+    """通用状态机：分节标题 → 奖项等级行 → 表头行 → 数据行（xlsx / docx 表共用）。"""
+    grade: str | None = None
+    mapping: dict | None = None
+    for raw in rows:
+        cells = _ncss_dedupe_adjacent([_ncss_text(c) for c in raw])
+        nonempty = [c for c in cells if c]
+        if not nonempty:
+            continue
+        if len(set(nonempty)) == 1:
+            label = nonempty[0]
+            found = _ncss_grade(label)
+            if found:
+                grade = found
+                mapping = None
+                continue
+            if NCSS_SECTION_RE.match(label) or "参赛项目" in label:
+                continue  # 「一、中国大陆项目」「二、国际参赛项目」等分节标题
+        header = _ncss_header_map(cells)
+        if header:
+            mapping = header
+            continue
+        if not grade or not mapping:
+            continue
+        row = _ncss_row(cells, mapping, grade, track)
+        if row:
+            yield row
+        elif stats is not None:
+            stats["dropped"] = stats.get("dropped", 0) + 1
+
+
+def ncss_xlsx_rows(path: Path, stats: dict | None = None) -> Iterator[dict]:
+    import openpyxl
+
+    workbook = openpyxl.load_workbook(str(path), read_only=True, data_only=True)
+    try:
+        for sheet in workbook.worksheets:
+            track = ncss_track_name(sheet.title) or ncss_track_name(path.name)
+            yield from _ncss_iter_rows(sheet.iter_rows(values_only=True), track, stats)
+    finally:
+        workbook.close()
+
+
+def ncss_docx_rows(path: Path, stats: dict | None = None) -> Iterator[dict]:
+    import docx
+
+    document = docx.Document(str(path))
+    track = ncss_track_name(path.name)
+    for table in document.tables:
+        rows = ([cell.text for cell in row.cells] for row in table.rows)
+        yield from _ncss_iter_rows(rows, track, stats)
+
+
+def ncss_list_items(
+    session: requests.Session, *, max_pages: int = 8, page_size: int = 50
+) -> list[dict]:
+    items: list[dict] = []
+    for page_index in range(max_pages):
+        html = http_get(
+            session,
+            NCSS_LIST_API,
+            params={
+                "typeCode": NCSS_TYPE_CODE,
+                "title": "",
+                "pageIndex": page_index,
+                "pageSize": page_size,
+            },
+        ).text
+        found = NCSS_LIST_RE.findall(html or "")
+        if not found:
+            break
+        for href, raw_title, date in found:
+            title = BeautifulSoup(raw_title, "html.parser").get_text(" ", strip=True)
+            items.append(
+                {"href": href, "title": title, "date": date, "url": NCSS_BASE + href}
+            )
+        log(f"  列表 p{page_index + 1}: {len(found)} 条，累计 {len(items)}")
+        if len(found) < page_size:
+            break
+    return items
+
+
+def ncss_article_year(title: str, date: str) -> int:
+    """「第X届」优先（2015=第一届 → year = 2014 + X），否则取标题里的四位年份。"""
+    match = re.search(r"第([一二三四五六七八九十]+)届", title)
+    if match:
+        edition = cn_number(match.group(1))
+        if edition:
+            return 2014 + edition
+    match = re.search(r"(20\d{2})", title)
+    if match:
+        return int(match.group(1))
+    return int(date[:4]) if date[:4].isdigit() else 0
+
+
+def ncss_articles(session: requests.Session, *, max_pages: int = 8) -> dict[int, list[dict]]:
+    articles: dict[int, list[dict]] = {}
+    for item in ncss_list_items(session, max_pages=max_pages):
+        title = item["title"]
+        if not any(hint in title for hint in NCSS_TITLE_HINTS):
+            continue
+        if not NCSS_AWARD_TITLE_RE.search(title):
+            continue
+        year = ncss_article_year(title, item["date"])
+        if not year:
+            continue
+        articles.setdefault(year, []).append(item)
+    for year in articles:
+        articles[year].sort(key=lambda x: x["date"], reverse=True)
+    return articles
+
+
+def ncss_attachments(html: str, page_url: str) -> list[dict]:
+    from urllib.parse import unquote, urljoin
+
+    soup = BeautifulSoup(html or "", "html.parser")
+    found: list[dict] = []
+    for anchor in soup.find_all("a", href=True):
+        href = anchor["href"].strip()
+        if not re.search(
+            r"/picture\?path=|\.(pdf|docx?|xlsx?|zip|rar|7z)(\?|$)", href, re.IGNORECASE
+        ):
+            continue
+        query_name = ""
+        if "name=" in href:
+            query_name = unquote(href.split("name=", 1)[1])
+        text = anchor.get_text(" ", strip=True)
+        name = query_name or text or Path(urlsplit(href).path).name
+        url = urljoin(page_url, href)
+        ext = Path(name).suffix.lower() or Path(urlsplit(href).path).suffix.lower()
+        found.append({"name": name.strip(), "url": url, "ext": ext})
+    return found
+
+
+def resolve_ncss_competition(con) -> dict | None:
+    row = con.execute(
+        "select id, name, category from competitions where name = ?",
+        (NCSS_COMPETITION_NAME,),
+    ).fetchone()
+    if row is None:
+        row = con.execute(
+            "select id, name, category from competitions where name like ? order by id limit 1",
+            ("%中国国际大学生创新大赛%",),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def build_ncss_awards(
+    rows: Sequence[dict],
+    *,
+    competition: dict,
+    year: int,
+    session_label: str,
+    source_url: str,
+) -> list[dict]:
+    awards: list[dict] = []
+    for row in rows:
+        bits: list[str] = []
+        if row.get("track"):
+            bits.append(f"赛道：{row['track']}")
+        if row.get("province"):
+            bits.append(f"省份：{row['province']}")
+        if row.get("leader"):
+            bits.append(f"负责人：{row['leader']}")
+        members = row.get("members") or ""
+        if members:
+            # 中文名单用「、」，国际项目名单用「,」，两种都要能拆
+            count = len([m for m in re.split(r"[、,，;；]", members) if m.strip()])
+            shown = members if len(members) <= 60 else members[:60] + "…"
+            bits.append(f"成员：{shown}（共 {count} 人）")
+        if row.get("advisors"):
+            bits.append(f"指导教师：{row['advisors']}")
+        if row.get("enterprise"):
+            bits.append(f"命题企业：{row['enterprise']}")
+        awards.append(
+            {
+                "competition_id": competition["id"],
+                "competition_raw": competition["name"],
+                "category": competition.get("category"),
+                "level": "national",
+                "year": year,
+                "session": session_label,
+                "title": row["title"],
+                "team": row["school"],
+                "award_grade": row["grade"],
+                "track": row.get("track") or "",
+                "advisor": row.get("advisors") or None,
+                "summary": "；".join(bits),
+                "source_url": source_url,
+                "source_type": "crawl",
+                "confidence": 1.0,
+                "review_status": "approved",
+                "content_hash": digest(
+                    competition["id"],
+                    session_label,
+                    year,
+                    row["school"],
+                    row["title"],
+                    row["grade"],
+                    row.get("track"),
+                ),
+            }
+        )
+    return awards
+
+
+def _crawl_ncss_article(
+    session: requests.Session,
+    article: dict,
+    *,
+    competition: dict,
+    year: int,
+    session_label: str,
+    max_files: int = 0,
+) -> list[dict]:
+    html = http_get(session, article["url"]).text
+    attachments = ncss_attachments(html, article["url"])
+    log(f"\n[大创 {year}] {article['title']}")
+    log(f"  {article['url']}")
+    if not attachments:
+        log("  [跳过] 正文里没有附件")
+        return []
+
+    parsable = [
+        a
+        for a in attachments
+        if a["ext"] in {".xlsx", ".docx"}
+        and not any(token in a["name"] for token in NCSS_SKIP_ATTACHMENT_TOKENS)
+    ]
+    skipped = [a for a in attachments if a not in parsable]
+    log(f"  附件 {len(attachments)} 个：可解析 {len(parsable)}，跳过 {len(skipped)}")
+    for item in skipped:
+        log(f"  [跳过] {item['name'][:70]}")
+    if not parsable:
+        return []
+
+    order = {".xlsx": 0, ".docx": 1}
+    parsable.sort(key=lambda a: order.get(a["ext"], 9))
+    if max_files:
+        parsable = parsable[:max_files]
+
+    work_dir = CACHE_DIR / f"ncss_{year}"
+    awards: list[dict] = []
+    for attachment in parsable:
+        stem = safe_dirname(Path(attachment["name"]).stem)
+        target = work_dir / f"{stem}{attachment['ext']}"
+        try:
+            path = download_file(session, attachment["url"], target)
+        except Exception as exc:  # noqa: BLE001
+            log(f"  [下载失败] {attachment['name']}: {exc}")
+            continue
+        stats: dict = {}
+        try:
+            rows = list(
+                ncss_xlsx_rows(path, stats)
+                if attachment["ext"] == ".xlsx"
+                else ncss_docx_rows(path, stats)
+            )
+        except Exception as exc:  # noqa: BLE001
+            log(f"  [解析失败] {path.name}: {exc}")
+            continue
+        built = build_ncss_awards(
+            rows,
+            competition=competition,
+            year=year,
+            session_label=session_label,
+            source_url=article["url"],
+        )
+        tracks: dict[str, int] = {}
+        for award in built:
+            tracks[award["track"]] = tracks.get(award["track"], 0) + 1
+        detail = "，".join(f"{k or '未标注'} {v}" for k, v in tracks.items())
+        log(
+            f"  · {path.name} → {len(built)} 条"
+            f"（跳过 {stats.get('dropped', 0)} 行；{detail}）"
+        )
+        awards.extend(built)
+    return awards
+
+
+def crawl_ncss(args) -> list[dict]:
+    import sqlite3
+
+    session = make_session()
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    con = sqlite3.connect(DB_PATH)
+    con.row_factory = sqlite3.Row
+    competition = resolve_ncss_competition(con)
+    if not competition:
+        log(f"[大创] 库里找不到「{NCSS_COMPETITION_NAME}」，先补赛事再抓")
+        con.close()
+        return []
+    log(f"[大创] 目标赛事 id={competition['id']} {competition['name']}")
+
+    articles = ncss_articles(session, max_pages=args.max_pages)
+    years = sorted(articles, reverse=True)
+    if args.year:
+        years = [y for y in years if y == args.year]
+    if args.limit_years:
+        years = years[: args.limit_years]
+    log(f"[大创] 命中 {len(articles)} 个年份：{sorted(articles, reverse=True)}；本次处理 {years}")
+
+    if args.list_only:
+        for year in years:
+            for article in articles[year]:
+                log(f"  {article['date']} | {year} | {article['title']}")
+                log(f"      {article['url']}")
+        con.close()
+        return []
+
+    all_rows: list[dict] = []
+    for year in years:
+        session_label = f"第{year - 2014}届" if year > 2014 else str(year)
+        for article in articles[year]:
+            rows = _crawl_ncss_article(
+                session,
+                article,
+                competition=competition,
+                year=year,
+                session_label=session_label,
+                max_files=args.max_files,
+            )
+            if rows:
+                all_rows.extend(rows)
+                break
+            log("  [换源] 该文没有解析出数据，尝试同年的下一条")
+    con.close()
+    return all_rows
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     try:
         sys.stdout.reconfigure(encoding="utf-8")
     except Exception:  # noqa: BLE001
         pass
 
-    parser = argparse.ArgumentParser(description="官网获奖名单定向爬虫（蓝桥杯优先）")
-    parser.add_argument("--source", choices=["lanqiao"], default="lanqiao")
+    parser = argparse.ArgumentParser(description="官网获奖名单定向爬虫（蓝桥杯 / 大创）")
+    parser.add_argument(
+        "--source",
+        choices=["lanqiao", "ncss"],
+        default="lanqiao",
+        help="lanqiao=蓝桥杯（已废弃）；ncss=中国国际大学生创新大赛（cy.ncss.cn）",
+    )
     parser.add_argument("--keyword", default="获奖名单", help="列表接口的标题过滤词")
     parser.add_argument("--page-size", type=int, default=100)
-    parser.add_argument("--max-pages", type=int, default=5)
+    parser.add_argument("--max-pages", type=int, default=8, help="列表翻页上限")
     parser.add_argument("--limit-news", type=int, default=0, help="只处理前 N 条获奖名单（0=全部）")
     parser.add_argument("--only-news", type=int, nargs="*", default=None, help="只处理指定 nnid")
     parser.add_argument(
@@ -686,6 +1135,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="individual=只抓选手个人赛（默认）；all=不过滤（含教师/组织/青少组）",
     )
     parser.add_argument("--max-pdfs", type=int, default=0, help="每个附件最多解析 N 个 PDF（0=全部，调试用）")
+    parser.add_argument("--year", type=int, default=0, help="大创：只抓指定年份（0=全部）")
+    parser.add_argument("--limit-years", type=int, default=0, help="大创：最多处理 N 个年份（0=全部）")
+    parser.add_argument("--max-files", type=int, default=0, help="大创：每个文章最多解析 N 个附件（0=全部）")
     parser.add_argument("--list-only", action="store_true", help="只打印列表，不下载")
     parser.add_argument("--print-rows", type=int, default=5, help="dry-run 时打印前 N 行")
     parser.add_argument("--apply", action="store_true", help="真写入 awards 表")
@@ -695,7 +1147,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         log(f"找不到数据库：{DB_PATH}")
         return 2
 
-    rows = crawl_lanqiao(args)
+    rows = crawl_ncss(args) if args.source == "ncss" else crawl_lanqiao(args)
     if args.list_only:
         return 0
 
@@ -709,11 +1161,11 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     for row in rows[: args.print_rows]:
         log(
-            "  {year} {session} | {school} | {name} | {track} | {grade} | {level} | comp={comp} | hash={h}".format(
+            "  {year} {session} | {school} | {title} | {track} | {grade} | {level} | comp={comp} | hash={h}".format(
                 year=row["year"],
                 session=row["session"],
                 school=row["team"],
-                name=row["title"].split("（")[0],
+                title=row["title"],
                 track=row["track"],
                 grade=row["award_grade"],
                 level=row["level"],
@@ -721,6 +1173,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 h=row["content_hash"][:10],
             )
         )
+        if row.get("summary"):
+            log(f"      {row['summary'][:160]}")
 
     import sqlite3
 

@@ -1,6 +1,6 @@
 # CRAWLER_HANDOVER.md
 > 交接范围：`backend/` 的新闻获奖采集、赛事基础数据采集与补全、赛氪详情补充、候选表与审核、AI 攻略/灵感链路、云端定时任务、管理后台、前端展示规范。
-> 最后更新：2026-11-11（新增第十节「JS 渲染站点抓取 SOP」，接入 playwright-mcp 浏览器抓包）。本文件是**操作手册**，不记变更史；单条历史用 `git log` 与 `workspace/*.json` 回溯。
+> 最后更新：2026-11-14（新增 0.7「中国国际大学生创新大赛（大创）适配器」，`--source ncss`，xlsx/docx 双解析；0.6 记「纯算法赛个人名单已废弃、库已物理清理」。本文件是**操作手册**，不记变更史；单条历史用 `git log` 与 `workspace/*.json` 回溯。
 > 读法：第零节 30 秒 → 第二节命令 → 第五节后台 → 第七节边界。
 ## 文档导航
 零、接手必读（30 秒版）
@@ -69,6 +69,87 @@
 - **误删恢复**：全量行导出在 `workspace/deleted-algo-awards-<时间戳>.json|csv`，整库备份在
   `competitions.db.bak-cleanup-<时间戳>`。要恢复必须先改 `LANQIAO_DEPRECATED`，否则下次清理又会被删。
 - **智能体口径**：算法赛的 AI 产出只走 `ALGO_PLAN_SYSTEM_PROMPT`（刷题路线图），不再生成项目灵感/选题趋势。
+
+### 0.7 项目类第一站：中国国际大学生创新大赛（大创 / cy.ncss.cn）
+
+> 项目类（`has_project_awards = 1`）作品的**官方**来源第一枪。数据是真实项目（项目名、学校、负责人、
+> 队员、指导教师、奖项等级），对「往年获奖作品」Tab 与选题趋势价值最高。
+> 适配器：`crawler_official_awards.py --source ncss`（函数 `parse` 链路 = `ncss_articles` → `ncss_attachments`
+> → `ncss_xlsx_rows` / `ncss_docx_rows` → `_ncss_iter_rows` → `build_ncss_awards`）。
+
+**站点事实（2026-11-14 实测）**
+- 列表：`https://cy.ncss.cn/information/dsdt?typeCode=CYDS_2TH_DSDT` 是 SPA，但数据走**
+  `https://cy.ncss.cn/information/dsdtlist?typeCode=CYDS_2TH_DSDT&pageIndex=0&pageSize=50`**，
+  返回 **HTML 片段**（不是 JSON），`pageIndex` 从 0 起，共 342 条（其中「获奖名单」类 10 个年份）。
+- 正文附件一律是 `/picture?path=<token>&name=<文件名 URL 编码>` 代理下载，`Content-Type` 可能是
+  `image/jpeg` 或 `application/octet-stream`，**必须按 `name=` 里的扩展名判断格式**，不要信 content-type。
+- 历年格式并不统一：
+
+| 年份 | 来源文章 | 附件格式 | 可解析 |
+|---|---|---|---|
+| 2025 | 「拟获奖项目名单」公示（2025-12-03） | 1 个 **xlsx**，5 个赛道分 sheet | ✅ `openpyxl` |
+| 2025 | 教育部最终公布（2026-02-28） | 6 个 **PDF**（按赛道） | ❌ 暂不支持，脚本自动回落到公示 xlsx |
+| 2024 / 2023 | 教育部公布 | 6 个 **docx**（按赛道拆表） | ✅ `python-docx` |
+| 2022 及更早 | 第七届「互联网+」等 | `.doc`（老二进制）+ docx | ⚠️ `.doc` 需先转 docx |
+
+**表格结构（两类文件一致）**：分节标题（「一、中国大陆项目」/「二、国际参赛项目」）→ 奖项等级行
+（`冠军/亚军/季军/金奖/银奖/铜奖/创新潜力奖`，合并单元格，整行同一文本）→ 表头行
+（`序号 / 参赛项目 / 省份 / 学校 / 负责人 / 参赛队员 / 指导教师`，产业赛道多一列 `命题企业`）
+→ 数据行（首列为 `1`…或 `D1`…）。**docx 的合并单元格会让「参赛队员」相邻重复一列**，解析器用
+`_ncss_dedupe_adjacent()` 把重复项置空，保证列位与表头对齐。
+
+**年份 / 届次**：标题里的「第X届」优先（2015 = 第一届 → `year = 2014 + X`），否则取 `（20XX）`；
+`session` 写 `第11届` 这种届次，`year` 写年份。赛事按名称精确匹配 `中国国际大学生创新大赛`（库内 id=1），
+匹配不到就 `LIKE '%中国国际大学生创新大赛%'` 兜底，都没有则直接退出、不建占位。
+
+**字段映射（awards）**
+| 官网列 | awards 列 |
+|---|---|
+| 参赛项目 / 参赛命题 | `title`（项目名，**不再拼「姓名（科目）」**） |
+| 学校 | `team` |
+| 奖项等级行 | `award_grade`（冠军/亚军/季军/金奖/银奖/铜奖/创新潜力奖） |
+| 赛道（sheet 名/文件名） | `track` |
+| 指导教师 | `advisor`（新增列映射）+ `summary` |
+| 省份 / 负责人 / 参赛队员 / 命题企业 | `summary`（`赛道：…；省份：…；负责人：…；成员：…（共 N 人）；指导教师：…`） |
+| — | `source_type='crawl'`、`confidence=1.0`、`review_status='approved'`、`level='national'`、`session=第N届` |
+
+`content_hash = sha1(competition_id|session|year|school|title|grade|track)`；同校同名同奖项视为同一条，
+跨赛道重名（2025 有 14 组）因 track 不同而各自保留，不会误合并。
+
+**命令**
+```bash
+# 只看有哪些年份的名单文章（不下载）
+python crawler_official_awards.py --source ncss --list-only
+
+# dry-run：某一年全流程（下载 + 解析 + 打印，不写库）
+python crawler_official_awards.py --source ncss --year 2025 --print-rows 10
+
+# 只验一个附件（调试解析器时最快）
+python crawler_official_awards.py --source ncss --year 2024 --max-files 1 --print-rows 3
+
+# 全部年份入库
+python crawler_official_awards.py --source ncss --apply
+```
+
+**2026-11-14 dry-run 实测（未写库）**
+| 年份 | 记录数 | 分赛道 |
+|---|---|---|
+| 2025（公示 xlsx） | **5221** | 高教 2866 / 红旅 723 / 职教 754 / 产业 678 / 萌芽 200 |
+| 2024（公布 docx） | **4637** | 含冠军 1 / 亚军 1 / 季军 4，国际项目若干 |
+| 2023（公布 docx，仅高教单文件） | **2462** | 高教 2462 |
+
+- 2025 走「公示版」而非最终公布版：最终版只有 PDF，公示版条目数与最终文略有出入（如高教铜奖 1925 vs 最终 1763），
+  属官方公示口径差异，不是解析错位；后续给 PDF 加解析后可对齐最终版。
+- 已核对：无乱码、无表头/分节标题混入、无空项目名；英文姓名空格保留（`CHEN WILLIAM`）、
+  中英混写保留（`刘/Liu 奕杨/Yiyang`）；队员/指导教师用 `、` 或 `,` 分隔都能正确计数。
+- 依赖：`openpyxl==3.1.5`、`python-docx==1.2.0` 已加入 `requirements.txt`（云端需 `pip install -r requirements.txt`）。
+
+**已知边界**
+- 教育部最终公布版 PDF（2025+）暂不解析，脚本会 `[跳过]` 并回落到同年的 xlsx/docx 文章；
+  要补 PDF 支持，可在 `_crawl_ncss_article` 里加 `.pdf` 分支并复用 `pdfplumber`。
+- `.doc`（2021 及更早）需先 `libreoffice --convert-to docx` 再跑，脚本只打 `[跳过]`。
+- 省级赛区名单不在本适配器范围（大创官网只发全国总决赛/公示名单）。
+- 入库后仍需跑一次 embed 补全，`embedding_state` 默认 `none`（与其它 crawl 行一致）。
 
 ---
 ## 一、架构、数据契约与文件清单
