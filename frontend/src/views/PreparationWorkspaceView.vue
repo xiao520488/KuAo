@@ -54,6 +54,11 @@ function applyDetail(d) {
   competition.image = resolveImage(d)
   // 只有明确的 false 才判定为「纯算法/知识类」；字段缺失一律按有作品处理
   competition.hasProjectAwards = d.has_project_awards === false ? false : true
+  // 详情回来后同步首句问候口径（只在还没聊过、仅剩开场白时替换）
+  if (Array.isArray(messages.value) && messages.value.length === 1
+      && messages.value[0].role === 'assistant') {
+    messages.value[0] = greetingMessage()
+  }
   // 兼容老字段（完整日期），没有再退回 *月份* 拼接
   const startT = d.contestStart || d.startTime || d.contestTime || d.registrationStart || ''
   const endT = d.contestEnd || d.endTime || d.registrationEnd || ''
@@ -127,8 +132,14 @@ const GREETING =
   '你好，我是你的专属备赛教练。为了给你量身定制计划，' +
   '请告诉我你的备赛目标、基础情况以及每天能投入的时间。'
 
+// 纯算法/知识类赛事（蓝桥杯、ACM-ICPC）：教练产出的是刷题路线图，不是作品赛计划
+const ALGO_GREETING =
+  '你好，我是你的算法竞技教练。告诉我你的目标奖项、比赛语言（C++/Java/Python）、' +
+  '当前刷题量与平台、薄弱知识点、每天能投入的时间，我来排一份可直接执行的刷题路线图。'
+
 function greetingMessage() {
-  return { role: 'assistant', content: GREETING }
+  const algo = competition.hasProjectAwards === false
+  return { role: 'assistant', content: algo ? ALGO_GREETING : GREETING }
 }
 
 const messages = ref([greetingMessage()])
