@@ -1165,19 +1165,22 @@ def _award_row_to_dict(row: sqlite3.Row, url_map: Optional[dict] = None) -> dict
     return d
 
 
-def list_awards_by_competition(competition_id: int, limit: Optional[int] = None) -> list:
+def list_awards_by_competition(competition_id: int, limit: Optional[int] = None,
+                              offset: int = 0) -> list:
     """按竞赛 id 查询获奖作品列表（按年份倒序、id 升序）。
 
     过滤 review_status='rejected' 的人工拒绝脏数据（与路由文档约定一致）。
+    offset 与 limit 配合实现「加载更多」分页；offset 大于总数时返回空列表。
     """
     sql = ("SELECT * FROM awards WHERE competition_id = ? "
            "AND COALESCE(review_status, 'pending') <> 'rejected' "
            "ORDER BY CASE WHEN year IS NULL THEN 1 ELSE 0 END ASC, "
            "year DESC, id ASC")
-    params = [competition_id]
-    if limit:
-        sql += " LIMIT ?"
-        params.append(int(limit))
+    params: list = [competition_id]
+    if limit or offset:
+        sql += " LIMIT ? OFFSET ?"
+        params.append(int(limit) if limit else -1)
+        params.append(max(int(offset or 0), 0))
     with get_conn() as conn:
         rows = conn.execute(sql, params).fetchall()
         url_map = _fetch_source_url_map(
@@ -1217,13 +1220,17 @@ def awards_fingerprint(competition_id: int) -> str:
     return f"n={row['c']}|mx={row['mx']}|ut={row['ut']}|tl={row['tl']}"
 
 
-def count_awards_by_competition(competition_id: int) -> int:
-    """统计某竞赛下的获奖作品数量。"""
+def count_awards_by_competition(competition_id: int, exclude_rejected: bool = False) -> int:
+    """统计某竞赛下的获奖作品数量。
+
+    exclude_rejected=True 时与 list_awards_by_competition 的过滤口径一致，
+    用于分页接口返回真实总数（否则前端「加载更多」会算不准）。
+    """
+    sql = "SELECT COUNT(*) AS c FROM awards WHERE competition_id = ?"
+    if exclude_rejected:
+        sql += " AND COALESCE(review_status, 'pending') <> 'rejected'"
     with get_conn() as conn:
-        row = conn.execute(
-            "SELECT COUNT(*) AS c FROM awards WHERE competition_id = ?",
-            (competition_id,),
-        ).fetchone()
+        row = conn.execute(sql, (competition_id,)).fetchone()
     return int(row["c"]) if row else 0
 
 

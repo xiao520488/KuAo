@@ -28,6 +28,7 @@ from db import get_categories as db_get_categories
 from db import get_competition as db_get_competition
 from db import get_guide_state as db_get_guide_state
 from db import list_awards_by_competition as db_list_awards_by_competition
+from db import count_awards_by_competition as db_count_awards_by_competition
 from db import list_competitions as db_list_competitions
 from db import list_hot_competitions as db_list_hot_competitions
 from models.schemas import (
@@ -470,8 +471,9 @@ def _row_to_award(row: Dict[str, Any]) -> Award:
 def list_competition_awards(
     id: int = Path(..., description="竞赛 ID"),
     limit: int = Query(20, ge=1, le=100, description="最多返回条数"),
+    offset: int = Query(0, ge=0, description="跳过条数（配合 limit 实现「加载更多」）"),
 ) -> AwardList:
-    """获取指定竞赛的获奖作品列表。"""
+    """获取指定竞赛的获奖作品列表（支持 offset 分页）。"""
     comp = db_get_competition(id)
     if comp is None:
         raise HTTPException(status_code=404, detail=f"竞赛 ID={id} 不存在")
@@ -481,6 +483,8 @@ def list_competition_awards(
     if not comp.get("has_project_awards", 1):
         return AwardList(competition_id=id, total=0, items=[])
 
-    rows = db_list_awards_by_competition(id, limit=limit)
+    rows = db_list_awards_by_competition(id, limit=limit, offset=offset)
     items = [_row_to_award(r) for r in rows]
-    return AwardList(competition_id=id, total=len(items), items=items)
+    # total 必须是库内真实总数（与 list 同一过滤口径），否则前端无法判断「还有没有更多」
+    total = db_count_awards_by_competition(id, exclude_rejected=True)
+    return AwardList(competition_id=id, total=total, items=items)

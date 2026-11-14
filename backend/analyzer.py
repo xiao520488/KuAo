@@ -36,6 +36,13 @@ DEFAULT_IDEA_N = 4
 # 只把 24 条代表性样本喂给模型；全量数据只以「统计分布」形式出现（条数/占比），
 # 既避免 prompt 爆炸，又保证趋势判断有真实分母。
 MAX_AWARDS = 24
+# 分层抽样配额（合计 = MAX_AWARDS）：金奖 10 / 银奖 8 / 铜奖 6。
+# 数据上万条时，按占比随机会让样本几乎全是铜奖，"金奖凭什么赢"就分析不出来。
+SAMPLE_TIERS = (
+    ("金奖", 10, ("冠军", "亚军", "季军", "特等", "金奖", "一等奖")),
+    ("银奖", 8, ("银奖", "二等奖")),
+    ("铜奖", 6, ("铜奖", "三等奖", "优秀奖", "优胜奖", "创新潜力奖")),
+)
 MAX_FIELD_CHARS = 400
 # insights 单条 200 字 ≈ 300 token，给 400 足够；ideas JSON ≤1500 字 ≈ 1200 token。
 INSIGHT_MAX_TOKENS = 600
@@ -48,7 +55,7 @@ INSIGHT_MAX_CHARS = 200
 IDEA_BATCH_SIZE = 2
 MAX_IDEA_REFS = 2
 # Prompt 版本号：改动 Prompt 后递增，使旧缓存指纹失效。
-PROMPT_VER = "v4"
+PROMPT_VER = "v5"
 
 KIND_LABEL = {
     "experience": "获奖共性经验",
@@ -132,6 +139,61 @@ def _fair_sample(rows: list, k: int) -> list:
         step = len(ordered) / n
         picked.extend(ordered[int(i * step)] for i in range(n))
     return picked
+
+
+def _grade_tier(row: dict) -> str:
+    """把各种奖项叫法归到三层：金奖档 / 银奖档 / 铜奖档（认不出归「其它」）。"""
+    grade = str(row.get("award_grade") or row.get("award_level") or "")
+    for tier, _quota, keys in SAMPLE_TIERS:
+        if any(key in grade for key in keys):
+            return tier
+    return "其它"
+
+
+def _pick_spread(rows: list, n: int) -> list:
+    """在给定池子里按 id 均匀跨取 n 条（确定性、可复现，不用随机数）。"""
+    if n <= 0 or not rows:
+        return []
+    ordered = sorted(rows, key=lambda r: (r.get("id") or 0))
+    if len(ordered) <= n:
+        return list(ordered)
+    step = len(ordered) / n
+    return [ordered[int(i * step)] for i in range(n)]
+
+
+def _stratified_sample(rows: list, k: int = MAX_AWARDS) -> list:
+    """分层抽样：金奖 10 / 银奖 8 / 铜奖 6，总数严格 <= k。
+
+    为什么分层：万一万条名单里 65% 是铜奖，按占比随机抽会让样本几乎全是铜奖，
+    模型就看不到「金奖凭什么拿金奖」。固定配额能保证每档都有代表，
+    又不会让样本量随数据量膨胀（成本恒定在 24 条）。
+    """
+    if len(rows) <= k:
+        return list(rows)
+
+    pools: dict[str, list] = {"金奖": [], "银奖": [], "铜奖": [], "其它": []}
+    for row in rows:
+        pools[_grade_tier(row)].append(row)
+
+    picked: list = []
+    used: set = set()
+    for tier, quota, _keys in SAMPLE_TIERS:
+        got = _pick_spread(pools[tier], quota)
+        picked.extend(got)
+        used.update(id(r) for r in got)
+
+    # 某档不够（小赛事没有铜奖等）：缺额按 金 → 银 → 铜 → 其它 补齐，总数仍 <= k
+    if len(picked) < k:
+        for tier in ("金奖", "银奖", "铜奖", "其它"):
+            if len(picked) >= k:
+                break
+            rest = [r for r in pools[tier] if id(r) not in used]
+            for row in _pick_spread(rest, k - len(picked)):
+                if len(picked) >= k:
+                    break
+                picked.append(row)
+                used.add(id(row))
+    return picked[:k]
 
 
 def _scope(competition_id: int, year_from: int, year_to: int) -> str:
@@ -381,11 +443,20 @@ def _context_block(competition: dict, works: list, year_from: int, year_to: int)
 
     返回 (context, sampled_ids)。sampled_ids 只有 24 个，是模型唯一可引用的 id 集合；
     历史上这里塞过全量 id（13631 个 → 39 万 token），是成本事故的根因。
+    抽样改为分层（金奖/银奖/铜奖固定配额），条数恒为 MAX_AWARDS，成本与数据量无关。
     """
-    sampled = _fair_sample(works, MAX_AWARDS)
+    sampled = _stratified_sample(works, MAX_AWARDS)
     payload = [_slim_award(w) for w in sampled]
     sampled_ids = [int(r["id"]) for r in sampled if r.get("id") is not None]
     dist = _distribution(works)
+    tier_counts = {tier: 0 for tier, _quota, _keys in SAMPLE_TIERS}
+    for row in sampled:
+        tier = _grade_tier(row)
+        if tier in tier_counts:
+            tier_counts[tier] += 1
+    sample_breakdown = "；".join(
+        f"{tier} {n} 条" for tier, n in tier_counts.items() if n
+    ) or f"共 {len(payload)} 条"
     name = competition.get("name") or f"赛事 #{competition.get('id')}"
     category = competition.get("category") or "未分类"
 
@@ -411,20 +482,23 @@ def _context_block(competition: dict, works: list, year_from: int, year_to: int)
 - 奖项分布：{grade_lines}
 - 赛道/科目分布（共 {dist['track_count']} 个，Top {len(dist['top_tracks'])}）：{track_lines}
 
-【代表性样本（跨年份均匀抽样 {len(payload)} 条，仅用于举例）】
+【分层样本（按奖项等级抽取 {len(payload)} 条：{sample_breakdown}，仅用于举例）】
 {json.dumps(payload, ensure_ascii=False)}
 
 【硬性约束】
 1. 只基于以上事实归纳，禁止混入其它赛事、其它类别或数据中不存在的作品与事实。
-2. 该赛事包含 {dist['track_count']} 个赛道/科目，是多项比赛的集合。严禁把单个赛道的个别现象
+2. 样本按奖项等级分层：金奖 {tier_counts['金奖']} 条、银奖 {tier_counts['银奖']} 条、铜奖 {tier_counts['铜奖']} 条。
+   请**重点分析金奖作品的共性**，并明确指出它与银奖、铜奖作品的差异（评审最看重什么、
+   金奖在选题/技术深度/落地验证上多做了什么）；不要只写三档共有的空话。
+3. 该赛事包含 {dist['track_count']} 个赛道/科目，是多项比赛的集合。严禁把单个赛道的个别现象
    说成整个赛事的共性；某个小众方向出现一次，不等于「技术栈转为它」或「趋势上升」。
    任何趋势判断都必须引用上面的条数与占比作为依据（例如「X 组占 6.2%」）。
-3. 提炼共性时优先看占比最高的部分：编程基本功、算法与数据结构能力、固定科目分组。
+4. 提炼共性时优先看占比最高的部分：编程基本功、算法与数据结构能力、固定科目分组。
    占比很小的方向只能写「个别赛道出现」，不得作为整体结论。
-4. 正文中禁止出现任何作品 id 或编号（如 [id:123]、id 12、16、24、纯数字列表）。
+5. 正文中禁止出现任何作品 id 或编号（如 [id:123]、id 12、16、24、纯数字列表）。
    需要交代数据来源时，最多写一句「基于 {dist['total']} 条获奖记录统计」，不要罗列数字。
-5. 信息不足时写“数据中未提及”，不要编造。
-6. 输出精简、可执行，不要长篇大论。
+6. 信息不足时写“数据中未提及”，不要编造。
+7. 输出精简、可执行，不要长篇大论。
 
 （如可用 id 仅为样本中的：{sampled_ids[:6]}，正文中不要写出来。）"""
     if len(context) > MAX_PROMPT_CHARS:

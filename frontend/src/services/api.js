@@ -400,12 +400,13 @@ export function getInspirations(competitionId) {
 
 /**
  * 获取某竞赛的往年获奖作品
- * GET /api/competitions/:id/awards?limit=20
+ * GET /api/competitions/:id/awards?limit=20&offset=0
  *
  * @param {string|number} competitionId 竞赛 ID
  * @param {Object} [options]
  * @param {number} [options.limit] 返回条数上限
- * @returns {Promise<{ items: Array }>}
+ * @param {number} [options.offset] 跳过条数（「加载更多」分页用）
+ * @returns {Promise<{ items: Array, total: number, hasMore: boolean }>}
  */
 export function getCompetitionAwards(competitionId, options = {}) {
   const cid = normalizeCompetitionId(competitionId)
@@ -414,6 +415,8 @@ export function getCompetitionAwards(competitionId, options = {}) {
   const params = {}
   const limit = Number(options.limit)
   if (Number.isInteger(limit) && limit > 0) params.limit = limit
+  const offset = Number(options.offset)
+  if (Number.isInteger(offset) && offset > 0) params.offset = offset
 
   return api.get(`/competitions/${cid}/awards`, { params }).then((data) => {
     const items = Array.isArray(data?.items)
@@ -423,7 +426,9 @@ export function getCompetitionAwards(competitionId, options = {}) {
         : Array.isArray(data)
           ? data
           : []
-    return { items }
+    const total = Number(data?.total)
+    const safeTotal = Number.isFinite(total) && total >= 0 ? total : items.length
+    return { items, total: safeTotal, hasMore: items.length > 0 }
   })
 }
 

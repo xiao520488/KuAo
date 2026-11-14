@@ -151,6 +151,30 @@ python crawler_official_awards.py --source ncss --apply
 - 省级赛区名单不在本适配器范围（大创官网只发全国总决赛/公示名单）。
 - 入库后仍需跑一次 embed 补全，`embedding_state` 默认 `none`（与其它 crawl 行一致）。
 
+### 0.8 大创全量入库 + 分页列表 + 分层抽样（2026-11-14）
+
+**数据规模**：大创（`competition_id = 1`）已入库 **14,178** 条真实项目
+（2025 公示 5,221 / 2024 公布 4,637 / 2023 公布 4,320），全库 `awards` 14,248 条，
+`competitions.db` **12.43 MB**。两轮 `--apply` 均 `跳过 0`（`content_hash` 全库唯一，重复跑幂等）。
+
+**列表分页（Tab 2 往年获奖作品）**
+- 接口：`GET /api/competitions/{id}/awards?limit=20&offset=0` → `{competition_id, total, items}`；
+  `total` 是库内真实总数（`count_awards_by_competition(exclude_rejected=True)`，与 list 过滤口径一致），
+  不再是「本次返回条数」。
+- DB 层：`db.list_awards_by_competition(cid, limit=None, offset=0)`，`LIMIT -1 OFFSET n` 支持无上限翻页。
+- 前端：每页 20 条，「加载更多」按 `offset = 已加载条数` 追加；按钮三态
+  `加载更多 / 加载中... / 没有更多数据了`，并显示 `已加载 N / 总数 条`。
+  实测 20→40→60 条追加，单页接口 ~120-160 ms；8 条的小赛事直接显示「没有更多数据了」。
+
+**分层抽样（`analyzer.py`，PROMPT_VER v5）**
+- `SAMPLE_TIERS`：金奖档 10 / 银奖档 8 / 铜奖档 6 = **24 条封顶**，与数据量无关（1.4 万条也一样 24 条）。
+  档位映射：冠/亚/季军、特等、金、一等 → 金奖档；银、二等 → 银奖档；铜、三等、优秀、优胜、创新潜力 → 铜奖档；
+  认不出 → 其它。某档不足时按 金→银→铜→其它 补齐，总数仍 ≤24。
+- Prompt 明确写「样本含金奖 10 / 银奖 8 / 铜奖 6，请重点分析金奖共性并对比银铜差异」。
+- 实测：14,178 条数据下 prompt **6,753 字符（≈3.4K token）**，`MAX_PROMPT_CHARS = 24,000` 上限远未触及；
+  `sampled_ids` 恒为 24 个，模型只能引用样本内 id。
+- 指纹缓存沿用原机制：`PROMPT_VER` 升到 `v5` 后旧缓存自然失效一次，之后同样输入不再重复扣费。
+
 ---
 ## 一、架构、数据契约与文件清单
 ### 1.1 三条数据流

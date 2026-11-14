@@ -514,6 +514,11 @@ const parsedWork = ref(null)       // \u5df2\u89e3\u6790\u7684\u4f5c\u54c1 id
 const works = ref([])
 const worksLoading = ref(true)
 const worksError = ref('')
+// 「加载更多」分页：每页 20 条，offset 由已加载条数推出来
+const WORKS_PAGE_SIZE = 20
+const worksTotal = ref(0)
+const worksLoadingMore = ref(false)
+const worksHasMore = computed(() => works.value.length < worksTotal.value)
 
 /**
  * 后端 /awards 返回 snake_case（award_grade / origin_url），
@@ -551,17 +556,47 @@ async function loadWorks() {
   worksLoading.value = true
   worksError.value = ''
   try {
-    const res = await getCompetitionAwards(cid, { limit: 20 })
+    const res = await getCompetitionAwards(cid, { limit: WORKS_PAGE_SIZE, offset: 0 })
     // 切走赛事后旧响应不得写回，否则会串成上一场竞赛的获奖列表
     if (routedId.value !== cid) return
     works.value = (res.items || []).map(normalizeWork)
+    worksTotal.value = Math.max(Number(res.total) || 0, works.value.length)
   } catch (e) {
     if (routedId.value !== cid) return
     works.value = []
+    worksTotal.value = 0
     worksError.value = e?.message || '获奖作品加载失败，请稍后重试'
   } finally {
     // 仅当前赛事才复位，避免误清新赛事的 loading
     if (routedId.value === cid) worksLoading.value = false
+  }
+}
+
+/**
+ * 加载更多：按 offset = 已加载条数 追加下一页。
+ * 失败只提示、不打断已有列表；同一时间只允许一个请求在飞。
+ */
+async function loadMoreWorks() {
+  const cid = routedId.value
+  if (!cid || worksLoadingMore.value || !worksHasMore.value) return
+
+  worksLoadingMore.value = true
+  worksError.value = ''
+  try {
+    const res = await getCompetitionAwards(cid, {
+      limit: WORKS_PAGE_SIZE,
+      offset: works.value.length,
+    })
+    if (routedId.value !== cid) return
+    const seen = new Set(works.value.map((w) => w?.id))
+    const fresh = (res.items || []).map(normalizeWork).filter((w) => w && !seen.has(w.id))
+    works.value = works.value.concat(fresh)
+    worksTotal.value = Math.max(Number(res.total) || 0, works.value.length)
+  } catch (e) {
+    if (routedId.value !== cid) return
+    worksError.value = e?.message || '加载更多失败，请稍后重试'
+  } finally {
+    if (routedId.value === cid) worksLoadingMore.value = false
   }
 }
 
@@ -1672,6 +1707,42 @@ onBeforeUnmount(() => {
             </span>
           </div>
         </article>
+      </div>
+
+      <!-- 加载更多：每页 20 条，全部加载完显示「没有更多数据了」 -->
+      <div
+        v-if="works.length && !algorithmOnly"
+        class="mt-8 flex flex-col items-center gap-3"
+      >
+        <button
+          v-if="worksHasMore"
+          type="button"
+          :disabled="worksLoadingMore"
+          class="inline-flex min-w-[160px] items-center justify-center gap-2 rounded-full
+                 border border-slate-200 bg-white px-6 py-2.5 text-sm font-bold text-slate-700
+                 shadow-sm transition-colors hover:border-blue-300 hover:text-blue-600
+                 disabled:cursor-not-allowed disabled:opacity-60
+                 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+          @click="loadMoreWorks"
+        >
+          <svg
+            v-if="worksLoadingMore"
+            class="h-4 w-4 animate-spin"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2.5"
+          >
+            <path d="M21 12a9 9 0 11-6.2-8.6" stroke-linecap="round" />
+          </svg>
+          <span>{{ worksLoadingMore ? '加载中...' : '加载更多' }}</span>
+        </button>
+        <span v-else class="text-xs font-medium text-slate-400 dark:text-slate-500">
+          没有更多数据了
+        </span>
+        <span class="text-[11px] tabular-nums text-slate-400 dark:text-slate-500">
+          已加载 {{ works.length }} / {{ worksTotal }} 条
+        </span>
       </div>
 
       <!-- 作品详情弹窗 -->
