@@ -1,10 +1,11 @@
 <script setup>
-import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import Header from '@/components/Header.vue'
 import CompetitionCard from '@/components/CompetitionCard.vue'
 import BackToTop from '@/components/BackToTop.vue'
 import { getCompetitions, checkPrepared } from '@/services/api'
 import { authState } from '@/services/auth'
+import { theme } from '@/composables/useTheme'
 import { MAJOR_ORDER, CATEGORY_TREE, resolveCategory } from '@/utils/competitionCategory'
 
 const competitions = ref([])
@@ -12,6 +13,8 @@ const loading = ref(true)
 const errorMsg = ref('')
 // 竞赛 ID -> 是否已加入备赛（登录后批量拉取）
 const preparedMap = ref({})
+
+const isOfficial = computed(() => theme.value === 'official')
 
 // 并发查询每张卡片的备赛状态；未登录直接跳过（全部视为未加入）
 async function loadPreparedStates(list) {
@@ -34,40 +37,13 @@ async function loadPreparedStates(list) {
   preparedMap.value = next
 }
 
-// ===== 筛选栏 =====
+/* ================= 左侧筛选竖栏 ================= */
 // 平台只收录教育部 84 项核心国赛，「赛事级别」不再区分，只按学科大类筛选
-// 科目 Mega Menu 状态
-const menuOpen = ref(false)
-const activeMajor = ref('')
-// 科目多选：数组里可同时存大类（工科）与细分（计算机&信息技术）
+// 学科多选：数组里可同时存大类（工科）与细分（计算机&信息技术）
 // 数组为空 = 展示全部竞赛；有值 = 按数组里的分类做 OR 过滤
 const selectedMajors = ref([])
-const subjectMenuRef = ref(null)
-// 桌面端悬停展开；触屏设备没有 Hover，改为点击展开
-const canHover = ref(false)
-
-function openMenu(major) {
-  activeMajor.value = major
-  menuOpen.value = true
-}
-
-function closeMenu() {
-  menuOpen.value = false
-}
-
-function onMajorHover(major) {
-  if (canHover.value) openMenu(major)
-}
-
-// 桌面端悬停已能打开菜单，点击只负责切换选中状态；触屏端点击同样展开菜单
-function onMajorClick(major) {
-  toggleSelection(major)
-  openMenu(major)
-}
-
-function onMenuAreaLeave() {
-  if (canHover.value) closeMenu()
-}
+// 竖向折叠：同一时刻只展开一个大类的细分方向
+const openMajor = ref('')
 
 function isSelected(value) {
   return selectedMajors.value.includes(value)
@@ -83,43 +59,99 @@ function toggleSelection(value) {
   }
 }
 
-// 点击胶囊上的 X：只移除对应的那一项
+// 点胶囊上的 X：只移除对应的那一项
 function removeSelection(value) {
   selectedMajors.value = selectedMajors.value.filter((item) => item !== value)
 }
 
-// 只要该大类本身或其任一细分被选中，就高亮大类按钮
+// 只要该大类本身或其任一细分被选中，就高亮大类
 function isMajorActive(major) {
   if (isSelected(major)) return true
-  return CATEGORY_TREE[major].some((minor) => isSelected(minor))
+  return (CATEGORY_TREE[major] || []).some((minor) => isSelected(minor))
 }
 
-// 独立的“全部”按钮：清空科目数组，列表自然恢复全量
 function selectAll() {
   selectedMajors.value = []
-  closeMenu()
 }
 
-// 点击菜单外区域自动收起
-function onDocumentPointerDown(e) {
-  if (!menuOpen.value) return
-  const root = subjectMenuRef.value
-  if (root && !root.contains(e.target)) closeMenu()
+// 折叠展开：已展开则收起，否则展开该大类
+function toggleMajorOpen(major) {
+  openMajor.value = openMajor.value === major ? '' : major
 }
 
-const filtered = computed(() => {
+// ---------- 报名状态 ----------
+const STATUS_ORDER = ['open', 'upcoming', 'closed', 'unknown']
+const STATUS_LABEL = {
+  open: '报名中',
+  upcoming: '未开始',
+  closed: '已截止',
+  unknown: '待定'
+}
+const activeStatus = ref('all')
+
+// 用日期轨判定报名状态，与卡片上的倒计时徽章同一套规则
+function statusOf(item) {
+  const st = countdownState({
+    reg_start_date: item.regStartDate,
+    reg_end_date: item.regEndDate,
+    contest_start_date: item.contestStartDate
+  })
+  if (!st) return 'unknown'
+  if (st.tone === 'over' || st.tone === 'contest') return 'closed'
+  if (st.tone === 'soon') return 'upcoming'
+  return 'open'
+}
+
+// 学科过滤后的集合：状态计数基于它，保证「选中工科后，报名中 X 项」是这一学科内的数量
+const majorFiltered = computed(() => {
   const base = competitions.value
-
-  // 数组为空（或点了“全部”）时展示全部；否则按多选分类做 OR 过滤
   if (selectedMajors.value.length === 0) return base
-
   return base.filter((item) =>
     selectedMajors.value.some((value) => item.major === value || item.minor === value)
   )
 })
 
+const filtered = computed(() => {
+  if (activeStatus.value === 'all') return majorFiltered.value
+  return majorFiltered.value.filter((item) => statusOf(item) === activeStatus.value)
+})
+
+const statusCounts = computed(() => {
+  const counts = { all: majorFiltered.value.length, open: 0, upcoming: 0, closed: 0, unknown: 0 }
+  for (const item of majorFiltered.value) counts[statusOf(item)] += 1
+  return counts
+})
+
+// 当前报名状态过滤下的总池（不受学科选择影响），「全部学科」行显示它
+const statusPoolTotal = computed(
+  () => competitions.value.filter((item) => activeStatus.value === 'all' || statusOf(item) === activeStatus.value).length
+)
+
+// 每个大类在「当前状态过滤下」还有多少项，用于竖向清单右侧的数字
+const majorCounts = computed(() => {
+  const pool = competitions.value.filter(
+    (item) => activeStatus.value === 'all' || statusOf(item) === activeStatus.value
+  )
+  const counts = {}
+  for (const major of MAJOR_ORDER) counts[major] = 0
+  for (const item of pool) {
+    if (counts[item.major] !== undefined) counts[item.major] += 1
+  }
+  return counts
+})
+
+function clearAll() {
+  selectedMajors.value = []
+  activeStatus.value = 'all'
+  openMajor.value = ''
+}
+
+const hasFilter = computed(
+  () => selectedMajors.value.length > 0 || activeStatus.value !== 'all'
+)
+
 // ---------- 数据格式化（统一走 utils/timeFormat） ----------
-import { formatSignUp, formatContest } from '../utils/timeFormat'
+import { formatSignUp, formatContest, countdownState } from '../utils/timeFormat'
 
 // 封面图：后端 API 的 image（由 DB 的 image_url 映射而来）
 // 只接受 http(s) 绝对地址，避免相对路径 / 协议相对地址 / 空串打坏卡片占位图
@@ -178,16 +210,7 @@ function onPreparationChange({ id, prepared }) {
 }
 
 onMounted(() => {
-  canHover.value =
-    typeof window !== 'undefined' && typeof window.matchMedia === 'function'
-      ? window.matchMedia('(hover: hover)').matches
-      : false
-  document.addEventListener('pointerdown', onDocumentPointerDown)
   loadCompetitions()
-})
-
-onBeforeUnmount(() => {
-  document.removeEventListener('pointerdown', onDocumentPointerDown)
 })
 </script>
 
@@ -195,210 +218,309 @@ onBeforeUnmount(() => {
   <div class="min-h-screen bg-slate-50 dark:bg-slate-900">
     <Header />
 
-    <main class="mx-auto w-[85%] max-w-6xl pb-24 pt-28">
+    <main class="mx-auto w-[92%] max-w-[1248px] pb-24 pt-28">
       <!-- 页头 -->
       <div class="mb-8">
+        <p
+          class="mb-3 text-[12px] font-bold uppercase tracking-[0.16em] text-slate-400 dark:text-slate-500"
+        >
+          <span v-if="isOfficial" class="mr-2 inline-block h-[1px] w-5 translate-y-[-4px] bg-[#12294a]"></span>
+          竞赛总览 · COMPETITION INDEX
+        </p>
         <h1 class="text-3xl font-black tracking-tight text-slate-900 dark:text-slate-100">全部竞赛</h1>
         <p class="mt-2 text-sm text-slate-500 dark:text-slate-400">
           共 {{ competitions.length }} 项竞赛，按报名紧迫度排序：正在报名 → 即将开始 → 已截止
         </p>
       </div>
 
-      <!-- ========== 顶部筛选栏 ========== -->
-      <section
-        class="mb-6 rounded-2xl bg-white dark:bg-slate-800 p-4
-               ring-1 ring-slate-200/70 dark:ring-slate-700 shadow-sm"
-      >
-        <div class="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
-          <!-- 科目：一级大类 + Hover/点击展开的二级 Mega Menu -->
-          <div
-            ref="subjectMenuRef"
-            class="relative flex min-w-0 flex-1 flex-wrap items-center gap-2"
-            @mouseleave="onMenuAreaLeave"
+      <!-- ========== 移动端筛选（竖栏在 lg 以下隐藏） ========== -->
+      <div class="mb-6 space-y-3 lg:hidden">
+        <div class="flex flex-wrap gap-2">
+          <button
+            type="button"
+            class="shrink-0 rounded-full px-3.5 py-2 text-sm font-semibold transition-colors"
+            :class="selectedMajors.length === 0
+              ? 'bg-slate-900 text-white dark:bg-white dark:text-slate-900'
+              : 'bg-white text-slate-600 ring-1 ring-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:ring-slate-700'"
+            @click="selectAll"
           >
-            <span class="shrink-0 text-sm font-medium text-slate-500 dark:text-slate-400">科目</span>
+            全部学科
+          </button>
+          <button
+            v-for="major in MAJOR_ORDER"
+            :key="major"
+            type="button"
+            class="shrink-0 rounded-full px-3.5 py-2 text-sm font-semibold transition-colors"
+            :class="isMajorActive(major)
+              ? 'bg-blue-600 text-white'
+              : 'bg-white text-slate-600 ring-1 ring-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:ring-slate-700'"
+            @click="toggleSelection(major)"
+          >
+            {{ major }}
+          </button>
+        </div>
+        <div class="flex flex-wrap gap-2">
+          <button
+            type="button"
+            class="shrink-0 rounded-full px-3 py-1.5 text-xs font-bold transition-colors"
+            :class="activeStatus === 'all'
+              ? 'bg-slate-900 text-white dark:bg-white dark:text-slate-900'
+              : 'bg-white text-slate-600 ring-1 ring-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:ring-slate-700'"
+            @click="activeStatus = 'all'"
+          >
+            全部状态
+          </button>
+          <button
+            v-for="st in STATUS_ORDER"
+            :key="st"
+            type="button"
+            class="shrink-0 rounded-full px-3 py-1.5 text-xs font-bold transition-colors"
+            :class="activeStatus === st
+              ? 'bg-slate-900 text-white dark:bg-white dark:text-slate-900'
+              : 'bg-white text-slate-600 ring-1 ring-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:ring-slate-700'"
+            @click="activeStatus = st"
+          >
+            {{ STATUS_LABEL[st] }} {{ statusCounts[st] }}
+          </button>
+        </div>
+      </div>
 
-            <button
-              type="button"
-              class="rounded-full px-3.5 py-2 text-sm font-semibold transition-colors"
-              :class="selectedMajors.length === 0
-                ? 'bg-slate-900 text-white dark:bg-white dark:text-slate-900'
-                : 'bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-700/60 dark:text-slate-300 dark:hover:bg-slate-700'"
-              @click="selectAll"
-            >
-              全部
-            </button>
-
-            <button
-              v-for="major in MAJOR_ORDER"
-              :key="major"
-              type="button"
-              class="inline-flex items-center gap-1 rounded-full px-3.5 py-2 text-sm font-semibold transition-colors"
-              :class="[
-                isMajorActive(major)
-                  ? 'bg-blue-600 text-white shadow-sm shadow-blue-600/25'
-                  : 'bg-slate-100 text-slate-600 hover:bg-blue-50 hover:text-blue-700 dark:bg-slate-700/60 dark:text-slate-300 dark:hover:bg-slate-700 dark:hover:text-white',
-                menuOpen && activeMajor === major ? 'ring-2 ring-blue-500/60' : ''
-              ]"
-              :aria-expanded="menuOpen && activeMajor === major"
-              :aria-pressed="isSelected(major)"
-              aria-haspopup="true"
-              @mouseenter="onMajorHover(major)"
-              @click="onMajorClick(major)"
-            >
-              {{ major }}
-              <svg
-                class="h-3 w-3 transition-transform"
-                :class="menuOpen && activeMajor === major ? 'rotate-180' : ''"
-                fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"
-              >
-                <path stroke-linecap="round" stroke-linejoin="round" d="M6 9l6 6 6-6" />
-              </svg>
-            </button>
-
-            <!-- 多选结果：v-for 渲染每个选中项，X 只移除对应的一项 -->
-            <div v-if="selectedMajors.length" class="flex w-full flex-wrap items-center gap-2">
-              <span class="text-xs font-medium text-slate-500 dark:text-slate-400">已选</span>
-              <span
-                v-for="selection in selectedMajors"
-                :key="selection"
-                class="inline-flex items-center gap-1 rounded-full bg-blue-50 px-3 py-1.5 text-xs font-bold text-blue-700
-                       ring-1 ring-blue-200 dark:bg-blue-500/15 dark:text-blue-300 dark:ring-blue-500/30"
-              >
-                {{ selection }}
+      <!-- ========== 主体：左筛选竖栏 + 右列表 ========== -->
+      <div class="lg:grid lg:grid-cols-[248px_minmax(0,1fr)] lg:gap-10 xl:gap-14">
+        <!-- 左竖栏 -->
+        <aside class="hidden lg:block lg:border-r lg:border-slate-200/80 lg:pr-7 dark:lg:border-slate-700/60">
+          <div class="sticky top-24">
+            <!-- 01 学科门类 -->
+            <section class="border-t border-slate-300/80 pt-4 dark:border-slate-700">
+              <div class="mb-3 flex items-baseline justify-between">
+                <h2 class="text-[12px] font-bold uppercase tracking-[0.16em] text-slate-400 dark:text-slate-500">
+                  <span class="mr-1.5 font-mono text-slate-300 dark:text-slate-600">01</span>学科门类
+                </h2>
                 <button
+                  v-if="selectedMajors.length"
                   type="button"
-                  class="ml-0.5 flex h-4 w-4 items-center justify-center rounded-full transition-colors
-                         hover:bg-blue-200/70 dark:hover:bg-blue-500/30"
-                  :aria-label="`移除 ${selection}`"
-                  @click.stop="removeSelection(selection)"
+                  class="text-[11px] font-bold text-slate-400 transition-colors hover:text-slate-700 dark:hover:text-slate-200"
+                  @click="selectAll"
                 >
-                  <svg class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+                  重置
+                </button>
+              </div>
+
+              <button
+                type="button"
+                class="mb-1 flex w-full items-center justify-between rounded-md px-2.5 py-[7px] text-left text-[14px] font-semibold transition-colors"
+                :class="selectedMajors.length === 0
+                  ? (isOfficial ? 'bg-[#12294a] text-white' : 'bg-blue-600 text-white')
+                  : 'text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800'"
+                @click="selectAll"
+              >
+                <span>全部学科</span>
+                <span class="text-xs tabular-nums opacity-60">{{ statusPoolTotal }}</span>
+              </button>
+
+              <div v-for="major in MAJOR_ORDER" :key="major" class="mb-0.5">
+                <div
+                  class="flex items-center rounded-md transition-colors"
+                  :class="isMajorActive(major)
+                    ? (isOfficial ? 'bg-[#12294a] text-white' : 'bg-blue-600 text-white')
+                    : 'text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-800'"
+                >
+                  <button
+                    type="button"
+                    class="flex min-w-0 flex-1 items-center gap-1.5 px-2.5 py-[7px] text-left text-[14px] font-semibold"
+                    @click="toggleSelection(major)"
+                  >
+                    <span class="truncate">{{ major }}</span>
+                    <span
+                      v-if="isSelected(major)"
+                      class="ml-0.5 rounded-sm bg-white/20 px-1 text-[10px] font-bold tracking-wide"
+                    >已选</span>
+                  </button>
+                  <span class="shrink-0 pr-1 text-xs tabular-nums opacity-50">{{ majorCounts[major] }}</span>
+                  <button
+                    type="button"
+                    class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md opacity-60 transition hover:opacity-100"
+                    :aria-label="`${openMajor === major ? '收起' : '展开'}${major}细分方向`"
+                    :aria-expanded="openMajor === major"
+                    @click="toggleMajorOpen(major)"
+                  >
+                    <svg
+                      class="h-3 w-3 transition-transform"
+                      :class="openMajor === major ? 'rotate-180' : ''"
+                      fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"
+                    >
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M6 9l6 6 6-6" />
+                    </svg>
+                  </button>
+                </div>
+
+                <!-- 细分方向：竖向展开，多选 -->
+                <div
+                  v-if="openMajor === major"
+                  class="mb-1 mt-1 space-y-0.5 border-l border-slate-200 pl-2 dark:border-slate-700"
+                >
+                  <button
+                    v-for="minor in CATEGORY_TREE[major]"
+                    :key="minor"
+                    type="button"
+                    class="flex w-full items-center gap-1.5 rounded px-2 py-[5px] text-left text-[12.5px] font-medium transition-colors"
+                    :class="isSelected(minor)
+                      ? 'bg-slate-200/70 font-bold text-slate-900 dark:bg-slate-700 dark:text-white'
+                      : 'text-slate-500 hover:bg-slate-100 hover:text-slate-800 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-100'"
+                    @click="toggleSelection(minor)"
+                  >
+                    <span class="truncate">{{ minor }}</span>
+                  </button>
+                </div>
+              </div>
+            </section>
+
+            <!-- 02 报名状态 -->
+            <section class="mt-7 border-t border-slate-300/80 pt-4 dark:border-slate-700">
+              <h2 class="mb-3 text-[12px] font-bold uppercase tracking-[0.16em] text-slate-400 dark:text-slate-500">
+                <span class="mr-1.5 font-mono text-slate-300 dark:text-slate-600">02</span>报名状态
+              </h2>
+              <button
+                type="button"
+                class="mb-0.5 flex w-full items-center justify-between rounded-md px-2.5 py-[7px] text-left text-[14px] font-semibold transition-colors"
+                :class="activeStatus === 'all'
+                  ? 'text-slate-900 dark:text-white'
+                  : 'text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800'"
+                @click="activeStatus = 'all'"
+              >
+                <span class="flex items-center gap-2">
+                  <span
+                    class="h-[7px] w-[7px] rounded-full"
+                    :class="activeStatus === 'all' ? (isOfficial ? 'bg-[#12294a] dark:bg-white' : 'bg-blue-600') : 'bg-slate-300 dark:bg-slate-600'"
+                  ></span>
+                  全部状态
+                </span>
+                <span class="text-xs tabular-nums text-slate-400">{{ statusCounts.all }}</span>
+              </button>
+              <button
+                v-for="st in STATUS_ORDER"
+                :key="st"
+                type="button"
+                class="flex w-full items-center justify-between rounded-md px-2.5 py-[7px] text-left text-[14px] font-semibold transition-colors"
+                :class="activeStatus === st
+                  ? 'text-slate-900 dark:text-white'
+                  : 'text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800'"
+                @click="activeStatus = st"
+              >
+                <span class="flex items-center gap-2">
+                  <span
+                    class="h-[7px] w-[7px] rounded-full"
+                    :class="activeStatus === st ? (isOfficial ? 'bg-[#12294a] dark:bg-white' : 'bg-blue-600') : 'bg-slate-300 dark:bg-slate-600'"
+                  ></span>
+                  {{ STATUS_LABEL[st] }}
+                </span>
+                <span class="text-xs tabular-nums text-slate-400">{{ statusCounts[st] }}</span>
+              </button>
+            </section>
+
+            <!-- 结果 + 清空 -->
+            <div class="mt-7 border-t border-slate-300/80 pt-4 dark:border-slate-700">
+              <p class="text-[12.5px] font-medium text-slate-500 dark:text-slate-400">
+                匹配 <span class="text-[22px] font-black tabular-nums text-slate-900 dark:text-white">{{ filtered.length }}</span> 项
+              </p>
+              <button
+                v-if="hasFilter"
+                type="button"
+                class="mt-2 text-[12.5px] font-bold text-slate-500 underline decoration-slate-300 underline-offset-4 transition-colors hover:text-slate-900 dark:text-slate-400 dark:hover:text-white"
+                @click="clearAll"
+              >
+                清空全部筛选
+              </button>
+
+              <!-- 已选条件 -->
+              <div v-if="selectedMajors.length" class="mt-4 flex flex-wrap gap-1.5">
+                <button
+                  v-for="selection in selectedMajors"
+                  :key="selection"
+                  type="button"
+                  class="inline-flex items-center gap-1 rounded border border-slate-200 bg-white px-2 py-1 text-[11.5px] font-semibold text-slate-600 transition-colors hover:border-slate-300 hover:text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:text-white"
+                  @click="removeSelection(selection)"
+                >
+                  {{ selection }}
+                  <svg class="h-2.5 w-2.5 opacity-50" fill="none" stroke="currentColor" stroke-width="3" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
                   </svg>
                 </button>
-              </span>
+              </div>
             </div>
+          </div>
+        </aside>
 
-            <!-- 二级悬浮菜单（Mega Menu） -->
+        <!-- 右列表 -->
+        <div class="min-w-0">
+          <!-- Loading -->
+          <div v-if="loading" class="space-y-6">
             <div
-              v-if="menuOpen && activeMajor"
-              class="absolute left-0 top-full z-40 w-[min(92vw,44rem)] pt-2"
+              v-for="n in 4"
+              :key="n"
+              class="flex animate-pulse gap-7 rounded-2xl bg-white p-6 ring-1 ring-slate-200/70 dark:bg-slate-800 dark:ring-slate-700"
             >
-              <div
-                class="rounded-2xl border border-slate-200 bg-white p-4 shadow-xl shadow-slate-900/10
-                       dark:border-slate-700 dark:bg-slate-800"
-              >
-                <div class="mb-3 flex items-center justify-between gap-3">
-                  <p class="text-xs font-black uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400">
-                    {{ activeMajor }} · 细分方向
-                  </p>
-                  <button
-                    type="button"
-                    class="rounded-full px-2.5 py-1 text-xs font-bold text-slate-500 dark:text-slate-400 transition-colors
-                           hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-slate-700 dark:hover:text-slate-200"
-                    @click="closeMenu"
-                  >
-                    收起
-                  </button>
-                </div>
-
-                <div class="grid grid-cols-2 gap-1.5 sm:grid-cols-3 lg:grid-cols-4">
-                  <button
-                    type="button"
-                    class="rounded-xl px-3 py-2 text-left text-xs font-semibold transition-colors"
-                    :class="isSelected(activeMajor)
-                      ? 'bg-blue-600 text-white'
-                      : 'bg-slate-50 text-slate-600 hover:bg-blue-50 hover:text-blue-700 dark:bg-slate-700/40 dark:text-slate-300 dark:hover:bg-slate-700 dark:hover:text-white'"
-                    @click="toggleSelection(activeMajor)"
-                  >
-                    全部{{ activeMajor }}
-                  </button>
-                  <button
-                    v-for="minor in CATEGORY_TREE[activeMajor]"
-                    :key="minor"
-                    type="button"
-                    class="truncate rounded-xl px-3 py-2 text-left text-xs font-semibold transition-colors"
-                    :class="isSelected(minor)
-                      ? 'bg-blue-600 text-white'
-                      : 'bg-slate-50 text-slate-600 hover:bg-blue-50 hover:text-blue-700 dark:bg-slate-700/40 dark:text-slate-300 dark:hover:bg-slate-700 dark:hover:text-white'"
-                    @click="toggleSelection(minor)"
-                  >
-                    {{ minor }}
-                  </button>
-                </div>
+              <div class="w-52 shrink-0">
+                <div class="aspect-[4/3] w-full rounded-xl bg-slate-100 dark:bg-slate-700/60"></div>
+              </div>
+              <div class="flex-1 space-y-4 py-1">
+                <div class="h-6 w-1/2 rounded bg-slate-100 dark:bg-slate-700/60"></div>
+                <div class="h-4 w-2/3 rounded bg-slate-100 dark:bg-slate-700/60"></div>
+                <div class="h-4 w-1/3 rounded bg-slate-100 dark:bg-slate-700/60"></div>
               </div>
             </div>
           </div>
 
-          <!-- 结果计数 -->
-          <span class="text-sm text-slate-500 dark:text-slate-400 sm:ml-auto">
-            {{ filtered.length }} 个结果
-          </span>
-        </div>
-      </section>
-
-      <!-- ========== 列表三态 ========== -->
-      <!-- Loading -->
-      <div v-if="loading" class="space-y-6">
-        <div
-          v-for="n in 4"
-          :key="n"
-          class="flex animate-pulse gap-7 rounded-2xl bg-white dark:bg-slate-800 p-6 ring-1 ring-slate-200/70 dark:ring-slate-700"
-        >
-          <div class="w-52 shrink-0">
-            <div class="aspect-[4/3] w-full rounded-xl bg-slate-100 dark:bg-slate-700/60"></div>
+          <!-- 失败 -->
+          <div
+            v-else-if="errorMsg"
+            class="rounded-2xl border border-red-100 bg-red-50 px-6 py-16 text-center dark:border-red-500/30 dark:bg-red-500/15"
+          >
+            <p class="font-bold text-red-500 dark:text-red-400">{{ errorMsg }}</p>
+            <button
+              class="mt-6 rounded-full bg-blue-600 px-6 py-2 text-sm font-bold text-white shadow-sm shadow-blue-600/25 transition-colors hover:bg-blue-700 dark:hover:bg-blue-600"
+              @click="loadCompetitions"
+            >
+              重新加载
+            </button>
           </div>
-          <div class="flex-1 space-y-4 py-1">
-            <div class="h-6 w-1/2 rounded bg-slate-100 dark:bg-slate-700/60"></div>
-            <div class="h-4 w-2/3 rounded bg-slate-100 dark:bg-slate-700/60"></div>
-            <div class="h-4 w-1/3 rounded bg-slate-100 dark:bg-slate-700/60"></div>
+
+          <!-- 筛选后无结果 -->
+          <div
+            v-else-if="filtered.length === 0"
+            class="rounded-2xl border border-dashed border-slate-200 px-6 py-16 text-center dark:border-slate-700"
+          >
+            <p class="font-bold text-slate-500 dark:text-slate-400">没有符合条件的竞赛</p>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">试试放宽学科或报名状态</p>
+            <button
+              v-if="hasFilter"
+              class="mt-5 rounded-full bg-slate-900 px-5 py-2 text-sm font-bold text-white dark:bg-white dark:text-slate-900"
+              @click="clearAll"
+            >
+              清空筛选
+            </button>
+          </div>
+
+          <!-- 正常列表 -->
+          <div v-else class="space-y-6">
+            <CompetitionCard
+              v-for="item in filtered"
+              :key="item.id"
+              :id="item.id"
+              :image="item.image"
+              :short-name="item.shortName"
+              :title="item.title"
+              :category="item.category"
+              :sign-up-time="item.signUpTime"
+              :contest-time="item.contestTime"
+              :reg-start-date="item.regStartDate"
+              :reg-end-date="item.regEndDate"
+              :contest-start-date="item.contestStartDate"
+              :prepared="preparedMap[String(item.id)] === true"
+              @preparation-change="onPreparationChange"
+            />
           </div>
         </div>
-      </div>
-
-      <!-- 失败 -->
-      <div
-        v-else-if="errorMsg"
-        class="rounded-2xl border border-red-100 dark:border-red-500/30 bg-red-50 dark:bg-red-500/15 px-6 py-16 text-center"
-      >
-        <p class="font-bold text-red-500 dark:text-red-400">{{ errorMsg }}</p>
-        <button
-          class="mt-6 rounded-full bg-blue-600 px-6 py-2 text-sm font-bold text-white
-                 shadow-sm shadow-blue-600/25 hover:bg-blue-700 dark:hover:bg-blue-600 transition-colors"
-          @click="loadCompetitions"
-        >
-          重新加载
-        </button>
-      </div>
-
-      <!-- 已筛选但无匹配结果 -->
-      <div
-        v-else-if="filtered.length === 0"
-        class="rounded-2xl border border-dashed border-slate-200 dark:border-slate-700 px-6 py-16 text-center"
-      >
-        <p class="font-bold text-slate-500 dark:text-slate-400">没有符合条件的竞赛</p>
-        <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">试试更换其他科目</p>
-      </div>
-
-      <!-- 正常列表 -->
-      <div v-else class="space-y-6">
-        <CompetitionCard
-          v-for="item in filtered"
-          :key="item.id"
-          :id="item.id"
-          :image="item.image"
-          :short-name="item.shortName"
-          :title="item.title"
-          :category="item.category"
-          :sign-up-time="item.signUpTime"
-          :contest-time="item.contestTime"
-          :reg-start-date="item.regStartDate"
-          :reg-end-date="item.regEndDate"
-          :contest-start-date="item.contestStartDate"
-          :prepared="preparedMap[String(item.id)] === true"
-          @preparation-change="onPreparationChange"
-        />
       </div>
     </main>
 
