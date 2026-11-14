@@ -516,13 +516,17 @@ def missing_award_columns() -> list:
 
 
 # insights 表补列：老库的 insights 没有 competition_id，导致无法按赛事隔离。
+# evidence / model 是 save_insight 会写入的字段，早期 schema_v2.sql 漏了这两列，
+# 全新库（含测试临时库）会直接报 "no column named evidence"，一并补齐。
 _INSIGHT_MIGRATION_COLUMNS = {
     "competition_id": "INTEGER",
+    "evidence": "TEXT",
+    "model": "TEXT",
 }
 
 
 def _migrate_insight_columns(conn: sqlite3.Connection) -> list:
-    """幂等补齐 insights.competition_id，返回本次新增列。
+    """幂等补齐 insights 的 competition_id / evidence / model，返回本次新增列。
 
     历史 insights 是按类别聚合的全局数据，补列后为 NULL；
     读取接口必须按 competition_id 过滤，因此这些旧数据不会混入具体赛事。

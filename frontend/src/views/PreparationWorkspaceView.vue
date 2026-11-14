@@ -6,6 +6,7 @@ import {
   analyzeWork,
   analyzeWorks,
   generatePlan,
+  getCachedAnalysis,
   getCompetitionAwards,
   getCompetitionDetail,
   getInspirationStatus,
@@ -113,6 +114,10 @@ watch(routedId, () => {
   closeWork()
   // 共性报告属于竞赛级数据，切走后不再展示上一场赛事的分析
   resetCommonAnalysis()
+  // 新赛事的洞察折叠状态同样要重置（默认全部收起）
+  openInsightKeys.value = []
+  // 新赛事的报告可能有缓存（终身一次），只读探测一次，不扣配额
+  loadCommonCache()
 })
 
 // ---- Tab \u5207\u6362\uff08\u54cd\u5e94\u5f0f\u53d8\u91cf\uff09----
@@ -601,17 +606,47 @@ async function loadMoreWorks() {
   }
 }
 
-/* ---- 共性分析：竞赛级报告（一键分析全部获奖作品的共性） ---- */
+/* ---- 共性分析：竞赛级报告（一键分析全部获奖作品的共性 · 终身一次） ---- */
 const commonText = ref('')          // 共性分析正文（markdown）
 const commonLoading = ref(false)    // 请求中
 const commonError = ref('')
+const commonOpen = ref(false)       // 默认收起：报告很长，先给 3-5 行预览
+const commonJustGenerated = ref(0)  // >0 表示本次刚生成，用于提示「点开看」
+let commonAutoRefreshed = false     // 每个竞赛只静默重算一次（防止死循环）
 const hasCommon = computed(() => !!commonText.value)
 const commonHtml = computed(() => (commonText.value ? renderMarkdown(commonText.value) : ''))
 
+function toggleCommon() {
+  commonOpen.value = !commonOpen.value
+}
+
 /**
- * 触发共性分析。
- * 缓存完全由后端负责：前端每次点击都正常发起请求，
- * 后端命中缓存会立即返回，未命中则等待生成，前端无需区分。
+ * 只读读取后端已缓存的报告（GET /api/ai/analysis，不扣配额、不调模型）。
+ * 有缓存 -> 默认折叠展示 + 【展开全部】；无缓存 -> 只显示【AI 分析获奖作品共性】。
+ */
+async function loadCommonCache() {
+  const cid = routedId.value
+  if (!cid) return
+  try {
+    const res = await getCachedAnalysis(cid)
+    if (routedId.value !== cid) return
+    if (res?.cached && res.analysis) {
+      commonText.value = res.analysis
+      commonOpen.value = false
+      // 底层 awards 变过（指纹不符）才静默重算一次；数据没变则永不调用模型
+      if (res.stale && isLoggedIn() && !commonAutoRefreshed) {
+        commonAutoRefreshed = true
+        runCommonAnalysis()
+      }
+    }
+  } catch {
+    // 只读探测失败不影响用户手动点击生成，静默降级
+  }
+}
+
+/**
+ * 触发共性分析（只在「从未生成过」时才会出现这个按钮）。
+ * 后端是终身缓存：即便重复请求也只会命中缓存、不扣配额、不再调用大模型。
  */
 async function runCommonAnalysis() {
   if (commonLoading.value) return
@@ -624,6 +659,7 @@ async function runCommonAnalysis() {
 
   commonLoading.value = true
   commonError.value = ''
+  commonJustGenerated.value = 0
 
   try {
     // analyzeWorks 内部已用 normalizeCompetitionId 校验并转成数字
@@ -635,6 +671,9 @@ async function runCommonAnalysis() {
       commonError.value = '未获取到分析内容，请稍后重试'
     } else {
       commonText.value = analysis
+      // 默认仍然收起：报告是长文，先给预览 + 【展开全部】
+      commonOpen.value = false
+      commonJustGenerated.value = analysis.length
     }
   } catch (e) {
     if (routedId.value !== cid) return
@@ -648,6 +687,9 @@ async function runCommonAnalysis() {
 function resetCommonAnalysis() {
   commonText.value = ''
   commonError.value = ''
+  commonOpen.value = false
+  commonJustGenerated.value = 0
+  commonAutoRefreshed = false
 }
 
 function openWork(work) {
@@ -839,6 +881,17 @@ const visibleItems = computed(() => (showFavorites.value ? favoriteList.value : 
 const visibleInsights = computed(() => visibleItems.value.filter((it) => it.source === 'insight'))
 const visibleIdeas = computed(() => visibleItems.value.filter((it) => it.source === 'idea'))
 
+/* ---- 赛事洞察：终身一次 + 默认折叠（正文是长结论，不再整段铺开） ---- */
+const openInsightKeys = ref([])
+function isInsightOpen(key) {
+  return openInsightKeys.value.includes(key)
+}
+function toggleInsight(key) {
+  openInsightKeys.value = isInsightOpen(key)
+    ? openInsightKeys.value.filter((k) => k !== key)
+    : [...openInsightKeys.value, key]
+}
+
 function applyFavoriteFlags() {
   inspirations.value.forEach((it) => {
     it.favorite = favIds.value.includes(it.key)
@@ -990,7 +1043,7 @@ async function loadMoreIdeas() {
 
   try {
     const res = await requestMoreIdeas(cid, {
-      count: 4,
+      count: 3,
       excludeIds: shown.map((it) => it.id),
       excludeTitles: shown.map((it) => it.title)
     })
@@ -1220,6 +1273,8 @@ onMounted(() => {
   loadCompetition()
   loadWorks()
   loadInspirations()
+  // 共性分析是终身一次：进页面先只读探测缓存，有就折叠展示、没有才显示生成按钮
+  loadCommonCache()
   // 计划 / 对话命中本地缓存则直接恢复，刷新不丢。
   // 这里再加一层兜底：即使恢复逻辑内部出现意外，也绝不能让页面白屏 / 死锁。
   try {
@@ -1653,7 +1708,9 @@ onBeforeUnmount(() => {
             </p>
           </div>
 
+          <!-- 终身一次：从未生成过才显示「生成」；已生成只显示「展开全部 / 收起」 -->
           <button
+            v-if="!hasCommon"
             type="button"
             data-testid="common-analysis"
             class="inline-flex h-11 shrink-0 items-center gap-2 rounded-full bg-blue-600 px-6 text-sm font-bold
@@ -1671,6 +1728,25 @@ onBeforeUnmount(() => {
             </svg>
             AI 分析获奖作品共性
           </button>
+
+          <button
+            v-else
+            type="button"
+            data-testid="common-toggle"
+            class="inline-flex h-10 shrink-0 items-center gap-2 rounded-full bg-white dark:bg-slate-800 px-5 text-sm font-bold
+                   text-blue-700 dark:text-blue-300 ring-1 ring-blue-200 dark:ring-blue-500/30 transition-colors
+                   hover:bg-blue-50 dark:hover:bg-blue-500/15"
+            @click="toggleCommon"
+          >
+            <svg
+              class="h-4 w-4 transition-transform"
+              :class="commonOpen ? 'rotate-180' : ''"
+              fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"
+            >
+              <path stroke-linecap="round" stroke-linejoin="round" d="M6 9l6 6 6-6" />
+            </svg>
+            {{ commonOpen ? '收起' : '展开全部' }}
+          </button>
         </div>
 
         <!-- 共性报告正文 -->
@@ -1687,11 +1763,35 @@ onBeforeUnmount(() => {
           <span>{{ commonError }}</span>
         </div>
 
-        <div
-          v-else-if="hasCommon"
-          class="markdown-body mt-5 max-w-none rounded-2xl bg-slate-50 dark:bg-slate-900 p-4 text-sm leading-relaxed text-slate-700 dark:text-slate-200"
-          v-html="commonHtml"
-        ></div>
+        <!-- 默认收起：max-height 截断 + 渐隐，点【展开全部】看全文 -->
+        <template v-else-if="hasCommon">
+          <div class="relative mt-5">
+            <div
+              data-testid="common-report"
+              class="markdown-body max-w-none rounded-2xl bg-slate-50 dark:bg-slate-900 p-4 text-sm leading-relaxed text-slate-700 dark:text-slate-200"
+              :class="commonOpen ? '' : 'max-h-56 overflow-hidden'"
+              v-html="commonHtml"
+            ></div>
+            <div
+              v-if="!commonOpen"
+              class="pointer-events-none absolute inset-x-0 bottom-0 h-16 rounded-b-2xl bg-gradient-to-t from-slate-50 dark:from-slate-900 to-transparent"
+            ></div>
+          </div>
+          <div class="mt-3 flex items-center justify-between gap-3">
+            <p class="text-[11px] font-medium text-slate-500 dark:text-slate-400">
+              <template v-if="commonJustGenerated">已生成 {{ commonJustGenerated }} 字，点【展开全部】查看全文</template>
+              <template v-else>该赛事的共性分析终身只生成一次，已为你保存</template>
+            </p>
+            <button
+              type="button"
+              class="shrink-0 rounded-full px-4 py-1.5 text-xs font-bold text-blue-700 dark:text-blue-300
+                     ring-1 ring-blue-200 dark:ring-blue-500/30 transition-colors hover:bg-blue-50 dark:hover:bg-blue-500/15"
+              @click="toggleCommon"
+            >
+              {{ commonOpen ? '收起' : '展开全部' }}
+            </button>
+          </div>
+        </template>
       </div>
 
       <!-- 列表 loading / 错误 / 空 -->
@@ -2214,29 +2314,32 @@ onBeforeUnmount(() => {
             平台已收录该赛事 {{ awardsCount }} 件获奖作品。点一下，AI 会通读这些作品，
             提炼评审偏好、选题趋势与可以直接借鉴的创新点。
           </p>
-          <div class="mt-5 flex flex-wrap items-center justify-center gap-3">
-            <button
-              type="button"
-              class="inline-flex h-10 items-center gap-2 rounded-full bg-blue-600 px-6 text-sm font-bold text-white
-                     shadow-sm shadow-blue-600/25 transition-colors hover:bg-blue-700 dark:hover:bg-blue-600
-                     disabled:cursor-not-allowed disabled:opacity-60"
-              :disabled="!canGenerateInspiration"
-              @click="onGenerateInspiration"
-            >
-              <svg v-if="inspireBusy" class="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
-                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
-                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
-              </svg>
-              生成专属灵感
-            </button>
-            <button
-              type="button"
-              class="h-10 rounded-full px-5 text-sm font-bold text-slate-500 dark:text-slate-400 transition-colors hover:bg-slate-100 dark:hover:bg-slate-700/60"
-              @click="refreshInspiration"
-            >
-              刷新看看
-            </button>
-          </div>
+
+          <!-- 空状态：按钮紧贴提示语正下方，居中显示 -->
+          <button
+            type="button"
+            data-testid="more-ideas-empty"
+            class="mt-5 inline-flex items-center gap-2 rounded-full bg-gradient-to-r from-violet-600 to-fuchsia-600 px-7 py-3 text-sm font-black text-white shadow-lg shadow-violet-500/25 transition-all
+                   hover:-translate-y-0.5 hover:shadow-xl hover:shadow-violet-500/30
+                   disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0"
+            :disabled="inspireBusy || !canGenerateInspiration"
+            @click="onGenerateInspiration"
+          >
+            <span
+              v-if="inspireBusy"
+              class="inline-block h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white"
+            ></span>
+            <span v-else aria-hidden="true">✨</span>
+            {{ inspireBusy ? '正在生成专属灵感…' : '生成更多选题灵感' }}
+          </button>
+
+          <button
+            type="button"
+            class="mt-3 rounded-full px-4 py-1.5 text-xs font-bold text-slate-500 dark:text-slate-400 transition-colors hover:bg-slate-100 dark:hover:bg-slate-700/60"
+            @click="refreshInspiration"
+          >
+            刷新看看
+          </button>
         </template>
 
         <template v-else>
@@ -2251,7 +2354,7 @@ onBeforeUnmount(() => {
             disabled
             title="该赛事暂无公开的历年获奖作品，AI 缺少提炼素材"
           >
-            生成专属灵感
+            生成更多选题灵感
           </button>
           <p class="mt-3 text-xs font-medium text-slate-400 dark:text-slate-500">
             已有获奖作品公示的赛事，会随数据补全自动解锁这个按钮。
@@ -2294,17 +2397,44 @@ onBeforeUnmount(() => {
                 {{ item.tag }}
               </span>
 
-              <div
+              <span
                 v-if="item.html"
-                class="markdown-body text-sm leading-relaxed text-slate-700 dark:text-slate-200"
-                v-html="item.html"
-              ></div>
+                class="relative block"
+              >
+                <span
+                  class="markdown-body block text-sm leading-relaxed text-slate-700 dark:text-slate-200"
+                  :class="isInsightOpen(item.key) ? '' : 'max-h-32 overflow-hidden'"
+                  v-html="item.html"
+                ></span>
+                <span
+                  v-if="!isInsightOpen(item.key)"
+                  class="pointer-events-none absolute inset-x-0 bottom-0 block h-12 bg-gradient-to-t from-white dark:from-slate-800 to-transparent"
+                ></span>
+              </span>
 
               <p v-if="item.refs && item.refs.length" class="mt-3 text-[11px] font-medium text-slate-500 dark:text-slate-400">
                 参考样本 ID：{{ item.refs.join('、') }}
               </p>
 
-              <div class="mt-auto flex items-center justify-end pt-4">
+              <div class="mt-auto flex items-center justify-between gap-2 pt-4">
+                <button
+                  v-if="item.html"
+                  type="button"
+                  :data-testid="`insight-toggle-${item.id}`"
+                  class="inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-bold
+                         text-blue-700 dark:text-blue-300 ring-1 ring-blue-200 dark:ring-blue-500/30
+                         transition-colors hover:bg-blue-50 dark:hover:bg-blue-500/15"
+                  @click="toggleInsight(item.key)"
+                >
+                  <svg
+                    class="h-3.5 w-3.5 transition-transform"
+                    :class="isInsightOpen(item.key) ? 'rotate-180' : ''"
+                    fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"
+                  >
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M6 9l6 6 6-6" />
+                  </svg>
+                  {{ isInsightOpen(item.key) ? '收起' : '展开全部' }}
+                </button>
                 <button
                   type="button"
                   class="inline-flex items-center gap-2 rounded-full px-4 py-1.5 text-xs font-bold transition-colors"
@@ -2323,9 +2453,10 @@ onBeforeUnmount(() => {
           </div>
         </section>
 
-        <!-- ===== 板块二：选题灵感（idea） ===== -->
-        <section v-if="visibleIdeas.length">
-          <header class="mb-4">
+        <!-- ===== 板块二：选题灵感（idea） =====
+             洞察已有、选题还没生成时也要露出底部按钮，否则用户无处追加 -->
+        <section v-if="visibleIdeas.length || !showFavorites">
+          <header v-if="visibleIdeas.length" class="mb-4">
             <h2 class="flex items-center gap-2 text-lg font-black tracking-tight text-slate-900 dark:text-slate-100">
               <span aria-hidden="true">💡</span>
               选题灵感
@@ -2338,7 +2469,7 @@ onBeforeUnmount(() => {
             </p>
           </header>
 
-          <div class="grid grid-cols-1 gap-5 md:grid-cols-2">
+          <div v-if="visibleIdeas.length" class="grid grid-cols-1 gap-5 md:grid-cols-2">
             <article
               v-for="item in visibleIdeas"
               :key="item.key"
@@ -2392,12 +2523,19 @@ onBeforeUnmount(() => {
             </article>
           </div>
 
-          <!-- ✨ 换一批新灵感：把当前列表（id + 标题）传给后端避开重复，结果追加到尾部 -->
-          <div class="mt-6 flex flex-col items-center gap-2">
+          <div
+            v-if="!visibleIdeas.length"
+            class="rounded-2xl bg-white py-10 text-center text-sm text-slate-500 ring-1 ring-slate-200/70 dark:bg-slate-800 dark:text-slate-400 dark:ring-slate-700"
+          >
+            还没有选题灵感，点下面的按钮让 AI 基于获奖作品给你出题
+          </div>
+
+          <!-- ✨ 生成更多选题灵感：必须紧贴列表最下方（滑到底顺手点） -->
+          <div class="mt-8 flex flex-col items-center gap-2" data-testid="more-ideas-block">
             <button
               type="button"
               data-testid="more-ideas"
-              class="inline-flex items-center gap-2 rounded-full bg-gradient-to-r from-violet-600 to-fuchsia-600 px-6 py-2.5 text-sm font-black text-white shadow-lg shadow-violet-500/25 transition-all
+              class="inline-flex items-center gap-2 rounded-full bg-gradient-to-r from-violet-600 to-fuchsia-600 px-7 py-3 text-sm font-black text-white shadow-lg shadow-violet-500/25 transition-all
                      hover:-translate-y-0.5 hover:shadow-xl hover:shadow-violet-500/30
                      disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0"
               :disabled="moreIdeasLoading || algorithmOnly"
@@ -2408,7 +2546,7 @@ onBeforeUnmount(() => {
                 class="inline-block h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white"
               ></span>
               <span v-else aria-hidden="true">✨</span>
-              {{ moreIdeasLoading ? '正在构思新选题…' : '换一批新灵感' }}
+              {{ moreIdeasLoading ? '正在生成新选题…' : '生成更多选题灵感' }}
             </button>
             <p v-if="moreIdeasError" class="text-xs font-medium text-rose-500">{{ moreIdeasError }}</p>
             <p
@@ -2416,7 +2554,7 @@ onBeforeUnmount(() => {
               class="text-xs font-medium text-emerald-600 dark:text-emerald-400"
             >{{ moreIdeasTip }}</p>
             <p v-else class="text-[11px] font-medium text-slate-500 dark:text-slate-400">
-              点一次生成 4 条全新选题（自动避开已展示的 {{ visibleIdeas.length }} 条），越点越多
+              点一次新增 3 条全新选题（自动避开已展示的 {{ visibleIdeas.length }} 个主题），越点越多
             </p>
           </div>
         </section>

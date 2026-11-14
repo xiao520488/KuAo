@@ -23,8 +23,10 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 import analyzer
+import config
 import llm
 from db import (
+    consume_ai_quota,
     get_ai_analysis,
     get_award_by_id,
     get_competition,
@@ -33,7 +35,7 @@ from db import (
     list_insights_by_competition,
     save_ai_analysis,
 )
-from security import current_ai_quota, require_ai_quota
+from security import current_ai_quota, get_current_user, require_ai_quota
 from models.schemas import Competition
 
 logger = logging.getLogger(__name__)
@@ -82,6 +84,15 @@ class AnalyzeRequest(BaseModel):
     """
 
     competition_id: int = Field(..., gt=0, description="竞赛 ID，用于检索该赛事的获奖作品")
+    force_refresh: bool = Field(
+        False,
+        description=(
+            "已废弃，传了也会被忽略。共性分析是「终身一次」："
+            "ai_analysis_cache 里一旦有该赛事的记录就直接返回，"
+            "只有 awards 数据变化导致 prompt 指纹变化时后端才会自动重算。"
+        ),
+        json_schema_extra={"deprecated": True},
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -115,6 +126,9 @@ class AnalyzeResponse(BaseModel):
     competition_name: Optional[str] = Field(None, description="竞赛名称")
     work_count: int = Field(..., description="参与本次分析的样本条数（跨赛道抽样的作品数）")
     track_count: int = Field(0, description="样本覆盖的赛道数")
+    cached: bool = Field(
+        True, description="True=直接命中终身缓存（未消耗配额、未调用大模型）"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -693,69 +707,102 @@ def _build_analyze_prompt(
     return "\n".join(parts)
 
 
+def _competition_analysis_input(competition_id: int) -> tuple:
+    """组装「赛事共性分析」的 prompt 上下文。
+
+    返回 ``(prompt, comp, works, track_meta)``；
+    POST /analyze 与 GET /analysis 共用，保证两边的指纹口径完全一致
+    （否则 GET 判「已缓存」、POST 判「指纹不符」，会互相打脸）。
+
+    异常：竞赛不存在抛 LookupError；无获奖作品抛 ValueError("no_awards")。
+    """
+    try:
+        comp = get_competition(competition_id)
+    except Exception as exc:
+        logger.error("查询竞赛失败: %r", exc)
+        raise ValueError("db_error") from exc
+    if comp is None:
+        raise LookupError(f"竞赛 ID={competition_id} 不存在")
+
+    try:
+        all_works = list_awards_by_competition(competition_id)
+    except Exception as exc:
+        logger.error("查询获奖作品失败: %r", exc)
+        raise ValueError("db_error") from exc
+    if not all_works:
+        raise ValueError("no_awards")
+
+    works, track_meta = analyzer.sample_cross_track(all_works)
+    if not works:
+        raise ValueError("no_awards")
+
+    ctx = _competition_context(competition_id)
+    comp_name = comp.get("name")
+    prompt = _build_analyze_prompt(comp_name, ctx, works, track_meta)
+    return prompt, comp, works, track_meta
+
+
 @router.post(
     "/analyze",
     response_model=AnalyzeResponse,
-    summary="赛事获奖作品共性分析（跨赛道 · 技术拆解与架构套路）",
+    summary="赛事获奖作品共性分析（跨赛道 · 技术拆解与架构套路 · 终身缓存）",
     description=(
         "接收 competition_id，从该赛事全部获奖作品中做**跨赛道抽样**"
         "（每个主要赛道 3-5 条，合计 20-30 条），输出技术栈共性、系统架构套路、"
         "工程亮点与评审技术关注点（Markdown）。\n\n"
+        "**终身缓存**：ai_analysis_cache 里已有该赛事的记录就直接返回（`cached=true`），"
+        "不消耗配额、不调用大模型；只有 awards 数据变化导致 prompt 指纹变化时才自动重算。"
+        "请求体里的 `force_refresh` 已废弃，传了也会被忽略。\n\n"
         "与「灵感工作台 · 赛事洞察」严格分工：本接口不产出商业趋势/红蓝海/组队策略。"
     ),
     responses={
+        401: {"description": "未登录或 Token 失效"},
         404: {"description": "竞赛不存在或该赛事暂无获奖作品"},
+        429: {"description": "超出每日 AI 配额（命中缓存时不扣配额，不会 429）"},
         502: {"description": "大模型调用失败"},
     },
 )
 def analyze_work(
     req: AnalyzeRequest,
-    _user: dict = Depends(require_ai_quota),  # 需登录
+    user: dict = Depends(get_current_user),  # 需登录，但命中缓存不扣配额
 ) -> AnalyzeResponse:
-    """赛事获奖作品共性分析：跨赛道抽样后，拆解技术栈、架构套路与工程亮点。"""
-    # 1. 校验竞赛存在
+    """赛事获奖作品共性分析：跨赛道抽样后，拆解技术栈、架构套路与工程亮点。
+
+    成本模型（2026-11-14 定稿）：一条赛事终生只调用一次大模型。
+    顺序必须是「先查缓存 → 再扣配额 → 才调模型」，
+    否则每次打开页面都会白扣一次配额。
+    """
+    if req.force_refresh:
+        logger.info(
+            "忽略 force_refresh（共性分析终身缓存）competition_id=%s",
+            req.competition_id,
+        )
+
+    # 1-3. 取全量作品 -> 跨赛道抽样 -> 拼 prompt（与 GET 缓存口径一致）
     try:
-        comp = get_competition(req.competition_id)
-    except Exception as exc:
-        logger.error("查询竞赛失败: %r", exc)
-        raise HTTPException(status_code=500, detail="数据库查询失败") from exc
-    if comp is None:
-        raise HTTPException(
-            status_code=404, detail=f"竞赛 ID={req.competition_id} 不存在"
+        prompt, comp, works, track_meta = _competition_analysis_input(
+            req.competition_id
         )
-
-    # 2. 取该赛事全部获奖作品，再做跨赛道抽样（每个主要赛道 3-5 条，合计 20-30 条）
-    #    旧逻辑 limit=5 只会拿到同一赛道的前 5 条，结论必然片面。
-    try:
-        all_works = list_awards_by_competition(req.competition_id)
-    except Exception as exc:
-        logger.error("查询获奖作品失败: %r", exc)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        reason = str(exc)
+        if reason == "no_awards":
+            raise HTTPException(
+                status_code=404,
+                detail=f"竞赛 ID={req.competition_id} 暂无获奖作品数据，无法做聚合分析",
+            ) from exc
         raise HTTPException(status_code=500, detail="数据库查询失败") from exc
 
-    if not all_works:
-        raise HTTPException(
-            status_code=404,
-            detail=f"竞赛 ID={req.competition_id} 暂无获奖作品数据，无法做聚合分析",
-        )
-
-    works, track_meta = analyzer.sample_cross_track(all_works)
-    if not works:
-        raise HTTPException(
-            status_code=404,
-            detail=f"竞赛 ID={req.competition_id} 抽样结果为空，无法做聚合分析",
-        )
-
-    # 3. 拼 prompt；先查全局缓存，命中直接返回，不再调用大模型
-    ctx = _competition_context(req.competition_id)
     comp_name = comp.get("name")
-    prompt = _build_analyze_prompt(comp_name, ctx, works, track_meta)
 
+    # 终身缓存：命中即返回，不扣配额、不调模型
     cached = _load_cached_analysis(
         ANALYSIS_TARGET_COMPETITION, req.competition_id, prompt
     )
     if cached:
         logger.info(
-            "赛事共性分析命中缓存 competition_id=%s，跳过大模型",
+            "赛事共性分析命中终身缓存 competition_id=%s，跳过大模型且不扣配额",
             req.competition_id,
         )
         return AnalyzeResponse(
@@ -764,9 +811,19 @@ def analyze_work(
             competition_name=comp_name,
             work_count=len(works),
             track_count=len(track_meta),
+            cached=True,
         )
 
-    # 4. 未命中 -> 调用模型
+    # 4. 未命中才扣配额：缓存命中不消耗用户额度，避免「打开页面就掉次数」
+    quota = consume_ai_quota(int(user["id"]), config.AI_DAILY_QUOTA)
+    if not quota.get("allowed"):
+        raise HTTPException(
+            status_code=429,
+            detail="今日 AI 使用次数已用完，请明天再试",
+            headers={"Retry-After": "3600"},
+        )
+
+    # 5. 调用模型
     try:
         text = llm.chat(
             prompt,
@@ -785,7 +842,7 @@ def analyze_work(
         raise HTTPException(status_code=502, detail="大模型返回内容为空")
 
     analysis = text.strip()
-    # 5. 生成成功 -> 落库，供后续请求全局复用
+    # 6. 生成成功 -> 落库（UPSERT，同一赛事只有一条），此后终生命中缓存
     _store_analysis(
         ANALYSIS_TARGET_COMPETITION, req.competition_id, prompt, analysis
     )
@@ -796,6 +853,82 @@ def analyze_work(
         competition_name=comp_name,
         work_count=len(works),
         track_count=len(track_meta),
+        cached=False,
+    )
+
+
+# ---------------------------------------------------------------------------
+# GET /api/ai/analysis  只读读取已缓存的共性分析（不扣配额、不调模型）
+# ---------------------------------------------------------------------------
+class CachedAnalysisResponse(BaseModel):
+    """已缓存的赛事共性分析；analysis 为空串表示「从未生成过」。"""
+
+    competition_id: int
+    competition_name: Optional[str] = None
+    analysis: str = Field("", description="Markdown 正文；空串=该赛事从未生成过")
+    cached: bool = Field(False, description="是否已存在终身缓存")
+    stale: bool = Field(
+        False,
+        description=(
+            "True=缓存还在，但底层 awards 已变化（prompt 指纹不符），"
+            "需要重新生成一次；False=缓存与当前数据一致或从未生成"
+        ),
+    )
+    updated_at: Optional[str] = None
+
+
+@router.get(
+    "/analysis",
+    response_model=CachedAnalysisResponse,
+    summary="读取赛事共性分析（只读，绝不调用大模型）",
+    description=(
+        "前端进入「往年获奖作品」页时调用：\n\n"
+        "* 有缓存且 `stale=false` -> 直接返回正文（前端默认折叠展示）；\n"
+        "* 有缓存但底层 awards 变过（`stale=true`）-> 前端可静默重新生成一次；\n"
+        "* 没有缓存（`cached=false`）-> 前端只显示【AI 分析获奖作品共性】按钮。\n\n"
+        "本接口**不需要登录、不扣配额、绝不调用大模型**（只做本地 SQL + 拼 prompt 比对指纹）。"
+    ),
+)
+def get_cached_analysis(
+    competition_id: int = Query(..., gt=0, description="竞赛 ID"),
+) -> CachedAnalysisResponse:
+    """只读读取 ai_analysis_cache 里的赛事分析，并判断是否已过期。"""
+    try:
+        comp = get_competition(competition_id)
+    except Exception as exc:
+        logger.error("查询竞赛失败: %r", exc)
+        raise HTTPException(status_code=500, detail="数据库查询失败") from exc
+    if comp is None:
+        raise HTTPException(
+            status_code=404, detail=f"竞赛 ID={competition_id} 不存在"
+        )
+
+    try:
+        row = get_ai_analysis(ANALYSIS_TARGET_COMPETITION, competition_id)
+    except Exception as exc:
+        logger.warning("读取共性分析缓存失败，按未生成处理: %r", exc)
+        row = None
+
+    content = ((row or {}).get("content_md") or "").strip()
+    stale = False
+    if content:
+        # 只有「已有缓存」时才值得拼一次 prompt 比对指纹（纯本地计算，不花钱）
+        try:
+            prompt, _comp, _works, _meta = _competition_analysis_input(
+                competition_id
+            )
+            stale = ((row or {}).get("input_hash")
+                     != _analysis_input_hash(prompt))
+        except (LookupError, ValueError):
+            stale = False
+
+    return CachedAnalysisResponse(
+        competition_id=competition_id,
+        competition_name=comp.get("name"),
+        analysis=content,
+        cached=bool(content),
+        stale=bool(stale),
+        updated_at=(row or {}).get("updated_at"),
     )
 
 
@@ -1349,17 +1482,17 @@ def get_inspirations(
 
 
 # ---------------------------------------------------------------------------
-# POST /api/ai/ideas/more  「换一批新灵感」（追加，不覆盖）
+# POST /api/ai/ideas/more  「生成更多选题灵感」（无限叠加，绝不覆盖）
 # ---------------------------------------------------------------------------
 class MoreIdeasRequest(BaseModel):
-    """换一批新灵感的请求。
+    """生成更多选题灵感的请求。
 
     前端把「当前已经展示给用户的 idea 列表」一起传上来（id 与标题都收），
     后端再把库里已有的标题合并进去，一起写进 prompt 的「必须避开」清单。
     """
 
     competition_id: int = Field(..., gt=0, description="竞赛 ID")
-    count: int = Field(4, ge=1, le=8, description="本次新增条数（默认 4，上限 8）")
+    count: int = Field(3, ge=1, le=8, description="本次新增条数（默认 3，上限 8）")
     exclude_ids: List[int] = Field(
         default_factory=list, description="前端当前已展示的 idea id（可选，仅作辅助）"
     )
@@ -1384,11 +1517,12 @@ class MoreIdeasResponse(BaseModel):
 @router.post(
     "/ideas/more",
     response_model=MoreIdeasResponse,
-    summary="换一批新灵感（追加生成，不覆盖历史）",
+    summary="生成更多选题灵感（追加生成，不覆盖历史）",
     description=(
-        "「灵感工作台」底部的【✨ 换一批新灵感】按钮调用。\n\n"
+        "「灵感工作台」底部的【✨ 生成更多选题灵感】按钮调用。\n\n"
         "* 前端把当前列表的 idea id / 标题一并传来，后端合并库里已有标题，"
-        "在 prompt 中列出「用户已看过的 N 条选题」并要求模型换全新视角；\n"
+        "在 prompt 中列出「用户已看过的 N 个主题」并要求避开，从全新角度"
+        "再生成 3 条差异化灵感；\n"
         "* 新结果写入 ideas 表后**追加**返回，不删除、不覆盖历史；\n"
         "* 用户点得越多，该赛事的灵感库越厚（不是固定 4 条）。\n\n"
         "同步调用一次（约 20-60s）；需登录且消耗一次 AI 配额。"
@@ -1407,7 +1541,7 @@ def generate_more_ideas(
     _user: dict = Depends(require_ai_quota),
 ) -> MoreIdeasResponse:
     """按「已看过的清单」追加生成 n 条新 idea。"""
-    count = max(1, min(int(req.count or 4), 8))
+    count = max(1, min(int(req.count or 3), 8))
     try:
         result = analyzer.generate_more_ideas(
             req.competition_id,

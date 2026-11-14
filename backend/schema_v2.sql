@@ -202,6 +202,8 @@ CREATE TABLE IF NOT EXISTS insights (
     competition_id INTEGER REFERENCES competitions (id) ON DELETE SET NULL,
     input_hash   TEXT,
     content_md   TEXT,
+    evidence     TEXT,
+    model        TEXT,
     created_at   TEXT    NOT NULL DEFAULT (datetime('now', 'localtime'))
 );
 

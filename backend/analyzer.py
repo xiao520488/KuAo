@@ -33,6 +33,8 @@ import db
 import llm
 
 DEFAULT_IDEA_N = 4
+# 「生成更多选题灵感」每次新增的条数（用户点击是无限叠加，不是固定 4 条死水）
+MORE_IDEA_N = 3
 # ---- 跨赛道抽样（2026-11-14 重构）----
 # 旧逻辑按「奖项等级」分层（金奖 10 / 银奖 8 / 铜奖 6），结果 5-24 条样本很可能
 # 全落在同一个赛道（例如「先进制造」），模型只看到局部就下全局结论，必然片面。
@@ -128,6 +130,14 @@ def _slim_award(row: dict) -> dict:
     return {k: v for k, v in out.items() if v not in (None, "")}
 
 
+def _id_key(row: dict) -> int:
+    """样本排序键：id 升序；缺失 id 的行排到最后（不影响确定性）。"""
+    try:
+        return int(row.get("id"))
+    except (TypeError, ValueError):
+        return 1 << 62
+
+
 def _track_key(row: dict) -> str:
     """赛道名归一化：空赛道统一记为「未分赛道」，避免 None 与 '' 各成一桶。"""
     return str(row.get("track") or "").strip() or "未分赛道"
@@ -206,6 +216,10 @@ def sample_cross_track(works: list, *, per_track: int = PER_TRACK_MAX,
     （例如「先进制造」），模型只看到局部就总结全局，结论必然片面。
     单赛道赛事（或个人赛没有赛道字段）退回「赛道内按奖项分层」，行为与旧版一致。
     """
+    # 先按 id 升序规范化输入：数据库返回顺序（年份倒序 / 分组）不能影响抽样结果，
+    # 否则同一条赛事每次请求的样本顺序都不同 → prompt 指纹跳动 → 缓存永远不命中，
+    # 「终身只生成一次」就退化成「每次刷新都重烧一次」。
+    works = sorted(works, key=lambda r: _id_key(r))
     groups: dict[str, list] = {}
     for row in works:
         groups.setdefault(_track_key(row), []).append(row)
@@ -553,14 +567,14 @@ def _ideas_prompt(context: str, batch_n: int, valid_ids: list,
     avoid = ""
     if avoid_titles:
         listed = "\n".join(
-            f"  {i}. {str(t)[:60]}" for i, t in enumerate(avoid_titles[:30], 1)
+            f"  {i}. {str(t)[:60]}" for i, t in enumerate(avoid_titles[:40], 1)
         )
         avoid = f"""
 
-【用户已看过的 {len(avoid_titles)} 条选题——必须全部避开】
+【以下是用户已看过的 {len(avoid_titles)} 个主题——必须全部避开】
 {listed}
 
-以上每一条都已经展示给用户了。新选题必须是全新视角：
+请避开这些主题，从全新角度再生成 {batch_n} 条差异化灵感：
 - 不许与上面任何一条重复、近义，或只是「换个行业名词 / 换个表述」；
 - 不许把同一个方案拆成两个赛道各写一遍；
 - 请从「尚未覆盖的行业场景」「未组合过的技术栈」「没被服务的人群」三个方向入手。"""
@@ -698,10 +712,26 @@ def _log_prompt(label: str, text: str, max_tokens: int) -> None:
 def _generate_insights(competition: dict, works: list, context: str,
                        scope: str, competition_id: int, valid: set,
                        max_tokens: int) -> tuple:
-    """逐 kind 调用模型，单条失败不影响其它两条。"""
+    """逐 kind 调用模型，单条失败不影响其它两条。
+
+    终身一次：库内已有该 kind 的记录就跳过，绝不重复烧钱。
+    洞察是「赛事级结论」，一旦生成即长期有效，重生成只会让成本翻倍。
+    """
     saved, failed = 0, 0
+    try:
+        existing_kinds = {
+            str(r.get("kind") or "")
+            for r in db.list_insights_by_competition(competition_id)
+        }
+    except Exception as exc:  # noqa: BLE001 - 读库失败退化为全部生成
+        print(f"[!] 读取已有 insights 失败，按无记录处理：{exc}", file=sys.stderr)
+        existing_kinds = set()
+
     evidence = _pick_evidence(list(valid))
     for kind in ("experience", "trend", "gap"):
+        if kind in existing_kinds:
+            print(f"[i] {KIND_LABEL[kind]} 已存在，终身只生成一次，跳过")
+            continue
         print(f"[insight] 正在生成：{KIND_LABEL[kind]}…")
         prompt = _insight_prompt(context, kind)
         _log_prompt(f"insight/{kind}", prompt, INSIGHT_MAX_TOKENS)
@@ -832,13 +862,14 @@ def _idea_row(row: dict) -> dict:
     }
 
 
-def generate_more_ideas(competition_id: int, *, n: int = DEFAULT_IDEA_N,
+def generate_more_ideas(competition_id: int, *, n: int = MORE_IDEA_N,
                         avoid_titles: Optional[list] = None,
                         avoid_ids: Optional[list] = None) -> dict:
-    """「换一批新灵感」：追加生成 n 条新 idea，不覆盖历史。
+    """「生成更多选题灵感」：追加生成 n 条新 idea，不覆盖历史。
 
+    * n 默认 3（用户点一次追加 3 条）；
     * avoid_titles = 用户已经看过的选题（库内已有 + 前端当前列表），
-      完整清单会写进 prompt，要求模型换全新视角；
+      完整清单会写进 prompt 的「必须避开」清单，要求模型换全新视角；
     * 结果写入 ideas 表并追加返回：用户点得越多，灵感库越厚；
     * 返回 {"saved", "skipped", "total", "avoided", "ideas": [新生成的 idea]}。
     """
@@ -903,8 +934,14 @@ def generate_more_ideas(competition_id: int, *, n: int = DEFAULT_IDEA_N,
 
 def generate(competition_id: int, *, only: str = "all", idea_n: int = DEFAULT_IDEA_N,
              force: bool = False, dry_run: bool = False,
+             reset_insights: bool = False,
              max_tokens: int = DEFAULT_MAX_TOKENS) -> int:
-    """执行一次该赛事的灵感生成，返回进程退出码。"""
+    """执行一次该赛事的灵感生成，返回进程退出码。
+
+    insights 是「终身一次」的赛事级结论：库内已有记录就不再生成，
+    --force 只覆盖 ideas（选题可以无限追加），只有显式 --reset-insights
+    才会删掉旧洞察重写（运维修复用，正常链路永远不会走到）。
+    """
     competition = db.get_competition(competition_id)
     if not competition:
         print(f"[!] 竞赛 ID={competition_id} 不存在", file=sys.stderr)
@@ -946,15 +983,19 @@ def generate(competition_id: int, *, only: str = "all", idea_n: int = DEFAULT_ID
 
     existing_insights = db.list_insights_by_competition(competition_id)
     existing_ideas = db.list_ideas_by_competition(competition_id)
-    if not force:
-        if only == "insight" and len(existing_insights) >= 3:
-            print("[i] 该赛事已有 3 条 insights；如需重新生成请加 --force")
+
+    # 洞察终身一次：只要已有 3 条，任何参数组合都不再触碰大模型
+    insights_done = len({str(r.get("kind") or "") for r in existing_insights}) >= 3
+    if insights_done and only in ("all", "insight"):
+        print("[i] 该赛事已有 3 条 insights，终身只生成一次，跳过洞察生成")
+        if only == "insight":
             return 0
+
+    if not force:
         if only == "idea" and len(existing_ideas) >= idea_n:
             print(f"[i] 该赛事已有 {len(existing_ideas)} 条 ideas；如需重新生成请加 --force")
             return 0
-        if (only == "all" and len(existing_insights) >= 3
-                and len(existing_ideas) >= idea_n):
+        if only == "all" and insights_done and len(existing_ideas) >= idea_n:
             print("[i] 该赛事已有完整 insights + ideas；如需重新生成请加 --force")
             return 0
 
@@ -970,12 +1011,14 @@ def generate(competition_id: int, *, only: str = "all", idea_n: int = DEFAULT_ID
         print(_ideas_prompt(context, min(IDEA_BATCH_SIZE, idea_n), valid_ids, [])[:800] + "…")
         return 0
 
+    if reset_insights:
+        removed_i = db.delete_insights_by_competition(competition_id)
+        print(f"[i] --reset-insights 已清空 insights {removed_i} 条，将重新生成")
+
     if force:
-        removed_i = db.delete_insights_by_competition(competition_id) \
-            if only in ("all", "insight") else 0
         removed_d = db.delete_ideas_by_competition(competition_id) \
             if only in ("all", "idea") else 0
-        print(f"[i] --force 清理：insights {removed_i} 条，ideas {removed_d} 条")
+        print(f"[i] --force 清理 ideas {removed_d} 条（insights 终身一次，不受 --force 影响）")
 
     saved_insights = saved_ideas = skipped_ideas = failed_insights = failed_batches = 0
 
@@ -1048,7 +1091,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--force",
         action="store_true",
-        help="删除该赛事已有 insights/ideas 后重新生成",
+        help="删除该赛事已有 ideas 后重新生成（insights 终生一次，不受影响）",
+    )
+    parser.add_argument(
+        "--reset-insights",
+        dest="reset_insights",
+        action="store_true",
+        help="运维专用：强制清空并重写 insights（正常链路不会用到）",
     )
     parser.add_argument(
         "--dry-run",
@@ -1083,6 +1132,7 @@ def main(argv: Optional[list] = None) -> int:
             only=args.only,
             idea_n=args.idea_n,
             force=args.force,
+            reset_insights=args.reset_insights,
             dry_run=args.dry_run,
             max_tokens=args.max_tokens,
         )

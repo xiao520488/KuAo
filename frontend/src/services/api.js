@@ -376,6 +376,30 @@ export function analyzeWorks(competitionId) {
 }
 
 /**
+ * 读取已缓存的赛事共性分析（只读，不扣配额、不调大模型）
+ * GET /api/ai/analysis?competition_id=...
+ *
+ * 进入「往年获奖作品」页时调用：
+ *   * cached=true + 正文 -> 前端默认折叠展示，只显示【展开全部】；
+ *   * cached=false        -> 后端从未生成过，前端才显示【AI 分析获奖作品共性】；
+ *   * stale=true          -> 获奖数据变了，前端静默重新生成一次即可。
+ *
+ * @param {string|number} competitionId 竞赛 ID
+ * @returns {Promise<{ competition_id:number, analysis:string, cached:boolean, stale:boolean }>}
+ */
+export function getCachedAnalysis(competitionId) {
+  const cid = normalizeCompetitionId(competitionId)
+  if (cid === null) return Promise.reject(new Error('竞赛 ID 无效'))
+
+  return api.get('/ai/analysis', { params: { competition_id: cid } }).then((data) => ({
+    competition_id: Number(data?.competition_id) || cid,
+    analysis: typeof data?.analysis === 'string' ? data.analysis : '',
+    cached: Boolean(data?.cached),
+    stale: Boolean(data?.stale)
+  }))
+}
+
+/**
  * 获取指定赛事的灵感数据（洞察 + 选题）
  * GET /api/ai/inspirations?competition_id=...
  *
@@ -399,7 +423,7 @@ export function getInspirations(competitionId) {
 }
 
 /**
- * 换一批新灵感（追加生成，不覆盖历史）
+ * 生成更多选题灵感（追加生成，绝不覆盖历史）
  * POST /api/ai/ideas/more
  *
  * 把「当前已展示的 idea 列表」传给后端，后端将其写进 prompt 的「必须避开」清单，
@@ -407,7 +431,7 @@ export function getInspirations(competitionId) {
  *
  * @param {string|number} competitionId 竞赛 ID
  * @param {Object} [options]
- * @param {number} [options.count] 本次新增条数（默认 4，后端上限 8）
+ * @param {number} [options.count] 本次新增条数（默认 3，后端上限 8）
  * @param {Array<number>} [options.excludeIds] 当前列表里已有的 idea id
  * @param {Array<string>} [options.excludeTitles] 当前列表里已有的 idea 标题
  * @returns {Promise<{ competition_id:number, ideas:Array, added:number, total_ideas:number }>}
@@ -420,7 +444,7 @@ export function requestMoreIdeas(competitionId, options = {}) {
     competition_id: cid,
     count: Number.isInteger(Number(options.count)) && Number(options.count) > 0
       ? Number(options.count)
-      : 4,
+      : 3,
     exclude_ids: (options.excludeIds || [])
       .map((v) => Number(v))
       .filter((v) => Number.isInteger(v) && v > 0),

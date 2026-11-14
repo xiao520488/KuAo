@@ -45,6 +45,7 @@ import jwt
 from fastapi.testclient import TestClient
 from openai import APITimeoutError
 
+import analyzer
 import config
 import db
 import llm
@@ -874,6 +875,71 @@ class AiAnalyzeBoundaryTest(_TempDBTestCase):
         self.assertEqual(second.json()["analysis"], "## 共性特征\n- 选题聚焦")
         self.assertIsNotNone(db.get_ai_analysis("competition", cid))
 
+    def test_cache_hit_does_not_consume_quota(self) -> None:
+        """终身缓存：命中缓存不扣配额，否则「打开页面就掉次数」。"""
+        cid = self._new_competition()
+        self._new_award(cid)
+        token = self._token()
+        config.AI_DAILY_QUOTA = 1
+
+        with patch("llm.chat", return_value="## 分析"):
+            first = self.client.post(
+                "/api/ai/analyze",
+                json={"competition_id": cid},
+                headers=self._auth(token),
+            )
+            # 配额已被第一次用光；第二次若还扣配额就会 429
+            second = self.client.post(
+                "/api/ai/analyze",
+                json={"competition_id": cid},
+                headers=self._auth(token),
+            )
+
+        self.assertEqual(first.status_code, 200)
+        self.assertFalse(first.json()["cached"])
+        self.assertEqual(second.status_code, 200)
+        self.assertTrue(second.json()["cached"])
+
+    def test_force_refresh_is_ignored(self) -> None:
+        """前端传来的 force_refresh 必须被忽略，终身只生成一次。"""
+        cid = self._new_competition()
+        self._new_award(cid)
+        token = self._token()
+        config.AI_DAILY_QUOTA = 10
+
+        with patch("llm.chat", return_value="## 分析") as chat:
+            for _ in range(2):
+                response = self.client.post(
+                    "/api/ai/analyze",
+                    json={"competition_id": cid, "force_refresh": True},
+                    headers=self._auth(token),
+                )
+                self.assertEqual(response.status_code, 200)
+
+        self.assertEqual(chat.call_count, 1)
+
+    def test_cached_analysis_endpoint_is_readonly(self) -> None:
+        """GET /api/ai/analysis：无需登录、不调模型；未生成时 cached=false。"""
+        cid = self._new_competition()
+        self._new_award(cid)
+
+        empty = self.client.get(f"/api/ai/analysis?competition_id={cid}")
+        self.assertEqual(empty.status_code, 200)
+        self.assertFalse(empty.json()["cached"])
+        self.assertEqual(empty.json()["analysis"], "")
+
+        with patch("llm.chat", return_value="## 已生成的分析") as chat:
+            self.client.post(
+                "/api/ai/analyze",
+                json={"competition_id": cid},
+                headers=self._auth(self._token()),
+            )
+        cached = self.client.get(f"/api/ai/analysis?competition_id={cid}")
+        self.assertEqual(cached.status_code, 200)
+        self.assertTrue(cached.json()["cached"])
+        self.assertEqual(cached.json()["analysis"], "## 已生成的分析")
+        self.assertEqual(chat.call_count, 1)
+
     def test_cache_invalidated_when_prompt_content_changes(self) -> None:
         cid = self._new_competition()
         award_id = self._new_award(cid, summary="旧摘要")
@@ -982,6 +1048,47 @@ class MoreIdeasBoundaryTest(_TempDBTestCase):
             headers=self._auth(token),
         )
         self.assertEqual(resp.status_code, 404)
+
+
+# ======================================================================
+# 六点六、赛事洞察「终身一次」：已有记录就不再调用大模型
+# ======================================================================
+class InsightLifetimeTest(_TempDBTestCase):
+
+    def _seed(self) -> int:
+        cid = self._new_competition("洞察终身一次赛事")
+        for index in range(6):
+            self._new_award(cid, title=f"获奖作品{index}", year=2024)
+        return cid
+
+    def test_existing_insights_block_regeneration(self) -> None:
+        cid = self._seed()
+        scope = f"competition:{cid}|year:2024-2024"
+        for kind in ("experience", "trend", "gap"):
+            db.save_insight(kind, scope, "旧洞察正文", competition_id=cid)
+
+        with patch("llm.chat") as chat:
+            code = analyzer.generate(cid, only="insight", force=True)
+
+        self.assertEqual(code, 0, "已有 3 条洞察时应直接返回成功")
+        chat.assert_not_called()
+        self.assertEqual(
+            len(db.list_insights_by_competition(cid)), 3, "旧洞察不能被 --force 删掉"
+        )
+
+    def test_missing_kind_is_filled_without_touching_existing(self) -> None:
+        cid = self._seed()
+        db.save_insight("experience", f"competition:{cid}|year:2024-2024", "旧经验",
+                        competition_id=cid)
+
+        with patch("llm.chat", return_value="## 新的洞察\n- 一点") as chat:
+            code = analyzer.generate(cid, only="insight")
+
+        self.assertEqual(code, 0)
+        # 只补缺失的 trend / gap 两条
+        self.assertEqual(chat.call_count, 2)
+        kinds = {r["kind"] for r in db.list_insights_by_competition(cid)}
+        self.assertEqual(kinds, {"experience", "trend", "gap"})
 
 
 # ======================================================================

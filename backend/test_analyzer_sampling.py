@@ -50,6 +50,19 @@ def test_cross_track_sample_covers_main_tracks() -> None:
     assert sampled_tracks == {"先进制造", "新能源", "智慧农业", "生物医疗"}
 
 
+def test_sampling_is_order_independent() -> None:
+    """抽样必须与输入顺序无关：否则 prompt 指纹每次都变，「终身缓存」就失效了。"""
+    works = []
+    works += _works("先进制造", 30)
+    works += _works("新能源", 20)
+    works += _works("智慧农业", 10)
+
+    first, _ = analyzer.sample_cross_track(works)
+    shuffled, _ = analyzer.sample_cross_track(list(reversed(works)))
+
+    assert [w["id"] for w in first] == [w["id"] for w in shuffled]
+
+
 def test_single_track_competition_falls_back_to_grade_sample() -> None:
     """单赛道（或个人赛无赛道）：退化为赛道内奖项分层，样本量仍受上限约束。"""
     sampled, meta = analyzer.sample_cross_track(_works("个人赛", 50, "一等奖"))
@@ -87,8 +100,11 @@ def test_insight_prompt_isolated_from_common_analysis() -> None:
 
 
 def test_ideas_prompt_lists_seen_titles_as_forbidden() -> None:
-    """任务 4：换一批时「已看过的选题」必须完整进 prompt，并明确要求避开。"""
-    prompt = analyzer._ideas_prompt("CTX", 2, [1, 2], ["旧选题A", "旧选题B"])
+    """任务 3：生成更多时「已看过的主题」必须完整进 prompt，并明确要求避开。"""
+    prompt = analyzer._ideas_prompt("CTX", 3, [1, 2], ["旧选题A", "旧选题B"])
     assert "必须全部避开" in prompt
     assert "旧选题A" in prompt and "旧选题B" in prompt
-    assert "2 条选题" in prompt
+    # 已看清单 + 条数口径
+    assert "用户已看过的 2 个主题" in prompt
+    assert "再生成 3 条差异化灵感" in prompt
+    assert "【本次生成 3 条" in prompt

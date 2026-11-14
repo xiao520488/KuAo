@@ -434,7 +434,11 @@ def request_inspiration(competition_id: int, *, user_id: Optional[int] = None,
     _EXECUTOR.submit(
         run_inspiration_job, job_id, cid,
         idea_n=int(config.AI_INSPIRATION_IDEA_N),
-        force=has_content,  # 只有内容过期（数据已更新）时才覆盖重写
+        # 永不清空重写：
+        #   * insights 终生一次（analyzer 内部按 kind 跳过已有记录）；
+        #   * ideas 是「越点越多」的追加型数据，后台任务只负责补齐缺口，
+        #     绝不能因为数据指纹变化就把用户已经看到的选题删掉重来。
+        force=False,
     )
     return {
         "http": 202,
