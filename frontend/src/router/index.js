@@ -4,6 +4,10 @@ import { authState, hasToken, restoreSession } from '@/services/auth'
 import { openAuthModal, openAuthModalDeferred } from '@/composables/useAuthModal'
 import { showToast } from '@/composables/useToast'
 
+// 关闭浏览器自带的滚动恢复，滚动位置统一由 scrollBehavior / 列表页自己控制，
+// 否则「从详情页返回列表」会和原生恢复互相抢，最后落回页首。
+if ('scrollRestoration' in history) history.scrollRestoration = 'manual'
+
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
   routes: [
@@ -64,6 +68,9 @@ const router = createRouter({
    *   否则新页面会继承上一页的滚动高度，出现「一打开就停在半截」的问题。
    */
   scrollBehavior(to, from, savedPosition) {
+    // 从详情页回列表：列表页被 keep-alive 缓存，位置由页面自己恢复（见 CompetitionsView onActivated）
+    if (to.name === 'competitions' && from.name === 'competition-detail') return false
+    // 浏览器前进/后退：用历史记录里的位置
     if (savedPosition) return savedPosition
     return { top: 0, left: 0, behavior: 'smooth' }
   }

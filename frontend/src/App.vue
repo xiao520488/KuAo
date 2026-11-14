@@ -53,7 +53,15 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="min-h-full flex flex-col bg-slate-50 dark:bg-slate-900 text-slate-800 dark:text-slate-100">
-    <router-view />
+    <!--
+      列表页用 keep-alive 缓存：从详情页返回时保留筛选条件与滚动位置，
+      不再重新请求接口、也不再跳回页首。
+    -->
+    <router-view v-slot="{ Component, route }">
+      <keep-alive :include="['CompetitionsView']">
+        <component :is="Component" :key="route.name" />
+      </keep-alive>
+    </router-view>
 
     <!-- 全局登录/注册弹窗：固定在根组件，不依赖具体页面 -->
     <AuthModal v-model="showAuth" :mode="authMode" />

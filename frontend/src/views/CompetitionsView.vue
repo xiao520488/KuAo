@@ -1,5 +1,6 @@
 <script setup>
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, onActivated, nextTick, watch } from 'vue'
+import { onBeforeRouteLeave } from 'vue-router'
 import Header from '@/components/Header.vue'
 import CompetitionCard from '@/components/CompetitionCard.vue'
 import BackToTop from '@/components/BackToTop.vue'
@@ -10,6 +11,8 @@ import { MAJOR_ORDER, CATEGORY_TREE, resolveCategory } from '@/utils/competition
 
 const competitions = ref([])
 const loading = ref(true)
+
+defineOptions({ name: 'CompetitionsView' })
 const errorMsg = ref('')
 // 竞赛 ID -> 是否已加入备赛（登录后批量拉取）
 const preparedMap = ref({})
@@ -256,6 +259,31 @@ function onPreparationChange({ id, prepared }) {
 
 onMounted(() => {
   loadCompetitions()
+})
+
+/* ================= 从详情页返回时回到原来的位置 ================= */
+// 列表页被 keep-alive 缓存，筛选项不会重建；滚动位置另外记下来，
+// 从详情页返回时滚回原位，不至于「找不到刚才那个比赛」。
+const SCROLL_KEY = 'kuao:competitions:scroll'
+let leaveToDetail = false
+
+// 离开列表的瞬间把位置存下来：此时路由还没把页面滚回顶部，读到的才是用户真正看的地方
+onBeforeRouteLeave((to) => {
+  leaveToDetail = to.name === 'competition-detail'
+  if (leaveToDetail) sessionStorage.setItem(SCROLL_KEY, String(Math.round(window.scrollY)))
+})
+
+onActivated(() => {
+  if (!leaveToDetail) return
+  leaveToDetail = false
+  const top = Number(sessionStorage.getItem(SCROLL_KEY) || 0)
+  if (!top) return
+  // 缓存里的列表已经渲染好，两帧后再滚，避开路由自己的滚动处理
+  nextTick(() => {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => window.scrollTo({ top, behavior: 'instant' }))
+    })
+  })
 })
 </script>
 
