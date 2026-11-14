@@ -482,15 +482,15 @@ watch(
 
       <!-- 内容区：官方风左对齐排成「文件头」，其余主题保持水平居中 -->
       <div
-        class="relative z-10 flex flex-1 flex-col justify-center px-6 pt-16 pb-52 lg:px-0"
+        class="relative z-10 flex flex-1 flex-col justify-center px-6 pt-16 pb-52 xl:px-0"
         :class="theme === 'official'
-          ? 'mx-auto w-full max-w-6xl items-start text-left'
+          ? 'mx-auto w-full max-w-[1248px] items-start text-left'
           : 'items-center text-center'"
       >
-        <div class="flex w-full flex-col lg:flex-row lg:items-start lg:justify-between lg:gap-16">
+        <div class="flex w-full flex-col xl:flex-row xl:items-start xl:justify-between xl:gap-20">
         <div
           :class="theme === 'official'
-            ? 'w-full lg:max-w-[600px] lg:flex-1'
+            ? 'w-full xl:max-w-[700px] xl:flex-1'
             : 'flex w-full flex-col items-center'"
         >
         <!-- 官方风：小型大写眉标 -->
@@ -506,7 +506,7 @@ watch(
         <h1
           class="hero-in"
           :class="theme === 'official'
-            ? 'text-4xl leading-[1.08] font-bold tracking-[-0.03em] md:text-5xl lg:text-[54px]'
+            ? 'text-[42px] leading-[1.05] font-bold tracking-[-0.03em] md:text-[54px] lg:text-[70px]'
             : 'text-3xl sm:text-4xl md:text-5xl lg:text-6xl font-extrabold tracking-tight text-slate-900 dark:text-slate-100'"
           :style="{ animationDelay: '0ms' }"
         >
@@ -517,7 +517,7 @@ watch(
         <p
           class="hero-in mt-6 leading-relaxed font-medium"
           :class="theme === 'official'
-            ? 'max-w-[52ch] text-[15px] leading-[1.75] text-slate-600'
+            ? 'max-w-[46ch] text-[17px] leading-[1.7] text-slate-600'
             : 'max-w-none text-xs text-slate-500 dark:text-slate-400 sm:whitespace-nowrap sm:text-sm md:text-base'"
           :style="{ animationDelay: '120ms' }"
         >
@@ -548,9 +548,9 @@ watch(
             v-model="keyword"
             type="text"
             :placeholder="theme === 'official'
-              ? '搜索赛事，或直接描述你的需求…'
+              ? '搜索赛事，或描述需求…'
               : '输入比赛名称，或像聊天一样描述需求（如：我想找寒假能准备的算法赛）...'"
-            class="w-full bg-transparent text-base text-slate-800 dark:text-slate-100 placeholder:text-slate-500 dark:placeholder:text-slate-500
+            class="w-full bg-transparent text-[17px] text-slate-800 dark:text-slate-100 placeholder:text-slate-500 dark:placeholder:text-slate-500
                    font-medium focus:outline-none disabled:opacity-60"
             :disabled="searching"
             @keyup.enter="submitSearch"
@@ -574,7 +574,7 @@ watch(
           </button>
 
           <button
-            class="shrink-0 rounded-full bg-blue-600 px-6 py-2.5 text-sm font-bold text-white
+            class="shrink-0 rounded-full bg-blue-600 px-7 py-3 text-[15px] font-bold text-white
                    shadow-md shadow-blue-600/30 hover:bg-blue-700 dark:hover:bg-blue-600 transition-colors
                    disabled:cursor-not-allowed disabled:opacity-60"
             :disabled="searching"
@@ -617,7 +617,7 @@ watch(
         <!-- 官方风：右侧情报栏（近期截止 + 示例提问），把首屏右半区用起来 -->
         <aside
           v-if="theme === 'official'"
-          class="hero-in brief hidden w-[300px] shrink-0 lg:block"
+          class="hero-in brief hidden w-[340px] shrink-0 xl:block"
           :style="{ animationDelay: '360ms' }"
           aria-label="情报速览"
         >
@@ -667,7 +667,7 @@ watch(
         class="absolute bottom-24 z-10 flex flex-col items-center gap-2 text-slate-500 dark:text-slate-400
                transition-colors hover:text-blue-600 dark:hover:text-blue-400
                focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 rounded-lg"
-        :class="theme === 'official' ? 'left-1/2 hidden -translate-x-[576px] md:flex' : 'left-1/2 -translate-x-1/2'"
+        :class="theme === 'official' ? 'left-[max(24px,calc(50vw-624px))] hidden md:flex' : 'left-1/2 -translate-x-1/2'"
         @click="scrollToList"
       >
         <span class="text-sm font-bold tracking-widest">向下探索</span>
@@ -684,17 +684,17 @@ watch(
     <!-- ========== 首屏之外的竞赛列表 ========== -->
     <section
       id="competition-list"
-      class="mx-auto w-[85%] max-w-6xl pt-24 pb-28 scroll-mt-24"
+      class="mx-auto w-[92%] max-w-[1248px] pt-24 pb-28 scroll-mt-24"
     >
       <div
         class="mb-10"
         :class="theme === 'official' ? 'doc-section-head' : 'text-center'"
       >
         <span v-if="theme === 'official'" class="doc-kicker mb-3">01 · 赛事索引</span>
-        <h2 class="text-2xl font-extrabold tracking-tight text-slate-900 dark:text-slate-100">
+        <h2 class="text-3xl font-extrabold tracking-tight text-slate-900 dark:text-slate-100">
           {{ searched ? '检索结果' : '热门竞赛' }}
         </h2>
-        <p class="mt-2 text-sm font-medium text-slate-500 dark:text-slate-400">
+        <p class="mt-2 text-base font-medium text-slate-500 dark:text-slate-400">
           {{ searched ? 'AI 根据你的描述匹配的赛事' : '为你精选的高含金量赛事' }}
         </p>
       </div>
