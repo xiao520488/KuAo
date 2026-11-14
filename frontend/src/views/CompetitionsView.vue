@@ -45,10 +45,30 @@ const activeMajor = ref('')
 const selectedMinors = ref([])
 
 const minorOptions = computed(() => CATEGORY_TREE[activeMajor.value] || [])
-const selectedMinorCount = computed(() => selectedMinors.value.length)
+// selectedMinors 里存两种值：细分方向名，或大类名（等于「整个大类」）。两者不会重名。
+const isWholeMajor = (value) => MAJOR_ORDER.includes(value)
+const selectedMinorCount = computed(
+  () => selectedMinors.value.filter((value) => !isWholeMajor(value)).length
+)
+const wholeMajorSelected = computed(
+  () => !!activeMajor.value && selectedMinors.value.includes(activeMajor.value)
+)
 
 function isMinorSelected(minor) {
   return selectedMinors.value.includes(minor)
+}
+
+// 大类行右侧的数字：全部 / 2/44 / 44
+function majorBadge(major) {
+  const total = majorCounts.value[major] || 0
+  if (activeMajor.value !== major) return String(total)
+  if (selectedMinors.value.includes(major)) return '全部'
+  const picked = selectedMinorCount.value
+  return picked ? `${picked}/${total}` : String(total)
+}
+
+function majorBadgeActive(major) {
+  return activeMajor.value === major && (wholeMajorSelected.value || selectedMinorCount.value > 0)
 }
 
 // 点大类 = 展开 / 收起细分方向，不会把「整个工科」加进筛选
@@ -64,12 +84,27 @@ function toggleMajorOpen(major) {
 
 // 细分方向 toggle：有选 = 只看这些方向，全取消 = 回到全部
 function toggleMinor(minor) {
-  const index = selectedMinors.value.indexOf(minor)
+  // 点具体方向就自动撤掉「全部工科」，避免整类和细分同时生效
+  const list = selectedMinors.value.filter((value) => !isWholeMajor(value))
+  const index = list.indexOf(minor)
   if (index >= 0) {
-    selectedMinors.value.splice(index, 1)
+    list.splice(index, 1)
   } else {
-    selectedMinors.value.push(minor)
+    list.push(minor)
   }
+  selectedMinors.value = list
+}
+
+// 「全部工科」：整类筛选，与具体细分互斥
+function toggleWholeMajor() {
+  const major = activeMajor.value
+  if (!major) return
+  selectedMinors.value = selectedMinors.value.includes(major) ? [] : [major]
+}
+
+// 已选 chip 文案：整类显示成「全部工科」
+function chipLabel(value) {
+  return isWholeMajor(value) ? `全部${value}` : value
 }
 
 function removeMinor(minor) {
@@ -108,7 +143,7 @@ function statusOf(item) {
 const majorFiltered = computed(() => {
   const base = competitions.value
   if (selectedMinors.value.length === 0) return base
-  return base.filter((item) => selectedMinors.value.includes(item.minor))
+  return base.filter((item) => selectedMinors.value.some((value) => item.major === value || item.minor === value))
 })
 
 const filtered = computed(() => {
@@ -228,17 +263,17 @@ onMounted(() => {
   <div class="min-h-screen bg-slate-50 dark:bg-slate-900">
     <Header />
 
-    <main class="mx-auto w-[92%] max-w-[1248px] pb-24 pt-28">
+    <main class="mx-auto w-[94%] max-w-[1360px] pb-24 pt-28">
       <!-- 页头 -->
       <div class="mb-8">
         <p
-          class="mb-3 text-[12px] font-bold uppercase tracking-[0.16em] text-slate-400 dark:text-slate-500"
+          class="mb-3 text-[12.5px] font-bold uppercase tracking-[0.16em] text-slate-400 dark:text-slate-500"
         >
           <span v-if="isOfficial" class="mr-2 inline-block h-[1px] w-5 translate-y-[-4px] bg-[#12294a]"></span>
           竞赛总览 · COMPETITION INDEX
         </p>
-        <h1 class="text-3xl font-black tracking-tight text-slate-900 dark:text-slate-100">全部竞赛</h1>
-        <p class="mt-2 text-sm text-slate-500 dark:text-slate-400">
+        <h1 class="text-[34px] font-black leading-[1.15] tracking-tight text-slate-900 dark:text-slate-100">全部竞赛</h1>
+        <p class="mt-2.5 text-[15px] text-slate-500 dark:text-slate-400">
           共 {{ competitions.length }} 项竞赛，按报名紧迫度排序：正在报名 → 即将开始 → 已截止
         </p>
       </div>
@@ -248,7 +283,7 @@ onMounted(() => {
         <div class="flex flex-wrap gap-2">
           <button
             type="button"
-            class="shrink-0 rounded-full px-3.5 py-2 text-sm font-semibold transition-colors"
+            class="shrink-0 rounded-full px-4 py-2 text-[15px] font-semibold transition-colors"
             :class="selectedMinors.length === 0
               ? 'bg-slate-900 text-white dark:bg-white dark:text-slate-900'
               : 'bg-white text-slate-600 ring-1 ring-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:ring-slate-700'"
@@ -260,7 +295,7 @@ onMounted(() => {
             v-for="major in MAJOR_ORDER"
             :key="major"
             type="button"
-            class="shrink-0 rounded-full px-3.5 py-2 text-sm font-semibold transition-colors"
+            class="shrink-0 rounded-full px-4 py-2 text-[15px] font-semibold transition-colors"
             :class="activeMajor === major
               ? 'bg-slate-900 text-white dark:bg-white dark:text-slate-900'
               : 'bg-white text-slate-600 ring-1 ring-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:ring-slate-700'"
@@ -271,10 +306,20 @@ onMounted(() => {
         </div>
         <div v-if="activeMajor" class="flex flex-wrap gap-2">
           <button
+            type="button"
+            class="shrink-0 rounded-full px-3.5 py-1.5 text-[13px] font-bold transition-colors"
+            :class="wholeMajorSelected
+              ? 'bg-blue-600 text-white'
+              : 'bg-white text-slate-600 ring-1 ring-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:ring-slate-700'"
+            @click="toggleWholeMajor"
+          >
+            全部{{ activeMajor }} <span class="tabular-nums opacity-60">{{ majorCounts[activeMajor] }}</span>
+          </button>
+          <button
             v-for="minor in minorOptions"
             :key="minor"
             type="button"
-            class="shrink-0 rounded-full px-3 py-1.5 text-xs font-bold transition-colors"
+            class="shrink-0 rounded-full px-3.5 py-1.5 text-[13px] font-bold transition-colors"
             :class="isMinorSelected(minor)
               ? 'bg-blue-600 text-white'
               : 'bg-white text-slate-600 ring-1 ring-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:ring-slate-700'"
@@ -286,7 +331,7 @@ onMounted(() => {
         <div class="flex flex-wrap gap-2">
           <button
             type="button"
-            class="shrink-0 rounded-full px-3 py-1.5 text-xs font-bold transition-colors"
+            class="shrink-0 rounded-full px-3.5 py-1.5 text-[13px] font-bold transition-colors"
             :class="activeStatus === 'all'
               ? 'bg-slate-900 text-white dark:bg-white dark:text-slate-900'
               : 'bg-white text-slate-600 ring-1 ring-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:ring-slate-700'"
@@ -298,7 +343,7 @@ onMounted(() => {
             v-for="st in STATUS_ORDER"
             :key="st"
             type="button"
-            class="shrink-0 rounded-full px-3 py-1.5 text-xs font-bold transition-colors"
+            class="shrink-0 rounded-full px-3.5 py-1.5 text-[13px] font-bold transition-colors"
             :class="activeStatus === st
               ? 'bg-slate-900 text-white dark:bg-white dark:text-slate-900'
               : 'bg-white text-slate-600 ring-1 ring-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:ring-slate-700'"
@@ -309,14 +354,14 @@ onMounted(() => {
         </div>
       </div>
       <!-- ========== 主体：左筛选竖栏 + 右列表 ========== -->
-      <div class="lg:grid lg:grid-cols-[248px_minmax(0,1fr)] lg:gap-10 xl:gap-14">
+      <div class="lg:grid lg:grid-cols-[268px_minmax(0,1fr)] lg:gap-11 xl:gap-16">
         <!-- 左竖栏 -->
         <aside class="hidden lg:block lg:border-r lg:border-slate-200/80 lg:pr-7 dark:lg:border-slate-700/60">
           <div class="sticky top-24">
             <!-- 01 学科门类 -->
             <section class="border-t border-slate-300/80 pt-4 dark:border-slate-700">
               <div class="mb-3 flex items-baseline justify-between">
-                <h2 class="text-[12px] font-bold uppercase tracking-[0.16em] text-slate-400 dark:text-slate-500">
+                <h2 class="text-[12.5px] font-bold uppercase tracking-[0.16em] text-slate-400 dark:text-slate-500">
                   <span class="mr-1.5 font-mono text-slate-300 dark:text-slate-600">01</span>学科门类
                 </h2>
                 <button
@@ -331,21 +376,21 @@ onMounted(() => {
 
               <button
                 type="button"
-                class="mb-1 flex w-full items-center justify-between rounded-md px-2.5 py-[7px] text-left text-[14px] font-semibold transition-colors"
+                class="mb-1 flex w-full items-center justify-between rounded-md px-2.5 py-[9px] text-left text-[15px] font-semibold transition-colors"
                 :class="selectedMinors.length === 0
                   ? (isOfficial ? 'bg-[#12294a] text-white' : 'bg-blue-600 text-white')
                   : 'text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800'"
                 @click="clearMajors"
               >
                 <span>全部学科</span>
-                <span class="text-xs tabular-nums opacity-60">{{ statusPoolTotal }}</span>
+                <span class="text-[12.5px] tabular-nums opacity-60">{{ statusPoolTotal }}</span>
               </button>
 
               <div v-for="major in MAJOR_ORDER" :key="major" class="mb-0.5">
                 <!-- 大类只是「展开细分方向」的开关，点它不会把整个大类塞进筛选 -->
                 <button
                   type="button"
-                  class="flex w-full items-center gap-1.5 rounded-md px-2.5 py-[7px] text-left text-[14px] font-semibold transition-colors"
+                  class="flex w-full items-center gap-1.5 rounded-md px-2.5 py-[9px] text-left text-[15px] font-semibold transition-colors"
                   :class="activeMajor === major
                     ? 'bg-slate-100 text-slate-900 dark:bg-slate-800 dark:text-white'
                     : 'text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-800'"
@@ -355,14 +400,11 @@ onMounted(() => {
                 >
                   <span class="truncate">{{ major }}</span>
                   <span
-                    class="ml-auto shrink-0 text-xs tabular-nums"
-                    :class="activeMajor === major && selectedMinorCount
+                    class="ml-auto shrink-0 text-[12.5px] tabular-nums"
+                    :class="majorBadgeActive(major)
                       ? (isOfficial ? 'font-bold text-[#12294a] dark:text-white' : 'font-bold text-blue-600 dark:text-blue-300')
                       : 'opacity-50'"
-                  >
-                    <template v-if="activeMajor === major && selectedMinorCount">{{ selectedMinorCount }}/{{ majorCounts[major] }}</template>
-                    <template v-else>{{ majorCounts[major] }}</template>
-                  </span>
+                  >{{ majorBadge(major) }}</span>
                   <svg
                     class="h-3 w-3 shrink-0 opacity-50 transition-transform"
                     :class="activeMajor === major ? 'rotate-180' : ''"
@@ -375,13 +417,26 @@ onMounted(() => {
                 <!-- 细分方向：点哪个就只看哪个，可多选 -->
                 <div
                   v-if="activeMajor === major"
-                  class="mb-1 mt-1.5 grid grid-cols-2 gap-1 border-l border-slate-200 pl-2.5 dark:border-slate-700"
+                  class="mb-1.5 mt-1.5 border-l border-slate-200 pl-2.5 dark:border-slate-700"
                 >
+                  <button
+                    type="button"
+                    class="mb-1 flex w-full items-center justify-between gap-1 rounded px-1.5 py-1.5 text-left text-[13px] font-bold transition-colors"
+                    :class="wholeMajorSelected
+                      ? (isOfficial ? 'bg-[#12294a] text-white' : 'bg-blue-600 text-white')
+                      : 'bg-slate-50 text-slate-700 ring-1 ring-slate-200 hover:bg-slate-100 dark:bg-slate-800/60 dark:text-slate-200 dark:ring-slate-700 dark:hover:bg-slate-800'"
+                    :disabled="(majorCounts[major] || 0) === 0"
+                    @click="toggleWholeMajor"
+                  >
+                    <span>全部{{ major }}</span>
+                    <span class="text-[10.5px] tabular-nums opacity-60">{{ majorCounts[major] }}</span>
+                  </button>
+                  <div class="grid grid-cols-2 gap-1">
                   <button
                     v-for="minor in minorOptions"
                     :key="minor"
                     type="button"
-                    class="flex w-full items-center justify-between gap-1 rounded px-1.5 py-1 text-left text-[12px] font-semibold transition-colors"
+                    class="flex w-full items-center justify-between gap-1 rounded px-2 py-1.5 text-left text-[13px] font-semibold transition-colors"
                     :class="isMinorSelected(minor)
                       ? (isOfficial
                         ? 'bg-[#12294a] text-white'
@@ -392,21 +447,22 @@ onMounted(() => {
                     :disabled="(minorCounts[minor] || 0) === 0"
                     @click="toggleMinor(minor)"
                   >
-                    <span class="max-w-[132px] truncate" :title="minor">{{ minor }}</span>
-                    <span class="text-[10px] tabular-nums opacity-50">{{ minorCounts[minor] || 0 }}</span>
+                    <span class="max-w-[150px] truncate" :title="minor">{{ minor }}</span>
+                    <span class="text-[10.5px] tabular-nums opacity-50">{{ minorCounts[minor] || 0 }}</span>
                   </button>
+                  </div>
                 </div>
               </div>
             </section>
 
             <!-- 02 报名状态 -->
             <section class="mt-7 border-t border-slate-300/80 pt-4 dark:border-slate-700">
-              <h2 class="mb-3 text-[12px] font-bold uppercase tracking-[0.16em] text-slate-400 dark:text-slate-500">
+              <h2 class="mb-3 text-[12.5px] font-bold uppercase tracking-[0.16em] text-slate-400 dark:text-slate-500">
                 <span class="mr-1.5 font-mono text-slate-300 dark:text-slate-600">02</span>报名状态
               </h2>
               <button
                 type="button"
-                class="mb-0.5 flex w-full items-center justify-between rounded-md px-2.5 py-[7px] text-left text-[14px] font-semibold transition-colors"
+                class="mb-0.5 flex w-full items-center justify-between rounded-md px-2.5 py-[9px] text-left text-[15px] font-semibold transition-colors"
                 :class="activeStatus === 'all'
                   ? 'text-slate-900 dark:text-white'
                   : 'text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800'"
@@ -419,13 +475,13 @@ onMounted(() => {
                   ></span>
                   全部状态
                 </span>
-                <span class="text-xs tabular-nums text-slate-400">{{ statusCounts.all }}</span>
+                <span class="text-[12.5px] tabular-nums text-slate-400">{{ statusCounts.all }}</span>
               </button>
               <button
                 v-for="st in STATUS_ORDER"
                 :key="st"
                 type="button"
-                class="flex w-full items-center justify-between rounded-md px-2.5 py-[7px] text-left text-[14px] font-semibold transition-colors"
+                class="flex w-full items-center justify-between rounded-md px-2.5 py-[9px] text-left text-[15px] font-semibold transition-colors"
                 :class="activeStatus === st
                   ? 'text-slate-900 dark:text-white'
                   : 'text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800'"
@@ -438,19 +494,19 @@ onMounted(() => {
                   ></span>
                   {{ STATUS_LABEL[st] }}
                 </span>
-                <span class="text-xs tabular-nums text-slate-400">{{ statusCounts[st] }}</span>
+                <span class="text-[12.5px] tabular-nums text-slate-400">{{ statusCounts[st] }}</span>
               </button>
             </section>
 
             <!-- 结果 + 清空 -->
             <div class="mt-7 border-t border-slate-300/80 pt-4 dark:border-slate-700">
-              <p class="text-[12.5px] font-medium text-slate-500 dark:text-slate-400">
-                匹配 <span class="text-[22px] font-black tabular-nums text-slate-900 dark:text-white">{{ filtered.length }}</span> 项
+              <p class="text-[13.5px] font-medium text-slate-500 dark:text-slate-400">
+                匹配 <span class="text-[26px] font-black tabular-nums text-slate-900 dark:text-white">{{ filtered.length }}</span> 项
               </p>
               <button
                 v-if="hasFilter"
                 type="button"
-                class="mt-2 text-[12.5px] font-bold text-slate-500 underline decoration-slate-300 underline-offset-4 transition-colors hover:text-slate-900 dark:text-slate-400 dark:hover:text-white"
+                class="mt-2.5 text-[13px] font-bold text-slate-500 underline decoration-slate-300 underline-offset-4 transition-colors hover:text-slate-900 dark:text-slate-400 dark:hover:text-white"
                 @click="clearAll"
               >
                 清空全部筛选
@@ -462,10 +518,10 @@ onMounted(() => {
                   v-for="selection in selectedMinors"
                   :key="selection"
                   type="button"
-                  class="inline-flex items-center gap-1 rounded border border-slate-200 bg-white px-2 py-1 text-[11.5px] font-semibold text-slate-600 transition-colors hover:border-slate-300 hover:text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:text-white"
+                  class="inline-flex items-center gap-1 rounded border border-slate-200 bg-white px-2.5 py-1 text-[12.5px] font-semibold text-slate-600 transition-colors hover:border-slate-300 hover:text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:text-white"
                   @click="removeMinor(selection)"
                 >
-                  {{ selection }}
+                  {{ chipLabel(selection) }}
                   <svg class="h-2.5 w-2.5 opacity-50" fill="none" stroke="currentColor" stroke-width="3" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
                   </svg>
@@ -515,7 +571,7 @@ onMounted(() => {
             class="rounded-2xl border border-dashed border-slate-200 px-6 py-16 text-center dark:border-slate-700"
           >
             <p class="font-bold text-slate-500 dark:text-slate-400">没有符合条件的竞赛</p>
-            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">试试放宽学科方向或报名状态</p>
+            <p class="mt-1.5 text-[15px] text-slate-500 dark:text-slate-400">试试放宽学科方向或报名状态</p>
             <button
               v-if="hasFilter"
               class="mt-5 rounded-full bg-slate-900 px-5 py-2 text-sm font-bold text-white dark:bg-white dark:text-slate-900"

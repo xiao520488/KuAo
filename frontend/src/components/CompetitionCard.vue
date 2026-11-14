@@ -193,7 +193,7 @@ async function removeOnly() {
       <span
         v-if="countdown"
         class="countdown-badge pointer-events-none absolute right-3 top-3 inline-flex items-center gap-1.5
-               rounded-full px-3 py-1.5 text-xs font-bold tracking-wide shadow-lg backdrop-blur
+               rounded-full px-3 py-1.5 text-[12.5px] font-bold tracking-wide shadow-lg backdrop-blur
                supports-[backdrop-filter]:bg-clip-padding"
         :class="countdownClass"
         :title="countdown.tone === 'over' ? '报名已结束' : '根据平台采集的官方日期实时计算'"
@@ -226,7 +226,7 @@ async function removeOnly() {
       <!-- 标题 -->
       <div class="flex items-start gap-2">
         <h3
-          class="line-clamp-2 text-xl font-bold leading-[1.45] text-slate-900 dark:text-slate-100 cursor-pointer
+          class="line-clamp-2 text-[22px] font-bold leading-[1.4] text-slate-900 dark:text-slate-100 cursor-pointer
                  transition-colors duration-300 group-hover:text-blue-600"
           @click.stop="goDetail()"
         >
@@ -235,14 +235,14 @@ async function removeOnly() {
         <span
           v-if="category"
           :title="category"
-          class="mt-1 shrink-0 rounded-full bg-slate-100 dark:bg-slate-700/60 px-3 py-0.5 text-xs font-medium text-slate-500 dark:text-slate-400"
+          class="mt-1 shrink-0 rounded-full bg-slate-100 dark:bg-slate-700/60 px-3 py-0.5 text-[12.5px] font-medium text-slate-500 dark:text-slate-400"
         >
           {{ categoryLabel }}
         </span>
       </div>
 
       <!-- 中间：时间信息 -->
-      <div class="mt-4 space-y-2 text-base text-slate-500 dark:text-slate-400">
+      <div class="mt-4 space-y-2 text-[17px] text-slate-500 dark:text-slate-400">
         <p class="flex items-center gap-2">
           <svg class="h-[18px] w-[18px] shrink-0 text-slate-500 dark:text-slate-400" fill="none" viewBox="0 0 24 24"
                stroke="currentColor" stroke-width="1.8" aria-hidden="true">
@@ -267,7 +267,7 @@ async function removeOnly() {
       <div class="mt-auto flex items-center justify-end gap-3 pt-5" @click.stop>
         <button
           type="button"
-          class="rounded-full px-6 py-2 text-sm font-bold text-slate-600 dark:text-slate-300
+          class="rounded-full px-6 py-2 text-[15px] font-bold text-slate-600 dark:text-slate-300
                  ring-1 ring-slate-200 dark:ring-slate-700 hover:text-slate-900 dark:hover:text-white hover:ring-slate-300 dark:hover:ring-slate-600
                  transition-colors"
           @click="goDetail"
@@ -278,7 +278,7 @@ async function removeOnly() {
           v-if="!hidePrepBtn && !showRemoveBtn"
           type="button"
           :disabled="pending"
-          class="rounded-full px-6 py-2 text-sm font-bold transition-colors disabled:opacity-60
+          class="rounded-full px-6 py-2 text-[15px] font-bold transition-colors disabled:opacity-60
                  disabled:cursor-not-allowed"
           :class="
             isPrepared
@@ -299,7 +299,7 @@ async function removeOnly() {
           :disabled="pending"
           title="移出备赛"
           aria-label="移出备赛"
-          class="inline-flex items-center gap-1.5 rounded-full px-3 py-2 text-sm font-medium
+          class="inline-flex items-center gap-1.5 rounded-full px-3 py-2 text-[15px] font-medium
                  text-slate-500 dark:text-slate-400 ring-1 ring-slate-200 dark:ring-slate-700 transition-colors
                  hover:bg-rose-50 dark:hover:bg-rose-500/10 hover:text-rose-600 hover:ring-rose-200
                  disabled:opacity-50 disabled:cursor-not-allowed"
