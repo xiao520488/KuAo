@@ -88,6 +88,14 @@ class Competition(BaseModel):
         default_factory=list, description="涉及技术栈列表"
     )
     sort_order: Optional[int] = Field(None, description="排序权重")
+    has_project_awards: bool = Field(
+        True,
+        description=(
+            "是否有可提炼的项目作品。False = 纯算法/知识类赛事（蓝桥杯、"
+            "ACM-ICPC、码蹄杯等），历年公示的只有获奖名单、没有项目作品，"
+            "平台只展示名单证明含金量，不提供 AI 灵感分析"
+        ),
+    )
     created_at: Optional[str] = Field(None, description="创建时间（本地时间字符串）")
 
     model_config = {

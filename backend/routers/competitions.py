@@ -97,6 +97,7 @@ def _row_to_competition(row: Dict[str, Any]) -> Competition:
         summary=row.get("summary"),
         tech_stack=_parse_tech_stack(row.get("tech_stack")),
         sort_order=row.get("sort_order"),
+        has_project_awards=bool(row.get("has_project_awards", 1)),
         created_at=row.get("created_at"),
     )
 
@@ -305,6 +306,10 @@ class InspirationStatusResponse(BaseModel):
     job_id: Optional[int] = Field(None, description="最近一次 ai_jobs.id")
     attempts: int = Field(0, description="该任务已尝试次数")
     awards_count: int = Field(0, description="该赛事获奖作品数（素材基础）")
+    has_project_awards: bool = Field(
+        True,
+        description="False=纯算法/知识类赛事（只有名单、没有项目作品），不提供灵感生成",
+    )
     insights_count: int = Field(0, description="已生成的洞察条数")
     ideas_count: int = Field(0, description="已生成的选题灵感条数")
     error: Optional[str] = Field(None, description="最近一次失败原因")
@@ -319,7 +324,8 @@ class InspirationRequestResponse(BaseModel):
         ...,
         description=(
             "ready=已生成；queued=已入队；running=已在执行；"
-            "no_awards=无获奖作品不可生成；throttled=被限流"
+            "no_awards=无获奖作品不可生成；algorithm_only=纯算法/知识类赛事"
+            "（只有名单、没有项目作品）不可生成；throttled=被限流"
         ),
     )
     job_id: Optional[int] = Field(None, description="入队后的任务 id，用于轮询")
@@ -330,7 +336,10 @@ class InspirationRequestResponse(BaseModel):
         False, description="True=直接命中已有结果（零成本），未调用大模型"
     )
     reason: Optional[str] = Field(
-        None, description="拒绝原因：no_awards / daily_budget / queue_full / cooldown"
+        None,
+        description=(
+            "拒绝原因：algorithm_only / no_awards / daily_budget / queue_full / cooldown"
+        ),
     )
     poll_after_ms: int = Field(
         0, description="建议前端轮询间隔（毫秒）；0 表示无需轮询"
@@ -345,12 +354,16 @@ class InspirationRequestResponse(BaseModel):
     description=(
         "登录用户触发。灵感全部从该赛事的获奖作品提炼，因此没有获奖作品时"
         "直接 409（reason=no_awards），不会白烧额度。\n\n"
+        "纯算法/知识类赛事（has_project_awards=false，如蓝桥杯、ACM-ICPC）"
+        "的获奖公示只有名单、没有项目作品，基于名单做选题灵感没有备赛价值，"
+        "直接 400（reason=algorithm_only），一次大模型调用都不会发起。\n\n"
         "已有 insights/ideas 返回 200；否则写 ai_jobs 后立即 202，由后台线程池"
         "串行生成（约 60–180s）。前端用 GET 同路径轮询状态。\n\n"
         "幂等：同一赛事已有 queued/running 任务时返回同一个 job_id。\n"
         "限流：全站每日上限 / 队列上限 / 失败冷却，命中时返回 429 或 409。"
     ),
     responses={
+        400: {"description": "纯算法/知识类赛事，不提供灵感分析（algorithm_only）"},
         401: {"description": "未登录或 Token 失效"},
         404: {"description": "竞赛不存在"},
         409: {"description": "无获奖作品（no_awards）或刚失败冷却中"},

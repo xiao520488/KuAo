@@ -547,6 +547,45 @@ class InspirationApiTests(_Base):
             assert resp.status_code == 202, resp.text
             self._wait_job(resp.json()["job_id"])
 
+    def test_algorithm_only_competition_is_rejected(self) -> None:
+        """纯算法/知识类赛事（蓝桥杯）：有上万条名单也必须 400，不建任务、不调模型。"""
+        cid = self._new_competition(name="蓝桥杯全国软件和信息技术专业人才大赛",
+                                    category="程序设计")
+        self._add_award(cid, title="C/C++ 程序设计 大学 B 组 一等奖")
+        db.update_competition(cid, {"has_project_awards": 0})
+        _, token = self._new_user()
+        with patch.object(ai_content, "generate_inspiration") as mocked:
+            resp = self.client.post(
+                f"/api/competitions/{cid}/generate_inspirations",
+                headers=self._auth(token),
+            )
+        assert resp.status_code == 400, resp.text
+        body = resp.json()
+        assert body["status"] == "algorithm_only"
+        assert body["reason"] == "algorithm_only"
+        assert mocked.call_count == 0
+        with db.get_conn() as conn:
+            assert conn.execute("SELECT COUNT(*) FROM ai_jobs").fetchone()[0] == 0
+
+        # 状态接口如实报告 false，前端据此隐藏生成入口
+        status = self.client.get(
+            f"/api/competitions/{cid}/generate_inspirations",
+            headers=self._auth(token),
+        ).json()
+        assert status["has_project_awards"] is False
+
+        # 灵感数据接口：即使库里有历史 insights，也返回空 + false
+        with db.get_conn() as conn:
+            conn.execute(
+                "INSERT INTO insights (competition_id, kind, content_md) "
+                "VALUES (?, 'experience', '旧洞察')", (cid,)
+            )
+        data = self.client.get(
+            f"/api/ai/inspirations?competition_id={cid}"
+        ).json()
+        assert data["has_project_awards"] is False
+        assert data["insights"] == [] and data["ideas"] == []
+
     def test_queue_full_returns_429(self) -> None:
         config.AI_INSPIRATION_QUEUE_MAX = 1
         busy = self._new_competition("占用队列的赛事")

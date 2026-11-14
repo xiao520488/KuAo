@@ -425,6 +425,13 @@ _MIGRATION_COLUMNS = {
     # [{"stage":"初赛","start_date":"2026-12-01","end_date":"2026-12-20","note":""}]
     # 由 stage_schedule.py 护栏后写入，前端详情页按时间轴渲染。
     "stage_schedule": "TEXT",
+    # 是否有「项目作品」可供 AI 提炼（2026-11-14）
+    # 0 = 纯算法/知识类赛事（蓝桥杯、ACM-ICPC、码蹄杯、百度之星…）：
+    #     历年公示的只有获奖名单，没有可提炼的项目作品，基于名单做
+    #     「选题灵感 / 技术趋势」没有备赛价值，反而会诱导用户看名单。
+    #     这类赛事只保留「历年获奖名单」证明含金量；灵感入口在前端隐藏，
+    #     后端直接 400，绝不调用大模型（省掉一次调用成本）。
+    "has_project_awards": "INTEGER NOT NULL DEFAULT 1",
 }
 
 # 详情补充文本字段（只由详情接口返回，列表接口不返回）
@@ -697,13 +704,17 @@ def update_competition(cid: int, data: dict, *,
                "last_checked_at", "is_active", "participants", "content_scope",
                "exam_schedule", "stage_schedule",
                "reg_start_date", "reg_end_date",
-               "contest_start_date", "contest_end_date")
+               "contest_start_date", "contest_end_date",
+               "has_project_awards")
     fields, values = [], []
     for key in allowed:
         if key in data:
             val = data[key]
             if key == "reg_cross_year":
                 val = 1 if val else 0
+            if key == "has_project_awards":
+                # 0/1 落库，字符串 'false' 之类一律按 False 处理
+                val = 1 if val in (1, True, "1", "true", "True") else 0
             if key == "level" and val not in ("national", "provincial"):
                 val = "national"
             if key == "image_url":
@@ -940,7 +951,8 @@ def get_competition(cid: int) -> Optional[dict]:
 def list_competitions(category: Optional[str] = None,
                       month: Optional[int] = None,
                       keyword: Optional[str] = None,
-                      limit: Optional[int] = None) -> list:
+                      limit: Optional[int] = None,
+                      include_inactive: bool = False) -> list:
     """
     条件查询比赛列表（智能排序）。
 
@@ -962,8 +974,12 @@ def list_competitions(category: Optional[str] = None,
         limit: 只返回前 N 条（None = 全部）。**必须在 month 过滤之后才截断**：
                若把 LIMIT 写进 SQL，就是「先截断再过滤」，传了 limit 反而
                可能返回比 limit 更少的行，也会漏掉排在后面的当月赛事。
+        include_inactive: True 时连下架（is_active=0）的赛事一起返回；
+               仅供维护脚本（如 classify_competitions.py）批量打标记使用，
+               对外接口永远只返回上架赛事。
     """
-    where = "WHERE COALESCE(is_active, 1) = 1"
+    where = ("WHERE 1 = 1" if include_inactive
+             else "WHERE COALESCE(is_active, 1) = 1")
     params = []
     if category:
         where += " AND category LIKE ?"
@@ -3129,11 +3145,14 @@ def get_inspiration_state(competition_id: int) -> Optional[dict]:
 
     额外返回 awards_count：灵感是从获奖作品里提炼的，没有获奖作品就没有
     可提炼的素材，前端据此把「生成专属灵感」按钮置灰（2026-11-13 新增）。
+
+    额外返回 has_project_awards：False=纯算法/知识类赛事（蓝桥杯等），
+    获奖数据只有名单、没有项目作品，前端据此隐藏灵感入口（2026-11-14 新增）。
     """
     cid = int(competition_id)
     with get_conn() as conn:
         comp = conn.execute(
-            "SELECT id FROM competitions WHERE id = ?", (cid,)
+            "SELECT id, has_project_awards FROM competitions WHERE id = ?", (cid,)
         ).fetchone()
         if comp is None:
             return None
@@ -3171,6 +3190,8 @@ def get_inspiration_state(competition_id: int) -> Optional[dict]:
         "job_id": int(job["id"]) if job is not None else None,
         "attempts": int(job["attempts"]) if job is not None else 0,
         "awards_count": int(awards["n"] or 0) if awards is not None else 0,
+        "has_project_awards": bool(comp["has_project_awards"]
+                                   if "has_project_awards" in comp.keys() else 1),
         "insights_count": insights_count,
         "ideas_count": ideas_count,
         "error": (

@@ -999,6 +999,13 @@ class InspirationResponse(BaseModel):
     competition_id: int = Field(..., description="竞赛 ID")
     competition_name: Optional[str] = Field(None, description="竞赛名称")
     work_count: int = Field(0, description="该赛事获奖作品数（用于提示数据基础）")
+    has_project_awards: bool = Field(
+        True,
+        description=(
+            "False=纯算法/知识类赛事（只有获奖名单、没有项目作品）："
+            "历年洞察/选题均为空，前端展示「去刷题」提示"
+        ),
+    )
     insights: List[InspirationInsight] = Field(default_factory=list)
     ideas: List[InspirationIdea] = Field(default_factory=list)
 
@@ -1071,6 +1078,18 @@ def get_inspirations(
         logger.error("查询灵感数据失败: %r", exc)
         raise HTTPException(status_code=500, detail="数据库查询失败") from exc
 
+    # 纯算法/知识类赛事：只有获奖名单、没有项目作品，任何历史 insights/ideas
+    # 都不具备备赛参考价值，统一返回空列表，前端据此展示「直接去刷题」提示。
+    if not comp.get("has_project_awards", 1):
+        return InspirationResponse(
+            competition_id=competition_id,
+            competition_name=comp.get("name"),
+            work_count=len(works),
+            has_project_awards=False,
+            insights=[],
+            ideas=[],
+        )
+
     valid_ids = set()
     for w in works:
         try:
@@ -1113,6 +1132,7 @@ def get_inspirations(
         competition_id=competition_id,
         competition_name=comp.get("name"),
         work_count=len(works),
+        has_project_awards=True,
         insights=insights,
         ideas=ideas,
     )

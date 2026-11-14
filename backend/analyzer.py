@@ -696,6 +696,17 @@ def generate(competition_id: int, *, only: str = "all", idea_n: int = DEFAULT_ID
         print(f"[!] 竞赛 ID={competition_id} 不存在", file=sys.stderr)
         return 2
 
+    # 纯算法/知识类赛事（蓝桥杯、ACM-ICPC…）：历年公示只有获奖名单，
+    # 没有任何项目作品，基于名单提炼「选题灵感/技术趋势」既没价值又烧钱。
+    # 这里兜底拦住，防止绕过 API 直接跑脚本时白花一次调用。
+    if not competition.get("has_project_awards", 1):
+        print(
+            f"[!] 竞赛「{competition.get('name')}」(ID={competition_id}) 是纯算法/"
+            "知识类赛事，获奖数据只有名单、没有项目作品，不提供灵感分析。",
+            file=sys.stderr,
+        )
+        return 2
+
     works_all = db.list_awards_by_competition(competition_id)
     # 示例（mock）数据是早期演示种子，与真实获奖无关，绝不能进模型上下文。
     works = [w for w in works_all

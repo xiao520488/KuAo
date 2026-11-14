@@ -303,17 +303,34 @@ def request_inspiration(competition_id: int, *, user_id: Optional[int] = None,
 
       * 200 已有 insights / ideas（无需重复生成）
       * 202 已入队 / 已在跑（幂等，返回同一个 job_id）
+      * 400 reason=algorithm_only：纯算法/知识类赛事（蓝桥杯等），
+            获奖数据只有名单没有项目作品，禁止调用大模型
       * 409 reason=no_awards：该赛事没有获奖作品，AI 无素材可提炼
       * 409 reason=cooldown：刚失败过，冷却中
       * 429 当日预算或队列已满
 
     灵感全部来自 awards，所以「有没有获奖作品」必须在入队前挡掉：
     否则 analyzer 必然 exit != 0，只会白烧一次任务额度。
+
+    纯算法/知识类赛事（has_project_awards=0）排在第一位拦截：这类赛事可能
+    有上万条获奖名单（蓝桥杯 13,631 条），但名单里没有任何项目信息，生成
+    选题灵感既无价值又烧钱，必须在任何大模型调用前直接 400。
     """
     cid = int(competition_id)
     state = db.get_inspiration_state(cid)
     if state is None:
         raise LookupError("竞赛 ID=%s 不存在" % cid)
+
+    if not state.get("has_project_awards", True):
+        return {
+            "http": 400,
+            "payload": {
+                "competition_id": cid,
+                "status": "algorithm_only",
+                "awards_count": state["awards_count"],
+                "reason": "algorithm_only",
+            },
+        }
 
     if state["awards_count"] <= 0:
         return {
@@ -439,6 +456,7 @@ def get_inspiration_status(competition_id: int) -> dict:
         "job_id": state.get("job_id"),
         "attempts": state.get("attempts", 0),
         "awards_count": state.get("awards_count", 0),
+        "has_project_awards": state.get("has_project_awards", True),
         "insights_count": state.get("insights_count", 0),
         "ideas_count": state.get("ideas_count", 0),
         "error": state.get("error"),

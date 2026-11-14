@@ -28,7 +28,10 @@ const competition = reactive({
   level: '',
   category: '',
   contestTime: '',
-  image: ''
+  image: '',
+  // 是否有可提炼的项目作品。纯算法/知识类赛事（蓝桥杯、ACM-ICPC）为 false：
+  // 历年公示只有获奖名单、没有项目作品，灵感分析没有备赛价值。
+  hasProjectAwards: true
 })
 const compLoading = ref(true)
 const compError = ref('')
@@ -49,6 +52,8 @@ function applyDetail(d) {
   competition.level = d.level || d.grade || ''
   competition.category = d.category || d.type || ''
   competition.image = resolveImage(d)
+  // 只有明确的 false 才判定为「纯算法/知识类」；字段缺失一律按有作品处理
+  competition.hasProjectAwards = d.has_project_awards === false ? false : true
   // 兼容老字段（完整日期），没有再退回 *月份* 拼接
   const startT = d.contestStart || d.startTime || d.contestTime || d.registrationStart || ''
   const endT = d.contestEnd || d.endTime || d.registrationEnd || ''
@@ -866,7 +871,11 @@ async function loadInspirations() {
     awardsCount.value = Number(data?.work_count) || 0
     applyFavoriteFlags()
     // 没有任何灵感时，顺带恢复「正在生成」进度（刷新页面不丢）
-    if (!inspirations.value.length && inspireState.value === 'idle') {
+    // algorithmOnly 的赛事后端永远返回空列表，不能再去探测状态，
+    // 否则 loadInspirations ⇄ syncInspirationState 会互相触发成死循环。
+    if (!inspirations.value.length && inspireState.value === 'idle'
+        && !algorithmOnly.value && !inspirationSynced) {
+      inspirationSynced = true
       syncInspirationState()
     }
   } catch (e) {
@@ -884,6 +893,8 @@ function persist() {
 
 // 刷新灵感：重新请求后端（数据由离线 analyzer.py 生成并落库）
 function refreshInspiration() {
+  // 手动刷新：允许再探测一次生成状态（重置一次性守卫）
+  inspirationSynced = false
   loadInspirations()
 }
 
@@ -891,8 +902,13 @@ function refreshInspiration() {
    灵感生成（awards 是唯一素材来源，先看有没有获奖作品）
    ========================================================= */
 const awardsCount = ref(0)        // 该赛事获奖作品数：为 0 时按钮置灰
+// 纯算法/知识类赛事（蓝桥杯、ACM-ICPC…）：获奖公示只有名单、没有项目作品，
+// 生成「选题灵感/技术趋势」既无备赛价值又烧钱，入口整体隐藏（2026-11-14）
+const algorithmOnly = computed(() => competition.hasProjectAwards === false)
 const inspireState = ref('idle')  // idle | queued | running | ready | failed
 const inspireError = ref('')
+// 状态探测只做一次：防止 loadInspirations ⇄ syncInspirationState 无限互相触发
+let inspirationSynced = false
 let inspireTimer = null
 let inspirePollCount = 0
 
@@ -905,7 +921,7 @@ const inspireBusy = computed(
   () => inspireState.value === 'queued' || inspireState.value === 'running'
 )
 const canGenerateInspiration = computed(
-  () => awardsCount.value > 0 && !inspireBusy.value
+  () => awardsCount.value > 0 && !inspireBusy.value && !algorithmOnly.value
 )
 const hasInspiration = computed(() => inspirations.value.length > 0)
 
@@ -978,7 +994,8 @@ async function syncInspirationState() {
       inspireState.value = state.status
       inspirePollCount = 0
       scheduleInspirePoll()
-    } else if (state.status === 'ready' && !hasInspiration.value) {
+    } else if (state.status === 'ready' && !hasInspiration.value
+               && !algorithmOnly.value) {
       await loadInspirations()
     }
   } catch (e) {
@@ -1864,8 +1881,13 @@ onBeforeUnmount(() => {
       <!-- 顶部提示语 + 切换/刷新 -->
       <div class="mb-5 flex flex-wrap items-center justify-between gap-4 rounded-2xl bg-blue-50/70 dark:bg-blue-500/15 p-5 ring-1 ring-blue-100 dark:ring-blue-500/30">
         <div>
-          <p class="text-sm font-bold text-blue-900">{{ competition.title || '该赛事' }} · 专属灵感工作台</p>
-          <p class="mt-1 text-xs font-medium text-blue-700/70">
+          <p class="text-sm font-bold text-blue-900">
+            {{ competition.title || '该赛事' }} · {{ algorithmOnly ? '算法竞技赛事' : '专属灵感工作台' }}
+          </p>
+          <p v-if="algorithmOnly" class="mt-1 text-xs font-medium text-blue-700/70">
+            该赛事只公示获奖名单、没有项目作品，平台不做项目灵感分析；下方保留历年获奖名单可查，备赛请直接进入算法刷题训练。
+          </p>
+          <p v-else class="mt-1 text-xs font-medium text-blue-700/70">
             只展示当前赛事真实获奖作品生成的洞察与选题；切换赛事不会混入其它比赛的数据。
             已收藏 {{ favoriteList.length }} 条灵感，收藏内容保存在本地。
           </p>
@@ -1886,6 +1908,7 @@ onBeforeUnmount(() => {
             {{ showFavorites ? '查看全部' : '我的收藏' }}
           </button>
           <button
+            v-if="!algorithmOnly"
             type="button"
             class="inline-flex items-center gap-2 rounded-full px-4 py-2 text-xs font-bold transition-colors"
             :class="canGenerateInspiration
@@ -1970,6 +1993,26 @@ onBeforeUnmount(() => {
         >
           去看看灵感
         </button>
+      </div>
+
+      <!-- 纯算法/知识类赛事：不做项目灵感分析，引导去刷题 -->
+      <div
+        v-else-if="algorithmOnly"
+        class="flex flex-col items-center justify-center rounded-2xl bg-white dark:bg-slate-800 px-6 py-16 text-center ring-1 ring-slate-200/70 dark:ring-slate-700"
+      >
+        <div class="flex h-14 w-14 items-center justify-center rounded-2xl bg-indigo-50 dark:bg-indigo-500/15">
+          <svg class="h-7 w-7 text-indigo-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round"
+              d="M16 18l6-6-6-6M8 6l-6 6 6 6M14.5 4l-5 16" />
+          </svg>
+        </div>
+        <h3 class="mt-4 text-base font-bold text-slate-900 dark:text-slate-100">算法竞技赛事，无需项目灵感分析</h3>
+        <p class="mt-2 max-w-xl text-sm leading-6 text-slate-500 dark:text-slate-400">
+          该赛事为算法竞技类，主要考察编程基本功与算法能力。平台已为您收录历年获奖名单（证明赛事含金量），建议直接进行算法刷题训练，无需进行项目灵感分析。
+        </p>
+        <p v-if="awardsCount > 0" class="mt-3 text-xs font-medium text-slate-400 dark:text-slate-500">
+          已收录 {{ awardsCount }} 条历年获奖记录，可在「往年获奖作品」中查看。
+        </p>
       </div>
 
       <!-- 该赛事暂无灵感数据 -->
