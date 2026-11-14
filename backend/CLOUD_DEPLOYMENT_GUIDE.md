@@ -1488,3 +1488,38 @@ nginx -t && systemctl reload nginx
 
 把 nginx 的 `root /var/www/html;` 改成 `root /root/KuAo/frontend/dist;`，以后只换 dist 目录、不再 `cp`，
 回滚只需改回一行。改前务必 `cp -a /etc/nginx/sites-available/kuao{,.bak}`。
+
+---
+
+## 附录 G：2026-11-14 第二轮发布（AI 内容「终身一次」）
+
+发布 commit：`2758e4f`（后端 + 前端一起上，无新增依赖）。
+
+### G.1 行为变更（上线后必须知道）
+
+| 能力 | 之前 | 现在 |
+|---|---|---|
+| 共性分析 `POST /api/ai/analyze` | 每次请求先扣配额，再查缓存 | **先查缓存**：命中直接返回（`cached=true`），不扣配额、不调模型 |
+| 共性分析重算 | 任何一次点击都可能重烧 | 只有 `awards` 变化导致 prompt 指纹变化才重算；`force_refresh` 被忽略 |
+| 洞察 `insights` | 数据指纹变了会整体重写 | **终身一次**：已有 kind 直接跳过，`--force` 只影响 ideas |
+| 选题灵感 | 固定 4 条 | **每次追加 3 条**（`POST /api/ai/ideas/more`），永不覆盖 |
+
+### G.2 新增接口
+
+* `GET /api/ai/analysis?competition_id=`：只读缓存（不登录、不扣配额、不调模型），
+  返回 `cached / stale / updated_at`。前端据此决定「显示生成按钮」还是「折叠展示 + 展开全部」。
+* `stale=true` 表示缓存还在但 `awards` 已变：前端会在已登录时**静默重算一次**，
+  之后再也不会花钱。上线后旧缓存（老口径 5 条样本）会随首个访问者逐赛事自动升级一次。
+
+### G.3 数据库
+
+* `insights.evidence` / `insights.model` 之前在 `schema_v2.sql` 里漏建（只有线上老库被手工补过），
+  本次补进 DDL + 幂等迁移，**全新库不再报 `no column named evidence`**。
+* 发布前照旧跑 `migrate_production.py`（只读体检 → `--apply` 补列，幂等）。
+
+### G.4 前端
+
+* 共性分析、赛事洞察**默认折叠**（`max-h` 截断 + 渐隐），只有【展开全部/收起】，
+  已生成时不再出现生成按钮。
+* 灵感区按钮改为【✨ 生成更多选题灵感】：有数据时贴在列表最底部，
+  空状态时居中贴在提示语正下方。
