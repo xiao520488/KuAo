@@ -22,6 +22,7 @@ from typing import Any, Callable, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
+import analyzer
 import llm
 from db import (
     get_ai_analysis,
@@ -109,10 +110,11 @@ class PlanResponse(BaseModel):
 class AnalyzeResponse(BaseModel):
     """赛事获奖作品聚合分析响应。"""
 
-    analysis: str = Field(..., description="共性特征与获奖套路分析（Markdown）")
+    analysis: str = Field(..., description="技术拆解与架构套路分析（Markdown）")
     competition_id: int = Field(..., description="对应的竞赛 ID")
     competition_name: Optional[str] = Field(None, description="竞赛名称")
-    work_count: int = Field(..., description="参与本次分析的作品条数")
+    work_count: int = Field(..., description="参与本次分析的样本条数（跨赛道抽样的作品数）")
+    track_count: int = Field(0, description="样本覆盖的赛道数")
 
 
 # ---------------------------------------------------------------------------
@@ -557,9 +559,10 @@ def generate_plan(
 # POST /api/ai/analyze
 # ---------------------------------------------------------------------------
 ANALYZE_SYSTEM_PROMPT = (
-    "你是一位资深赛事评审与技术趋势分析师，擅长横向对比同一赛事的多件获奖作品，"
-    "提炼出可复用的共性规律、获奖套路与评审偏好。你要基于给定作品事实进行归纳，"
-    "不得凭空编造未出现的作品信息。输出使用 Markdown。"
+    "你是一位资深技术评审与系统架构师，擅长把获奖作品拆解成可复用的技术栈组合与架构套路。"
+    "你只从技术实现、工程完成度、评审技术关注点角度分析，"
+    "不讨论商业趋势、市场机会、红海蓝海或组队策略（那是另一个功能）。"
+    "只依据给定样本归纳，不得编造未出现的作品信息。输出使用 Markdown。"
 )
 
 
@@ -588,11 +591,19 @@ def _clean_field(text: Optional[str]) -> str:
 
 
 def _fmt_works(works: List[Dict[str, Any]]) -> str:
-    """把作品列表渲染成带编号的纯文本块，避免模型混淆作品边界。"""
+    """把作品列表渲染成带编号的纯文本块，避免模型混淆作品边界。
+
+    跨赛道抽样后一次会喂 20-30 件作品，长字段在这里统一截断，
+    否则 prompt 轻松破 1.5 万字、成本翻倍还容易触发上下文截断。
+    """
+    def _cut(value: Any, n: int = 220) -> str:
+        text = " ".join(str(value or "").split())
+        return text if len(text) <= n else text[:n] + "…"
+
     blocks = []
     for i, w in enumerate(works, 1):
         tech = w.get("tech_stack") or []
-        tech_str = ", ".join(str(t) for t in tech) if tech else "未提供"
+        tech_str = "、".join(str(t) for t in tech[:12]) if tech else "未提供"
         award = w.get("award_grade") or "等级未标注"
         year = w.get("year")
         year_str = f"{year} 年" if year else "年份未标注"
@@ -608,9 +619,9 @@ def _fmt_works(works: List[Dict[str, Any]]) -> str:
                 f"获奖等级：{award}（{year_str}）",
                 *([f"团队：{team}"] if team else []),
                 *([f"赛道：{track}"] if track else []),
-                f"摘要：{(_clean_field(w.get('summary')) or '未提供')}",
+                f"摘要：{_cut(_clean_field(w.get('summary')) or '未提供')}",
                 f"技术栈：{tech_str}",
-                f"亮点：{_clean_field(w.get('highlights')) or '未提供'}",
+                f"亮点：{_cut(_clean_field(w.get('highlights')) or '未提供')}",
             ])
         )
     return "\n\n".join(blocks)
@@ -620,8 +631,14 @@ def _build_analyze_prompt(
     competition_name: Optional[str],
     ctx: str,
     works: List[Dict[str, Any]],
+    track_meta: Optional[List[Dict[str, Any]]] = None,
 ) -> str:
-    """构建「多作品聚合分析」prompt。"""
+    """构建「跨赛道 · 技术拆解与架构套路」分析 prompt。
+
+    与「灵感工作台 · 赛事洞察」（analyzer.py 的 insights）严格分工：
+    这里只谈技术栈、系统架构、工程亮点与评审技术关注点；
+    商业趋势 / 红蓝海 / 组队策略一律不出现，避免两块内容重复。
+    """
     parts = []
 
     if ctx:
@@ -629,36 +646,62 @@ def _build_analyze_prompt(
         parts.append("")
 
     parts.append(f"【参评赛事】{competition_name or '未知赛事'}")
-    parts.append(f"【作品总数】{len(works)} 件（均为该赛事的获奖作品）")
+    tracks = [str(m.get("track")) for m in (track_meta or []) if m.get("track")]
+    if tracks:
+        parts.append(
+            f"【样本覆盖赛道】{'、'.join(tracks)}"
+            f"（共 {len(tracks)} 个赛道，已跨赛道抽样，非全量名单）"
+        )
+    parts.append(f"【样本数量】{len(works)} 件获奖作品")
     parts.append("")
-    parts.append("【获奖作品列表】")
+    parts.append("【获奖作品样本】")
     parts.append("")
     parts.append(_fmt_works(works))
     parts.append("")
-    parts.append("【任务要求】")
+    parts.append("【任务要求：只做技术拆解与架构套路】")
     parts.append(
-        "以上是该赛事的多件获奖作品。请横向对比它们，输出一份"
-        "「赛事共性特征与获奖套路」分析，要求："
+        "不要写市场分析、商业趋势、红海蓝海或组队策略（那是「赛事洞察」的职责）。请输出："
     )
-    parts.append("1. **选题共性**：这些获奖作品在选题方向、问题规模、落地场景上的共同倾向；")
-    parts.append("2. **技术套路**：高频出现的技术栈组合与技术方案范式，指出哪些是「标配」；")
-    parts.append("3. **创新点模式**：获奖作品惯用的创新切入方式（场景迁移、性能突破、成本优化等）；")
-    parts.append("4. **工程与呈现**：完成度、可演示性、文档与答辩材料的共同特征；")
-    parts.append("5. **获奖公式**：用一句话概括可复制的获奖方法论，再列出 5 条可执行建议；")
-    parts.append("6. **风险提示**：指出容易被评审扣分的典型共性问题。")
+    parts.append(
+        "1. **技术栈共性**：跨赛道反复出现的硬件/软件/算法组合，哪些组合已成为「标配」，"
+        "哪些是真正的加分项；"
+    )
+    parts.append(
+        "2. **系统架构套路**：获奖项目常见的分层方式（感知—决策—执行 / 端—边—云 / "
+        "数据—模型—应用），说明每层选了什么技术、为什么这种分层能打动技术评审；"
+    )
+    parts.append(
+        "3. **工程亮点**：从「能跑」到「能拿奖」的工程细节——实时性、鲁棒性、离线可用、"
+        "成本控制、可演示性、部署形态；"
+    )
+    parts.append(
+        "4. **评审技术关注点**：答辩时评委必问的技术问题（指标怎么测、数据哪来的、"
+        "模型为什么这么选、失败情况怎么兜底），并给出准备回答的方向；"
+    )
+    parts.append(
+        "5. **跨赛道差异**：每个赛道在技术选型上的显著差异，一行一个赛道，"
+        "不要强行拉平；"
+    )
+    parts.append(
+        "6. **可复用技术清单**：给下一届参赛队一份 5 条技术检查清单（可直接勾选执行）。"
+    )
     parts.append("")
-    parts.append("格式约束：使用 Markdown，每个维度用二级标题，观点要具体、"
-                 "能引用上面某件作品作为例证，避免空泛套话。")
+    parts.append("约束：")
+    parts.append("- 只基于上面的样本归纳，不要编造样本中不存在的技术、指标或赛道；")
+    parts.append("- 禁止输出任何百分比、占比、条数统计，也不要罗列作品 id / 编号；")
+    parts.append("- 使用 Markdown，二级标题分维度，观点具体到技术名词，避免空泛套话。")
     return "\n".join(parts)
 
 
 @router.post(
     "/analyze",
     response_model=AnalyzeResponse,
-    summary="赛事获奖作品聚合分析",
+    summary="赛事获奖作品共性分析（跨赛道 · 技术拆解与架构套路）",
     description=(
-        "接收 competition_id，从数据库检索该赛事最多 5 件获奖作品"
-        "（title/summary/tech_stack/highlights），聚合产出共性特征与获奖套路（Markdown）。"
+        "接收 competition_id，从该赛事全部获奖作品中做**跨赛道抽样**"
+        "（每个主要赛道 3-5 条，合计 20-30 条），输出技术栈共性、系统架构套路、"
+        "工程亮点与评审技术关注点（Markdown）。\n\n"
+        "与「灵感工作台 · 赛事洞察」严格分工：本接口不产出商业趋势/红蓝海/组队策略。"
     ),
     responses={
         404: {"description": "竞赛不存在或该赛事暂无获奖作品"},
@@ -669,7 +712,7 @@ def analyze_work(
     req: AnalyzeRequest,
     _user: dict = Depends(require_ai_quota),  # 需登录
 ) -> AnalyzeResponse:
-    """赛事获奖作品聚合分析：从库里取前 5 件获奖作品，总结共性特征与获奖套路。"""
+    """赛事获奖作品共性分析：跨赛道抽样后，拆解技术栈、架构套路与工程亮点。"""
     # 1. 校验竞赛存在
     try:
         comp = get_competition(req.competition_id)
@@ -681,23 +724,31 @@ def analyze_work(
             status_code=404, detail=f"竞赛 ID={req.competition_id} 不存在"
         )
 
-    # 2. 取该赛事的获奖作品（最多 5 条）
+    # 2. 取该赛事全部获奖作品，再做跨赛道抽样（每个主要赛道 3-5 条，合计 20-30 条）
+    #    旧逻辑 limit=5 只会拿到同一赛道的前 5 条，结论必然片面。
     try:
-        works = list_awards_by_competition(req.competition_id, limit=5)
+        all_works = list_awards_by_competition(req.competition_id)
     except Exception as exc:
         logger.error("查询获奖作品失败: %r", exc)
         raise HTTPException(status_code=500, detail="数据库查询失败") from exc
 
-    if not works:
+    if not all_works:
         raise HTTPException(
             status_code=404,
             detail=f"竞赛 ID={req.competition_id} 暂无获奖作品数据，无法做聚合分析",
         )
 
+    works, track_meta = analyzer.sample_cross_track(all_works)
+    if not works:
+        raise HTTPException(
+            status_code=404,
+            detail=f"竞赛 ID={req.competition_id} 抽样结果为空，无法做聚合分析",
+        )
+
     # 3. 拼 prompt；先查全局缓存，命中直接返回，不再调用大模型
     ctx = _competition_context(req.competition_id)
     comp_name = comp.get("name")
-    prompt = _build_analyze_prompt(comp_name, ctx, works)
+    prompt = _build_analyze_prompt(comp_name, ctx, works, track_meta)
 
     cached = _load_cached_analysis(
         ANALYSIS_TARGET_COMPETITION, req.competition_id, prompt
@@ -712,6 +763,7 @@ def analyze_work(
             competition_id=req.competition_id,
             competition_name=comp_name,
             work_count=len(works),
+            track_count=len(track_meta),
         )
 
     # 4. 未命中 -> 调用模型
@@ -743,6 +795,7 @@ def analyze_work(
         competition_id=req.competition_id,
         competition_name=comp_name,
         work_count=len(works),
+        track_count=len(track_meta),
     )
 
 
@@ -1292,4 +1345,107 @@ def get_inspirations(
         has_project_awards=True,
         insights=insights,
         ideas=ideas,
+    )
+
+
+# ---------------------------------------------------------------------------
+# POST /api/ai/ideas/more  「换一批新灵感」（追加，不覆盖）
+# ---------------------------------------------------------------------------
+class MoreIdeasRequest(BaseModel):
+    """换一批新灵感的请求。
+
+    前端把「当前已经展示给用户的 idea 列表」一起传上来（id 与标题都收），
+    后端再把库里已有的标题合并进去，一起写进 prompt 的「必须避开」清单。
+    """
+
+    competition_id: int = Field(..., gt=0, description="竞赛 ID")
+    count: int = Field(4, ge=1, le=8, description="本次新增条数（默认 4，上限 8）")
+    exclude_ids: List[int] = Field(
+        default_factory=list, description="前端当前已展示的 idea id（可选，仅作辅助）"
+    )
+    exclude_titles: List[str] = Field(
+        default_factory=list,
+        description="前端当前已展示的 idea 标题（可选，用于要求模型避开重复选题）",
+    )
+
+
+class MoreIdeasResponse(BaseModel):
+    """换一批新灵感的响应：只返回本次新生成的 idea（已入库）。"""
+
+    competition_id: int = Field(..., description="竞赛 ID")
+    ideas: List[InspirationIdea] = Field(
+        default_factory=list, description="本次新生成并已入库的 idea（前端追加到列表尾部）"
+    )
+    added: int = Field(0, description="本次新增条数")
+    skipped: int = Field(0, description="与已有选题重复而跳过的条数")
+    total_ideas: int = Field(0, description="该赛事当前 idea 总数")
+
+
+@router.post(
+    "/ideas/more",
+    response_model=MoreIdeasResponse,
+    summary="换一批新灵感（追加生成，不覆盖历史）",
+    description=(
+        "「灵感工作台」底部的【✨ 换一批新灵感】按钮调用。\n\n"
+        "* 前端把当前列表的 idea id / 标题一并传来，后端合并库里已有标题，"
+        "在 prompt 中列出「用户已看过的 N 条选题」并要求模型换全新视角；\n"
+        "* 新结果写入 ideas 表后**追加**返回，不删除、不覆盖历史；\n"
+        "* 用户点得越多，该赛事的灵感库越厚（不是固定 4 条）。\n\n"
+        "同步调用一次（约 20-60s）；需登录且消耗一次 AI 配额。"
+    ),
+    responses={
+        400: {"description": "纯算法/知识类赛事（algorithm_only）"},
+        401: {"description": "未登录或 Token 失效"},
+        404: {"description": "竞赛不存在"},
+        409: {"description": "该赛事无获奖作品（no_awards）"},
+        429: {"description": "超出每日 AI 配额"},
+        502: {"description": "大模型调用失败"},
+    },
+)
+def generate_more_ideas(
+    req: MoreIdeasRequest,
+    _user: dict = Depends(require_ai_quota),
+) -> MoreIdeasResponse:
+    """按「已看过的清单」追加生成 n 条新 idea。"""
+    count = max(1, min(int(req.count or 4), 8))
+    try:
+        result = analyzer.generate_more_ideas(
+            req.competition_id,
+            n=count,
+            avoid_titles=list(req.exclude_titles or []),
+            avoid_ids=list(req.exclude_ids or []),
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        reason = str(exc)
+        if reason == "algorithm_only":
+            raise HTTPException(
+                status_code=400,
+                detail="该赛事只有获奖名单、没有项目作品，不提供选题灵感",
+            ) from exc
+        if reason == "no_awards":
+            raise HTTPException(
+                status_code=409, detail="该赛事暂无获奖作品，AI 没有素材可提炼"
+            ) from exc
+        raise HTTPException(status_code=400, detail=f"生成失败：{reason}") from exc
+    except llm.LLMError as exc:
+        logger.error("换一批灵感失败: %r", exc)
+        raise HTTPException(status_code=502, detail=f"大模型调用失败: {exc}") from exc
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("换一批灵感出现未预期异常")
+        raise HTTPException(status_code=502, detail=f"生成异常: {exc}") from exc
+
+    logger.info(
+        "换一批灵感 competition_id=%s 新增 %s 条（跳过 %s，共 %s 条）",
+        req.competition_id, result.get("saved"), result.get("skipped"),
+        result.get("total"),
+    )
+    ideas = [InspirationIdea(**item) for item in result.get("ideas", [])]
+    return MoreIdeasResponse(
+        competition_id=req.competition_id,
+        ideas=ideas,
+        added=len(ideas),
+        skipped=int(result.get("skipped") or 0),
+        total_ideas=int(result.get("total") or 0),
     )

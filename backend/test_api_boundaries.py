@@ -30,6 +30,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import tempfile
@@ -809,14 +810,27 @@ class AiAnalyzeBoundaryTest(_TempDBTestCase):
             )
         self.assertEqual(response.status_code, 502)
 
-    def test_analyze_uses_at_most_five_awards(self) -> None:
-        """分析 prompt 最多纳入 5 件作品，work_count 不得超过 5。"""
-        cid = self._new_competition("多作品赛事")
-        for index in range(7):
-            self._new_award(cid, title=f"作品 {index}", year=2020 + index)
+    def test_analyze_uses_cross_track_sample(self) -> None:
+        """共性分析必须跨赛道抽样：覆盖多个赛道，样本 20-30 条，且 prompt 不含百分比。"""
+        cid = self._new_competition("多赛道赛事")
+        tracks = ["先进制造", "新能源", "智慧农业"]
+        patched = []
+        for track in tracks:
+            for index in range(10):
+                aid = self._new_award(
+                    cid,
+                    title=f"{track}-作品{index}",
+                    award_grade="金奖" if index < 3 else "铜奖",
+                    year=2024,
+                )
+                patched.append((aid, track))
+        # track 是迁移追加列（不在 create_award 的可写字段里），测试里直接写库
+        with db.get_conn() as conn:
+            for aid, track in patched:
+                conn.execute("UPDATE awards SET track = ? WHERE id = ?", (track, aid))
         token = self._token()
 
-        with patch("llm.chat", return_value="## 分析"):
+        with patch("llm.chat", return_value="## 分析") as chat:
             response = self.client.post(
                 "/api/ai/analyze",
                 json={"competition_id": cid},
@@ -824,7 +838,17 @@ class AiAnalyzeBoundaryTest(_TempDBTestCase):
             )
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["work_count"], 5)
+        body = response.json()
+        self.assertEqual(body["track_count"], 3)
+        self.assertGreaterEqual(body["work_count"], 20)
+        self.assertLessEqual(body["work_count"], 30)
+
+        prompt = chat.call_args.args[0]
+        for track in tracks:
+            self.assertIn(track, prompt)
+        # 任务 3：禁止把全量统计（条数/占比）塞进模型上下文
+        self.assertNotRegex(prompt, r"\d+(?:\.\d+)?\s*%")
+        self.assertNotIn("全量统计", prompt)
 
     def test_cache_hit_avoids_second_llm_call(self) -> None:
         cid = self._new_competition()
@@ -875,6 +899,89 @@ class AiAnalyzeBoundaryTest(_TempDBTestCase):
         self.assertEqual(chat.call_count, 2)
         self.assertEqual(first.json()["analysis"], "分析 A")
         self.assertEqual(second.json()["analysis"], "分析 B")
+
+
+# ======================================================================
+# 六点五、换一批新灵感（追加生成 + 避开已看过清单）
+# ======================================================================
+class MoreIdeasBoundaryTest(_TempDBTestCase):
+
+    def _seed(self, name: str = "创意赛") -> int:
+        cid = self._new_competition(name)
+        for index in range(6):
+            self._new_award(
+                cid,
+                title=f"获奖作品{index}",
+                track="A 赛道" if index % 2 else "B 赛道",
+            )
+        return cid
+
+    @staticmethod
+    def _ideas_payload(*titles: str) -> str:
+        items = [
+            {
+                "title": t,
+                "pitch": "一句话",
+                "detail_md": "## 背景",
+                "novelty": "差异化",
+                "risk": "风险",
+                "ref_awards": [],
+            }
+            for t in titles
+        ]
+        return json.dumps({"ideas": items}, ensure_ascii=False)
+
+    def test_more_ideas_appends_and_avoids_seen_titles(self) -> None:
+        """点「换一批」：新结果追加落库；重复标题跳过；prompt 必须列出已看过的清单。"""
+        cid = self._seed()
+        _, token = self._new_user("more_idea_user")
+        config.AI_DAILY_QUOTA = 20
+
+        with patch(
+            "llm.chat", return_value=self._ideas_payload("选题甲", "选题乙")
+        ) as chat:
+            first = self.client.post(
+                "/api/ai/ideas/more",
+                json={
+                    "competition_id": cid,
+                    "count": 2,
+                    "exclude_titles": ["用户已看过的旧选题"],
+                },
+                headers=self._auth(token),
+            )
+            second = self.client.post(
+                "/api/ai/ideas/more",
+                json={
+                    "competition_id": cid,
+                    "count": 2,
+                    "exclude_titles": ["用户已看过的旧选题"],
+                },
+                headers=self._auth(token),
+            )
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(second.status_code, 200)
+        self.assertEqual(first.json()["added"], 2)
+        # 第二次模型仍返回同两条 -> 按「赛事 + 标题」去重跳过，绝不重复追加
+        self.assertEqual(second.json()["added"], 0)
+        self.assertEqual(second.json()["skipped"], 2)
+
+        prompt = chat.call_args.args[0]
+        self.assertIn("必须全部避开", prompt)
+        self.assertIn("用户已看过的旧选题", prompt)
+        self.assertIn("选题甲", prompt)  # 第二轮已把上一轮生成的标题纳入避开清单
+
+        titles = [r["title"] for r in db.list_ideas_by_competition(cid)]
+        self.assertEqual(titles, ["选题甲", "选题乙"])
+
+    def test_more_ideas_rejects_missing_competition(self) -> None:
+        _, token = self._new_user("more_idea_404")
+        resp = self.client.post(
+            "/api/ai/ideas/more",
+            json={"competition_id": 999999, "count": 4},
+            headers=self._auth(token),
+        )
+        self.assertEqual(resp.status_code, 404)
 
 
 # ======================================================================

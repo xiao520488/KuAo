@@ -10,7 +10,8 @@ import {
   getCompetitionDetail,
   getInspirationStatus,
   getInspirations,
-  requestInspirations
+  requestInspirations,
+  requestMoreIdeas
 } from '@/services/api'
 import { isLoggedIn } from '@/services/auth'
 import { openAuthModal } from '@/composables/useAuthModal'
@@ -887,7 +888,15 @@ function normalizeInspirationItems(payload) {
     }
   })
 
-  const ideas = (payload?.ideas || []).map((r) => ({
+  const ideas = (payload?.ideas || []).map(normalizeIdea).filter(Boolean)
+
+  return [...ideas, ...insights]
+}
+
+/** 单条 idea（后端行 / 「换一批」接口返回项）-> 页面卡片结构 */
+function normalizeIdea(r) {
+  if (!r || r.id === undefined || r.id === null) return null
+  return {
     key: `idea-${r.id}`,
     id: r.id,
     source: 'idea',
@@ -901,9 +910,7 @@ function normalizeInspirationItems(payload) {
     risk: stripIdClutter(r.risk || ''),
     refs: cleanRefs(r.ref_awards),
     favorite: false
-  }))
-
-  return [...ideas, ...insights]
+  }
 }
 
 /**
@@ -953,6 +960,72 @@ function refreshInspiration() {
   // 手动刷新：允许再探测一次生成状态（重置一次性守卫）
   inspirationSynced = false
   loadInspirations()
+}
+
+/* =========================================================
+   ✨ 换一批新灵感：把「已看过的列表」传给后端，追加而非覆盖
+   ========================================================= */
+const moreIdeasLoading = ref(false)
+const moreIdeasError = ref('')
+const moreIdeasTip = ref('')
+
+async function loadMoreIdeas() {
+  if (moreIdeasLoading.value) return
+
+  const cid = routedId.value
+  if (!cid) {
+    moreIdeasError.value = '竞赛 ID 缺失，请返回列表重新进入'
+    return
+  }
+  if (!isLoggedIn()) {
+    openAuthModal('login')
+    return
+  }
+
+  // 当前已展示的 idea：id 与标题一起给后端，供它拼「必须避开」清单
+  const shown = inspirations.value.filter((it) => it.source === 'idea')
+  moreIdeasLoading.value = true
+  moreIdeasError.value = ''
+  moreIdeasTip.value = ''
+
+  try {
+    const res = await requestMoreIdeas(cid, {
+      count: 4,
+      excludeIds: shown.map((it) => it.id),
+      excludeTitles: shown.map((it) => it.title)
+    })
+    if (routedId.value !== cid) return
+
+    const known = new Set(inspirations.value.map((it) => it.key))
+    const fresh = (res.ideas || [])
+      .map(normalizeIdea)
+      .filter((it) => it && !known.has(it.key))
+
+    if (!fresh.length) {
+      moreIdeasError.value = '这次没有生成出新选题，再点一次试试'
+      return
+    }
+    // 追加到列表尾部：点得越多，灵感库越厚（不覆盖已有内容）
+    inspirations.value = [...inspirations.value, ...fresh]
+    applyFavoriteFlags()
+    moreIdeasTip.value = `已新增 ${fresh.length} 条，当前共 ${shown.length + fresh.length} 条`
+  } catch (e) {
+    if (routedId.value !== cid) return
+    if (e?.status === 401) {
+      openAuthModal('login')
+      moreIdeasError.value = '请先登录后再生成灵感'
+    } else if (e?.status === 429) {
+      moreIdeasError.value = '今日 AI 额度已用完，明天再来试试'
+    } else if (e?.status === 409) {
+      moreIdeasError.value = '该赛事暂无获奖作品，无法生成选题灵感'
+    } else if (e?.status === 400) {
+      moreIdeasError.value = e?.message || '该赛事不支持生成选题灵感'
+    } else {
+      moreIdeasError.value = e?.message || '生成新灵感失败，请稍后重试'
+    }
+  } finally {
+    if (routedId.value === cid) moreIdeasLoading.value = false
+  }
 }
 
 /* =========================================================
@@ -1212,6 +1285,7 @@ onBeforeUnmount(() => {
           v-for="tab in visibleTabs"
           :key="tab.key"
           type="button"
+          :data-tab="tab.key"
           class="shrink-0 whitespace-nowrap rounded-full px-4 py-2 text-sm font-bold transition-colors sm:px-5"
           :class="activeTab === tab.key
             ? 'bg-slate-900 text-white shadow-sm'
@@ -1575,12 +1649,13 @@ onBeforeUnmount(() => {
               获奖作品共性分析
             </h3>
             <p class="mt-1 text-xs font-medium text-slate-500 dark:text-slate-400">
-              让 AI 横向对比历年获奖作品，总结选题偏好、建模套路与写作亮点，快速抓住评审口味。
+              跨赛道抽取 20-30 件获奖作品，拆解技术栈组合、系统架构套路与评审技术关注点。
             </p>
           </div>
 
           <button
             type="button"
+            data-testid="common-analysis"
             class="inline-flex h-11 shrink-0 items-center gap-2 rounded-full bg-blue-600 px-6 text-sm font-bold
                    text-white shadow-sm shadow-blue-600/25 transition-colors hover:bg-blue-700 dark:hover:bg-blue-600
                    disabled:cursor-not-allowed disabled:opacity-60"
@@ -2315,6 +2390,34 @@ onBeforeUnmount(() => {
                 </button>
               </div>
             </article>
+          </div>
+
+          <!-- ✨ 换一批新灵感：把当前列表（id + 标题）传给后端避开重复，结果追加到尾部 -->
+          <div class="mt-6 flex flex-col items-center gap-2">
+            <button
+              type="button"
+              data-testid="more-ideas"
+              class="inline-flex items-center gap-2 rounded-full bg-gradient-to-r from-violet-600 to-fuchsia-600 px-6 py-2.5 text-sm font-black text-white shadow-lg shadow-violet-500/25 transition-all
+                     hover:-translate-y-0.5 hover:shadow-xl hover:shadow-violet-500/30
+                     disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0"
+              :disabled="moreIdeasLoading || algorithmOnly"
+              @click="loadMoreIdeas"
+            >
+              <span
+                v-if="moreIdeasLoading"
+                class="inline-block h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white"
+              ></span>
+              <span v-else aria-hidden="true">✨</span>
+              {{ moreIdeasLoading ? '正在构思新选题…' : '换一批新灵感' }}
+            </button>
+            <p v-if="moreIdeasError" class="text-xs font-medium text-rose-500">{{ moreIdeasError }}</p>
+            <p
+              v-else-if="moreIdeasTip"
+              class="text-xs font-medium text-emerald-600 dark:text-emerald-400"
+            >{{ moreIdeasTip }}</p>
+            <p v-else class="text-[11px] font-medium text-slate-500 dark:text-slate-400">
+              点一次生成 4 条全新选题（自动避开已展示的 {{ visibleIdeas.length }} 条），越点越多
+            </p>
           </div>
         </section>
       </div>

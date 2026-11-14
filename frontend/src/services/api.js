@@ -399,6 +399,46 @@ export function getInspirations(competitionId) {
 }
 
 /**
+ * 换一批新灵感（追加生成，不覆盖历史）
+ * POST /api/ai/ideas/more
+ *
+ * 把「当前已展示的 idea 列表」传给后端，后端将其写进 prompt 的「必须避开」清单，
+ * 让大模型换全新视角再生成 count 条；返回的是**新增**的那几条，前端追加到列表尾部。
+ *
+ * @param {string|number} competitionId 竞赛 ID
+ * @param {Object} [options]
+ * @param {number} [options.count] 本次新增条数（默认 4，后端上限 8）
+ * @param {Array<number>} [options.excludeIds] 当前列表里已有的 idea id
+ * @param {Array<string>} [options.excludeTitles] 当前列表里已有的 idea 标题
+ * @returns {Promise<{ competition_id:number, ideas:Array, added:number, total_ideas:number }>}
+ */
+export function requestMoreIdeas(competitionId, options = {}) {
+  const cid = normalizeCompetitionId(competitionId)
+  if (cid === null) return Promise.reject(new Error('竞赛 ID 无效'))
+
+  const body = {
+    competition_id: cid,
+    count: Number.isInteger(Number(options.count)) && Number(options.count) > 0
+      ? Number(options.count)
+      : 4,
+    exclude_ids: (options.excludeIds || [])
+      .map((v) => Number(v))
+      .filter((v) => Number.isInteger(v) && v > 0),
+    exclude_titles: (options.excludeTitles || [])
+      .filter((v) => typeof v === 'string' && v.trim())
+      .map((v) => v.trim())
+      .slice(0, 50)
+  }
+
+  return api.post('/ai/ideas/more', body).then((data) => ({
+    competition_id: Number(data?.competition_id) || cid,
+    ideas: Array.isArray(data?.ideas) ? data.ideas : [],
+    added: Number(data?.added) || 0,
+    total_ideas: Number(data?.total_ideas) || 0
+  }))
+}
+
+/**
  * 获取某竞赛的往年获奖作品
  * GET /api/competitions/:id/awards?limit=20&offset=0
  *

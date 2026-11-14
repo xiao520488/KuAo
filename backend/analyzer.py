@@ -33,15 +33,21 @@ import db
 import llm
 
 DEFAULT_IDEA_N = 4
-# 只把 24 条代表性样本喂给模型；全量数据只以「统计分布」形式出现（条数/占比），
-# 既避免 prompt 爆炸，又保证趋势判断有真实分母。
-MAX_AWARDS = 24
-# 分层抽样配额（合计 = MAX_AWARDS）：金奖 10 / 银奖 8 / 铜奖 6。
-# 数据上万条时，按占比随机会让样本几乎全是铜奖，"金奖凭什么赢"就分析不出来。
-SAMPLE_TIERS = (
-    ("金奖", 10, ("冠军", "亚军", "季军", "特等", "金奖", "一等奖")),
-    ("银奖", 8, ("银奖", "二等奖")),
-    ("铜奖", 6, ("铜奖", "三等奖", "优秀奖", "优胜奖", "创新潜力奖")),
+# ---- 跨赛道抽样（2026-11-14 重构）----
+# 旧逻辑按「奖项等级」分层（金奖 10 / 银奖 8 / 铜奖 6），结果 5-24 条样本很可能
+# 全落在同一个赛道（例如「先进制造」），模型只看到局部就下全局结论，必然片面。
+# 新逻辑按「赛道」配额：每个主要赛道 3-5 条，合计 20-30 条，覆盖全部主要赛道。
+PER_TRACK_MIN = 3
+PER_TRACK_MAX = 5
+MAX_TRACKS = 8             # 最多覆盖 8 个主要赛道（11 个赛道的赛事取 Top 8，每个 3 条）
+MAX_AWARDS = 26           # 跨赛道样本总上限（落在 20-30 区间，成本与数据量无关）
+SAMPLE_TARGET_MIN = 20    # 赛道少时的补样下限（3 个赛道 × 5 条 = 15，需要补到 20）
+# 赛道内部仍按奖项档位优先取样：金奖 > 银奖 > 铜奖 > 其它，
+# 保证「金奖凭什么赢」有样本支撑，又不至于让某一档占满整个赛道配额。
+GRADE_TIERS = (
+    ("金奖", ("冠军", "亚军", "季军", "特等", "金奖", "一等奖")),
+    ("银奖", ("银奖", "二等奖")),
+    ("铜奖", ("铜奖", "三等奖", "优秀奖", "优胜奖", "创新潜力奖")),
 )
 MAX_FIELD_CHARS = 400
 # insights 单条 200 字 ≈ 300 token，给 400 足够；ideas JSON ≤1500 字 ≈ 1200 token。
@@ -54,19 +60,31 @@ MAX_PROMPT_CHARS = 24000
 INSIGHT_MAX_CHARS = 200
 IDEA_BATCH_SIZE = 2
 MAX_IDEA_REFS = 2
-# Prompt 版本号：改动 Prompt 后递增，使旧缓存指纹失效。
-PROMPT_VER = "v5"
+# Prompt 版本号：改动 Prompt 后递增，使旧缓存指纹失效（v6：跨赛道抽样 + 双 Prompt 隔离）。
+PROMPT_VER = "v6"
 
+# 「灵感工作台 · 赛事洞察」的三条口径：商业趋势与选题规划。
+# 注意：技术栈/架构/工程实现属于「获奖作品共性分析」（routers/ai.py 的
+# _build_analyze_prompt），两者必须完全不重合，否则页面上两块内容看起来一样。
 KIND_LABEL = {
-    "experience": "获奖共性经验",
-    "trend": "选题与技术趋势",
-    "gap": "选题空白与差异化机会",
+    "experience": "红海赛道：竞争过热与同质化",
+    "trend": "产业趋势与选题风向",
+    "gap": "蓝海机会与组队参赛策略",
 }
 
 KIND_TASK = {
-    "experience": "总结获奖共性经验：分 3 点写，每点包含「做法 + 为什么有效 + 可执行建议」。",
-    "trend": "总结选题与技术趋势：说明 2-3 个上升/下降方向，并指出技术栈变化。",
-    "gap": "指出尚未被充分占据的选题空白与差异化机会，并说明哪些方向竞争过热。",
+    "experience": (
+        "盘点该赛事的「红海」方向：哪类选题/场景已经扎堆、同质化严重、"
+        "评委容易审美疲劳；给出 3 点避开正面对撞的差异化策略。"
+    ),
+    "trend": (
+        "从产业与政策视角指出 2-3 个正在变热的选题方向（谁在推动、为什么现在热），"
+        "并说明这会把明年的评审重心推向哪里。"
+    ),
+    "gap": (
+        "指出 2-3 个尚未被充分占据的「蓝海」空白机会，并给出可执行的组队配置与参赛策略："
+        "需要什么角色、先做哪一步验证、如何把项目讲成评委听得懂的价值。"
+    ),
 }
 
 _FENCE_RE = re.compile(r"```(?:json|JSON|markdown|md)?\s*(.*?)```", re.DOTALL)
@@ -110,41 +128,15 @@ def _slim_award(row: dict) -> dict:
     return {k: v for k, v in out.items() if v not in (None, "")}
 
 
-def _fair_sample(rows: list, k: int) -> list:
-    """按年份占比抽样（最大余数法），避免少数年份被过度放大。
-
-    历史 bug：按年份「均匀」抽样，让 11 条 2021-2025 示例数据挤进 24 条样本
-    （占比被放大到 40%+），模型于是编出「技术栈转向多模态 AI」的结论。
-    现在严格按真实占比分配名额：占比 < 半条样本的年份自然拿到 0 个名额。
-    """
-    if len(rows) <= k:
-        return list(rows)
-    by_year: dict = {}
-    for r in rows:
-        by_year.setdefault(str(r.get("year") or "未知"), []).append(r)
-    total = len(rows)
-    quota = {y: len(items) * k / total for y, items in by_year.items()}
-    base = {y: int(q) for y, q in quota.items()}
-    rest = k - sum(base.values())
-    order = sorted(quota, key=lambda y: (quota[y] - base[y], quota[y]), reverse=True)
-    for y in order[:rest]:
-        base[y] += 1
-
-    picked = []
-    for y, items in by_year.items():
-        n = min(base.get(y, 0), len(items))
-        if n <= 0:
-            continue
-        ordered = sorted(items, key=lambda r: r.get("id") or 0)
-        step = len(ordered) / n
-        picked.extend(ordered[int(i * step)] for i in range(n))
-    return picked
+def _track_key(row: dict) -> str:
+    """赛道名归一化：空赛道统一记为「未分赛道」，避免 None 与 '' 各成一桶。"""
+    return str(row.get("track") or "").strip() or "未分赛道"
 
 
 def _grade_tier(row: dict) -> str:
     """把各种奖项叫法归到三层：金奖档 / 银奖档 / 铜奖档（认不出归「其它」）。"""
     grade = str(row.get("award_grade") or row.get("award_level") or "")
-    for tier, _quota, keys in SAMPLE_TIERS:
+    for tier, keys in GRADE_TIERS:
         if any(key in grade for key in keys):
             return tier
     return "其它"
@@ -161,39 +153,103 @@ def _pick_spread(rows: list, n: int) -> list:
     return [ordered[int(i * step)] for i in range(n)]
 
 
-def _stratified_sample(rows: list, k: int = MAX_AWARDS) -> list:
-    """分层抽样：金奖 10 / 银奖 8 / 铜奖 6，总数严格 <= k。
+def _pick_within_track(rows: list, n: int) -> list:
+    """同一条赛道内取 n 条：先按奖项档位（金 → 银 → 铜 → 其它）分名额，再各档均匀跨取。
 
-    为什么分层：万一万条名单里 65% 是铜奖，按占比随机抽会让样本几乎全是铜奖，
-    模型就看不到「金奖凭什么拿金奖」。固定配额能保证每档都有代表，
-    又不会让样本量随数据量膨胀（成本恒定在 24 条）。
+    只在赛道内部做奖项分层：金/银/铜各给一部分名额，保证既有「金奖凭什么赢」
+    的样本，也看得到中低档作品的普遍做法；不会让某一档吃掉整条赛道配额。
     """
-    if len(rows) <= k:
+    if n <= 0 or not rows:
+        return []
+    if len(rows) <= n:
         return list(rows)
 
-    pools: dict[str, list] = {"金奖": [], "银奖": [], "铜奖": [], "其它": []}
+    pools: dict[str, list] = {tier: [] for tier, _keys in GRADE_TIERS}
+    pools["其它"] = []
     for row in rows:
         pools[_grade_tier(row)].append(row)
 
     picked: list = []
     used: set = set()
-    for tier, quota, _keys in SAMPLE_TIERS:
-        got = _pick_spread(pools[tier], quota)
+    per_tier = max(1, n // len(GRADE_TIERS))
+    for tier, _keys in GRADE_TIERS:
+        if len(picked) >= n:
+            break
+        got = _pick_spread(pools[tier], min(per_tier, n - len(picked)))
         picked.extend(got)
         used.update(id(r) for r in got)
 
-    # 某档不够（小赛事没有铜奖等）：缺额按 金 → 银 → 铜 → 其它 补齐，总数仍 <= k
-    if len(picked) < k:
-        for tier in ("金奖", "银奖", "铜奖", "其它"):
-            if len(picked) >= k:
+    # 某档不够（小赛事没有铜奖等）：缺额按 金 → 银 → 铜 → 其它 补齐
+    if len(picked) < n:
+        for tier, _keys in list(GRADE_TIERS) + [("其它", ())]:
+            if len(picked) >= n:
                 break
             rest = [r for r in pools[tier] if id(r) not in used]
-            for row in _pick_spread(rest, k - len(picked)):
-                if len(picked) >= k:
+            for row in _pick_spread(rest, n - len(picked)):
+                if len(picked) >= n:
                     break
                 picked.append(row)
                 used.add(id(row))
-    return picked[:k]
+    return picked[:n]
+
+
+def sample_cross_track(works: list, *, per_track: int = PER_TRACK_MAX,
+                       min_per_track: int = PER_TRACK_MIN,
+                       max_tracks: int = MAX_TRACKS,
+                       max_total: int = MAX_AWARDS) -> tuple:
+    """跨赛道抽样：覆盖尽量多的主要赛道，每个赛道 3-5 条，合计 20-30 条。
+
+    返回 ``(sampled_rows, track_meta)``，其中
+    ``track_meta = [{"track": 赛道名, "total": 该赛道条数, "sampled": 本次抽了几条}]``。
+
+    为什么按赛道抽：旧实现按「奖项等级」分层，样本极易全部落在同一个赛道
+    （例如「先进制造」），模型只看到局部就总结全局，结论必然片面。
+    单赛道赛事（或个人赛没有赛道字段）退回「赛道内按奖项分层」，行为与旧版一致。
+    """
+    groups: dict[str, list] = {}
+    for row in works:
+        groups.setdefault(_track_key(row), []).append(row)
+
+    # 单赛道 / 无赛道：退化为赛道内奖项分层，总条数仍受 max_total 约束
+    if len(groups) <= 1:
+        only = next(iter(groups.values()), [])
+        sampled = _pick_within_track(only, min(max_total, len(only)))
+        meta = []
+        if only:
+            meta.append({"track": _track_key(only[0]), "total": len(only),
+                         "sampled": len(sampled)})
+        return sampled, meta
+
+    ranked = sorted(groups.items(), key=lambda kv: (-len(kv[1]), kv[0]))[:max_tracks]
+    # 每个赛道的基础名额：总预算 / 赛道数，夹在 [min_per_track, per_track]
+    quota = max(min_per_track, min(per_track, max_total // max(len(ranked), 1)))
+
+    sampled: list = []
+    meta: list = []
+    used: set = set()
+    for track, rows in ranked:
+        picked = _pick_within_track(rows, min(quota, len(rows)))
+        sampled.extend(picked)
+        used.update(id(r) for r in picked)
+        meta.append({"track": track, "total": len(rows), "sampled": len(picked)})
+
+    # 赛道少时（3 个赛道 × 5 条 = 15）够不到 20 条下限：轮流补样直到达标或数据用尽
+    target = min(SAMPLE_TARGET_MIN, len(works))
+    if len(sampled) < target:
+        for track, rows in ranked:
+            if len(sampled) >= target:
+                break
+            rest = [r for r in rows if id(r) not in used]
+            need = target - len(sampled)
+            for row in _pick_spread(rest, min(need, 8)):
+                if len(sampled) >= target:
+                    break
+                sampled.append(row)
+                used.add(id(row))
+                for item in meta:
+                    if item["track"] == track:
+                        item["sampled"] += 1
+    return sampled[:max_total], meta
 
 
 def _scope(competition_id: int, year_from: int, year_to: int) -> str:
@@ -411,52 +467,21 @@ def _parse_ideas(raw, valid: set, limit: int) -> list:
 
 
 # ---------------------------------------------------------------- Prompt
-def _distribution(works: list, top_n: int = 8) -> dict:
-    """全量获奖数据的统计分布（用条数说话，而不是让模型自己猜趋势）。"""
-    total = len(works)
-    years: dict = {}
-    grades: dict = {}
-    tracks: dict = {}
-    for w in works:
-        y = str(w.get("year") or "未知")
-        years[y] = years.get(y, 0) + 1
-        g = str(w.get("award_grade") or w.get("award_level") or "未注明").strip() or "未注明"
-        grades[g] = grades.get(g, 0) + 1
-        t = str(w.get("track") or "").strip() or "未分赛道"
-        tracks[t] = tracks.get(t, 0) + 1
-    top = sorted(tracks.items(), key=lambda kv: (-kv[1], kv[0]))[:top_n]
-    return {
-        "total": total,
-        "years": dict(sorted(years.items())),
-        "grades": dict(sorted(grades.items(), key=lambda kv: -kv[1])),
-        "track_count": len(tracks),
-        "top_tracks": top,
-    }
-
-
-def _pct(n: int, total: int) -> str:
-    return f"{n * 100 / total:.1f}%" if total else "0%"
-
-
 def _context_block(competition: dict, works: list, year_from: int, year_to: int) -> tuple:
-    """公共上下文：赛事信息 + 全量统计 + 代表性样本 + 严格约束。
+    """公共上下文：赛事信息 + 跨赛道样本 + 硬性约束。
 
-    返回 (context, sampled_ids)。sampled_ids 只有 24 个，是模型唯一可引用的 id 集合；
+    返回 (context, sampled_ids)。sampled_ids 只有 20-30 个，是模型唯一可引用的 id 集合；
     历史上这里塞过全量 id（13631 个 → 39 万 token），是成本事故的根因。
-    抽样改为分层（金奖/银奖/铜奖固定配额），条数恒为 MAX_AWARDS，成本与数据量无关。
+
+    2026-11-14 重构：
+      * 抽样改为「按赛道配额」（每个主要赛道 3-5 条，合计 20-30 条），
+        修掉「只抽到一个赛道就总结全局」的片面结论；
+      * 彻底删除全量 SQL 统计（条数/占比/年度分布）。百分比既不参与归纳，
+        又会被模型直接抄进正文形成误导，还要多烧 300-500 token。
     """
-    sampled = _stratified_sample(works, MAX_AWARDS)
+    sampled, track_meta = sample_cross_track(works)
     payload = [_slim_award(w) for w in sampled]
     sampled_ids = [int(r["id"]) for r in sampled if r.get("id") is not None]
-    dist = _distribution(works)
-    tier_counts = {tier: 0 for tier, _quota, _keys in SAMPLE_TIERS}
-    for row in sampled:
-        tier = _grade_tier(row)
-        if tier in tier_counts:
-            tier_counts[tier] += 1
-    sample_breakdown = "；".join(
-        f"{tier} {n} 条" for tier, n in tier_counts.items() if n
-    ) or f"共 {len(payload)} 条"
     name = competition.get("name") or f"赛事 #{competition.get('id')}"
     category = competition.get("category") or "未分类"
 
@@ -466,41 +491,31 @@ def _context_block(competition: dict, works: list, year_from: int, year_to: int)
         if competition.get("category") and "软件" in str(competition.get("category")) \
         else "获奖记录（含赛道/科目与奖项）"
 
-    year_lines = "；".join(f"{y} 年 {n} 条" for y, n in dist["years"].items())
-    grade_lines = "；".join(
-        f"{g} {n} 条（{_pct(n, dist['total'])}）" for g, n in dist["grades"].items()
-    )
-    track_lines = "；".join(f"{t} {n} 条（{_pct(n, dist['total'])}）"
-                            for t, n in dist["top_tracks"])
+    track_lines = "；".join(
+        f"{m['track']} {m['sampled']} 条" for m in track_meta
+    ) or "未分赛道"
 
     context = f"""你是一位资深赛事评审与备赛教练。下面是「{name}」（ID={competition.get('id')}，
-类别：{category}）在 {year_from}-{year_to} 年的真实获奖数据。
+类别：{category}）在 {year_from}-{year_to} 年获奖作品中抽取的跨赛道样本。
 
-【全量统计（这是判断趋势的唯一依据）】
-- 记录总数：{dist['total']} 条；形态：{form}
-- 年份：{year_lines}
-- 奖项分布：{grade_lines}
-- 赛道/科目分布（共 {dist['track_count']} 个，Top {len(dist['top_tracks'])}）：{track_lines}
+【样本说明】
+- 形态：{form}
+- 覆盖 {len(track_meta)} 个赛道、共 {len(payload)} 条样本：{track_lines}
+- 这是抽样（每个赛道 3-5 条，含各奖项档位代表），不是全量名单
 
-【分层样本（按奖项等级抽取 {len(payload)} 条：{sample_breakdown}，仅用于举例）】
+【获奖作品样本】
 {json.dumps(payload, ensure_ascii=False)}
 
 【硬性约束】
-1. 只基于以上事实归纳，禁止混入其它赛事、其它类别或数据中不存在的作品与事实。
-2. 样本按奖项等级分层：金奖 {tier_counts['金奖']} 条、银奖 {tier_counts['银奖']} 条、铜奖 {tier_counts['铜奖']} 条。
-   请**重点分析金奖作品的共性**，并明确指出它与银奖、铜奖作品的差异（评审最看重什么、
-   金奖在选题/技术深度/落地验证上多做了什么）；不要只写三档共有的空话。
-3. 该赛事包含 {dist['track_count']} 个赛道/科目，是多项比赛的集合。严禁把单个赛道的个别现象
-   说成整个赛事的共性；某个小众方向出现一次，不等于「技术栈转为它」或「趋势上升」。
-   任何趋势判断都必须引用上面的条数与占比作为依据（例如「X 组占 6.2%」）。
-4. 提炼共性时优先看占比最高的部分：编程基本功、算法与数据结构能力、固定科目分组。
-   占比很小的方向只能写「个别赛道出现」，不得作为整体结论。
-5. 正文中禁止出现任何作品 id 或编号（如 [id:123]、id 12、16、24、纯数字列表）。
-   需要交代数据来源时，最多写一句「基于 {dist['total']} 条获奖记录统计」，不要罗列数字。
-6. 信息不足时写“数据中未提及”，不要编造。
-7. 输出精简、可执行，不要长篇大论。
+1. 只基于以上样本归纳，禁止混入其它赛事、其它类别或样本中不存在的作品与事实。
+2. 必须跨赛道分析：先给 2-3 条「所有赛道共有」的整体规律，再逐赛道写 1 行差异结论。
+   严禁只看一个赛道就下全局结论，也不要把某个赛道的个别做法说成整个赛事的共性。
+3. 禁止输出任何百分比、占比、条数排名或「Top N」式统计（也不要写「某类占多数」这种推断）；
+   不要罗列样本 id / 编号；需要交代来源时最多写一句「基于跨赛道抽样归纳」。
+4. 信息不足时写「数据中未提及」，不要编造。
+5. 输出精简、可执行，不要长篇大论。
 
-（如可用 id 仅为样本中的：{sampled_ids[:6]}，正文中不要写出来。）"""
+（可用样本 id 仅为：{sampled_ids[:6]}，正文中不要写出来。）"""
     if len(context) > MAX_PROMPT_CHARS:
         raise ValueError(
             f"prompt 过大（{len(context)} 字符 > {MAX_PROMPT_CHARS}），已拦截以免烧 token"
@@ -514,22 +529,44 @@ def _insight_prompt(context: str, kind: str) -> str:
 【本次只生成 1 条：{KIND_LABEL[kind]}】
 任务：{KIND_TASK[kind]}
 
+口径（必须遵守，与「获奖作品共性分析」严格区分）：
+- 本条属于「灵感工作台 · 赛事洞察」，只谈商业趋势与选题规划：
+  市场机会、竞争密度、红海/蓝海、组队与参赛策略。
+- 禁止写技术栈清单、系统架构、模块划分、工程实现、代码方案——这些属于
+  「获奖作品共性分析」（另一块功能），两边内容重复会被用户判为无用。
+
 输出要求：
 - 只输出 Markdown 正文，不要 JSON、不要代码围栏、不要任何解释性开场白。
-- 必须精简：正文控制在 {INSIGHT_MAX_CHARS} 字以内（2-3 个要点）。
-- 禁止出现 id、编号、作品序号或任何数字列表；不要写「引用作品」「参考 id」。
-- 每条结论后可用「（依据：某赛道 X 条 / 占比 Y%）」的形式给一行数据支撑。
+- 必须精简：正文控制在 {INSIGHT_MAX_CHARS} 字以内（最多 3 个要点，每点一句话）。
+- 禁止出现 id、编号、条数、百分比、占比等统计口径；不要写「引用作品」「参考 id」。
 """
 
 
 def _ideas_prompt(context: str, batch_n: int, valid_ids: list,
-                  avoid_titles: list) -> str:
+                  avoid_titles: list, *, round_no: int = 1) -> str:
+    """构思新的选题 idea。
+
+    avoid_titles = 用户已经看过的全部选题（历史生成 + 前端当前列表）。
+    「换一批」的核心就在这里：把已看过的完整清单摆给模型，明确要求换视角，
+    而不是靠它自己猜哪些算重复。
+    """
     avoid = ""
     if avoid_titles:
-        avoid = "\n- 不要重复这些已生成的标题：" + "；".join(avoid_titles[:20])
+        listed = "\n".join(
+            f"  {i}. {str(t)[:60]}" for i, t in enumerate(avoid_titles[:30], 1)
+        )
+        avoid = f"""
+
+【用户已看过的 {len(avoid_titles)} 条选题——必须全部避开】
+{listed}
+
+以上每一条都已经展示给用户了。新选题必须是全新视角：
+- 不许与上面任何一条重复、近义，或只是「换个行业名词 / 换个表述」；
+- 不许把同一个方案拆成两个赛道各写一遍；
+- 请从「尚未覆盖的行业场景」「未组合过的技术栈」「没被服务的人群」三个方向入手。"""
     return f"""{context}
 
-【本次生成 {batch_n} 条面向下一届比赛的选题 idea】
+【本次生成 {batch_n} 条面向下一届比赛的选题 idea（第 {round_no} 轮）】
 要求：
 - 每条必须与已获奖方向有明确差异，不要照抄已有科目或题型。
 - 方案要能在 3-6 个月内由 3-5 人小组完成。
@@ -550,12 +587,14 @@ def _ideas_prompt(context: str, batch_n: int, valid_ids: list,
 
 
 _SYSTEM_MD = (
-    "你是严谨的赛事数据分析师。只依据给定作品事实归纳，不编造、不跨赛事混用。"
+    "你是赛事选题与商业趋势顾问，只从市场机会、竞争格局、组队与参赛策略的角度给建议。"
+    "你只依据给定样本归纳，不编造、不跨赛事混用；不讨论技术栈清单或系统架构。"
     "只输出 Markdown 正文，不要输出 JSON、代码围栏或解释性文字。"
 )
 
 _SYSTEM_JSON = (
-    "你是严谨的赛事选题顾问。只依据给定作品事实构思，不编造、不跨赛事混用。"
+    "你是严谨的赛事选题顾问，擅长从市场空白与人群需求找差异化选题。"
+    "只依据给定作品事实构思，不编造、不跨赛事混用；严格遵守「必须避开」清单。"
     "只输出合法 JSON 对象，不要输出代码围栏或解释性文字。"
 )
 
@@ -567,9 +606,11 @@ def _chat_markdown(prompt: str, max_tokens: int) -> str:
 
 
 def _chat_ideas(context: str, batch_n: int, valid_ids: list,
-                avoid_titles: list, max_tokens: int) -> list:
+                avoid_titles: list, max_tokens: int,
+                *, round_no: int = 1) -> list:
     """请求一批 ideas；解析失败时补一次更严格的 JSON 纠错请求。"""
-    prompt = _ideas_prompt(context, batch_n, valid_ids, avoid_titles)
+    prompt = _ideas_prompt(context, batch_n, valid_ids, avoid_titles,
+                           round_no=round_no)
     last_raw = ""
     for attempt in range(2):
         if attempt == 1:
@@ -706,6 +747,28 @@ def _generate_insights(competition: dict, works: list, context: str,
     return saved, failed
 
 
+def _save_idea_item(competition_id: int, item: dict) -> tuple:
+    """落库一条 idea，返回 (id, action, title)；失败时 action="failed"。"""
+    title = _sanitize_md(item.get("title") or "")[:60] or str(item.get("title") or "")[:60]
+    if not title:
+        return None, "failed", ""
+    try:
+        new_id, action = db.save_idea(
+            title,
+            competition_id=competition_id,
+            pitch=_sanitize_md(_clip(item.get("pitch"), 120)),
+            detail_md=_sanitize_md(item.get("detail_md") or ""),
+            novelty=_sanitize_md(_clip(item.get("novelty"), 200)),
+            risk=_sanitize_md(_clip(item.get("risk"), 200)),
+            ref_awards=(item.get("ref_awards") or [])[:MAX_IDEA_REFS],
+            status="draft",
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"[x] idea 写库失败（{title}）：{exc}", file=sys.stderr)
+        return None, "failed", title
+    return new_id, action, title
+
+
 def _generate_ideas(competition: dict, context: str, competition_id: int,
                     valid: set, idea_n: int, max_tokens: int) -> tuple:
     """按每批 2 条生成，避免单次输出过长被截断。"""
@@ -719,7 +782,8 @@ def _generate_ideas(competition: dict, context: str, competition_id: int,
         used_before = llm.get_usage()
         try:
             items = _chat_ideas(
-                context, want, sorted(valid), titles, IDEAS_MAX_TOKENS
+                context, want, sorted(valid), titles, IDEAS_MAX_TOKENS,
+                round_no=start + 1,
             )
         except Exception as exc:  # noqa: BLE001 - 单批失败不阻断后续批次
             print(f"[x] 第 {start + 1}-{start + want} 条生成异常："
@@ -736,20 +800,8 @@ def _generate_ideas(competition: dict, context: str, competition_id: int,
               file=sys.stderr)
 
         for item in items:
-            title = _sanitize_md(item["title"])[:60] or item["title"][:60]
-            try:
-                new_id, action = db.save_idea(
-                    title,
-                    competition_id=competition_id,
-                    pitch=_sanitize_md(_clip(item.get("pitch"), 120)),
-                    detail_md=_sanitize_md(item.get("detail_md") or ""),
-                    novelty=_sanitize_md(_clip(item.get("novelty"), 200)),
-                    risk=_sanitize_md(_clip(item.get("risk"), 200)),
-                    ref_awards=(item.get("ref_awards") or [])[:MAX_IDEA_REFS],
-                    status="draft",
-                )
-            except Exception as exc:  # noqa: BLE001
-                print(f"[x] idea 写库失败（{title}）：{exc}", file=sys.stderr)
+            new_id, action, title = _save_idea_item(competition_id, item)
+            if action == "failed":
                 continue
             titles.append(title)
             if action == "inserted":
@@ -759,6 +811,94 @@ def _generate_ideas(competition: dict, context: str, competition_id: int,
                 skipped += 1
                 print(f"[idea] 已存在，跳过：{title}")
     return saved, skipped, failed
+
+
+def _idea_row(row: dict) -> dict:
+    """DB 行 -> 前端直接可用的 idea 结构（字段名与 /api/ai/inspirations 保持一致）。"""
+    refs = row.get("ref_awards")
+    if isinstance(refs, str):
+        try:
+            refs = json.loads(refs)
+        except (ValueError, TypeError):
+            refs = []
+    return {
+        "id": row.get("id"),
+        "title": row.get("title") or "",
+        "pitch": row.get("pitch") or "",
+        "detail_md": row.get("detail_md") or "",
+        "novelty": row.get("novelty") or "",
+        "risk": row.get("risk") or "",
+        "ref_awards": refs or [],
+    }
+
+
+def generate_more_ideas(competition_id: int, *, n: int = DEFAULT_IDEA_N,
+                        avoid_titles: Optional[list] = None,
+                        avoid_ids: Optional[list] = None) -> dict:
+    """「换一批新灵感」：追加生成 n 条新 idea，不覆盖历史。
+
+    * avoid_titles = 用户已经看过的选题（库内已有 + 前端当前列表），
+      完整清单会写进 prompt，要求模型换全新视角；
+    * 结果写入 ideas 表并追加返回：用户点得越多，灵感库越厚；
+    * 返回 {"saved", "skipped", "total", "avoided", "ideas": [新生成的 idea]}。
+    """
+    cid = int(competition_id)
+    competition = db.get_competition(cid)
+    if not competition:
+        raise LookupError(f"竞赛 ID={cid} 不存在")
+    if not competition.get("has_project_awards", 1):
+        raise ValueError("algorithm_only")
+    works = [w for w in db.list_awards_by_competition(cid)
+             if str(w.get("source_type") or "").strip().lower() != "mock"]
+    if not works:
+        raise ValueError("no_awards")
+
+    year_from, year_to = _year_range(works)
+    context, valid_ids = _context_block(competition, works, year_from, year_to)
+
+    existing = db.list_ideas_by_competition(cid)
+    seen: list = []
+    for row in existing:
+        title = str(row.get("title") or "").strip()
+        if title and title not in seen:
+            seen.append(title)
+    for title in (avoid_titles or []):
+        title = str(title or "").strip()
+        if title and title not in seen:
+            seen.append(title)
+
+    saved_ids: list = []
+    skipped = 0
+    batch_n = IDEA_BATCH_SIZE
+    for start in range(0, max(int(n), 1), batch_n):
+        want = min(batch_n, int(n) - start)
+        print(f"[idea+] 第 {start + 1}-{start + want} 条：避开 {len(seen)} 条已看过的选题…")
+        items = _chat_ideas(context, want, sorted(valid_ids), seen,
+                            IDEAS_MAX_TOKENS, round_no=len(seen) + 1)
+        if not items:
+            print(f"[!] 第 {start + 1}-{start + want} 条生成失败，跳过本批", file=sys.stderr)
+            continue
+        for item in items:
+            new_id, action, title = _save_idea_item(cid, item)
+            if action == "failed":
+                continue
+            if action == "inserted":
+                saved_ids.append(int(new_id))
+                seen.append(title)
+            else:
+                skipped += 1
+                print(f"[idea+] 与已有选题重复，跳过：{title}")
+
+    rows = {int(r["id"]): r for r in db.list_ideas_by_competition(cid)
+            if r.get("id") is not None}
+    new_ideas = [_idea_row(rows[i]) for i in saved_ids if i in rows]
+    return {
+        "saved": len(new_ideas),
+        "skipped": skipped,
+        "total": len(rows),
+        "avoided": len(seen) - len(existing),
+        "ideas": new_ideas,
+    }
 
 
 def generate(competition_id: int, *, only: str = "all", idea_n: int = DEFAULT_IDEA_N,
@@ -800,7 +940,8 @@ def generate(competition_id: int, *, only: str = "all", idea_n: int = DEFAULT_ID
     scope = _scope(competition_id, year_from, year_to)
     print(f"[i] 赛事：{competition.get('name')}（ID={competition_id}）")
     print(f"[i] 该赛事获奖作品：{len(works)} 条，年份 {year_from}-{year_to}")
-    print(f"[i] prompt 版本 {PROMPT_VER}；喂给模型的样本 ≤{MAX_AWARDS} 条 + 全量统计分布；"
+    print(f"[i] prompt 版本 {PROMPT_VER}；喂给模型的跨赛道样本 ≤{MAX_AWARDS} 条"
+          f"（每赛道 {PER_TRACK_MIN}-{PER_TRACK_MAX} 条，已剔除全量统计）；"
           f"insights 3 次 + ideas 每 {IDEA_BATCH_SIZE} 条一批")
 
     existing_insights = db.list_insights_by_competition(competition_id)
