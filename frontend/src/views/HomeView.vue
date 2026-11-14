@@ -33,7 +33,7 @@ const listAnimKey = ref(0)
 let lastSignature = ''
 
 // 时间展示统一走 utils/timeFormat（双轨制：精确日期优先，缺失降级到月份）
-import { formatSignUp, formatContest } from '../utils/timeFormat'
+import { formatSignUp, formatContest, countdownState } from '../utils/timeFormat'
 
 // 封面图：后端 API 的 image（由 DB 的 image_url 映射而来）
 // 只接受 http(s) 绝对地址，避免相对路径 / 协议相对地址 / 空串打坏卡片占位图
@@ -59,6 +59,47 @@ function mapToCard(item, index) {
     regEndDate: item.reg_end_date || '',
     contestStartDate: item.contest_start_date || ''
   }
+}
+// ---------- 官方风右侧「情报速览」 ----------
+// 示例提问：点一下填进搜索框并检索，顺手把 AI 语义检索的能力讲明白
+const QUICK_QUERIES = [
+  '我想找寒假能准备的算法赛',
+  '还有哪些商科赛在报名期',
+  '文科生能参加的国家级赛事'
+]
+
+// 近期截止：复用首页热门列表（后端已按紧迫度排序），取前 3 条
+const deadlineBrief = computed(() =>
+  competitions.value.slice(0, 3).map((c) => {
+    const state = countdownState({
+      reg_start_date: c.regStartDate,
+      reg_end_date: c.regEndDate,
+      contest_start_date: c.contestStartDate
+    })
+    const days = state && typeof state.days === 'number' ? state.days : null
+    let badge = ''
+    if (days !== null) {
+      if (days < 0) badge = '已截止'
+      else if (state.tone === 'soon') badge = `距开报 ${days} 天`
+      else if (days === 0) badge = '今天截止'
+      else badge = `剩 ${days} 天`
+    }
+    return {
+      id: c.id,
+      title: c.title,
+      endText: c.regEndDate ? String(c.regEndDate).slice(5) : '',
+      badge
+    }
+  })
+)
+
+function goDetail(id) {
+  router.push(`/competition/${id}`)
+}
+
+function applyQuickQuery(text) {
+  keyword.value = text
+  submitSearch()
 }
 
 // preparedMap: competition id -> whether current user already joined preparation
@@ -446,6 +487,12 @@ watch(
           ? 'mx-auto w-full max-w-6xl items-start text-left'
           : 'items-center text-center'"
       >
+        <div class="flex w-full flex-col lg:flex-row lg:items-start lg:justify-between lg:gap-16">
+        <div
+          :class="theme === 'official'
+            ? 'w-full lg:max-w-[600px] lg:flex-1'
+            : 'flex w-full flex-col items-center'"
+        >
         <!-- 官方风：小型大写眉标 -->
         <p
           v-if="theme === 'official'"
@@ -484,7 +531,7 @@ watch(
                  shadow-xl shadow-slate-900/10 ring-1 ring-slate-200/70 dark:ring-slate-700
                  transition-shadow focus-within:shadow-2xl focus-within:shadow-blue-600/10
                  focus-within:ring-blue-300/60"
-          :class="theme === 'official' ? 'w-full max-w-3xl' : 'mx-auto w-[90%] max-w-4xl md:w-full'"
+          :class="theme === 'official' ? 'w-full max-w-full' : 'mx-auto w-[90%] max-w-4xl md:w-full'"
           :style="{ animationDelay: '240ms' }"
         >
           <!-- 放大镜 Icon -->
@@ -500,7 +547,9 @@ watch(
           <input
             v-model="keyword"
             type="text"
-            placeholder="输入比赛名称，或像聊天一样描述需求（如：我想找寒假能准备的算法赛）..."
+            :placeholder="theme === 'official'
+              ? '搜索赛事，或直接描述你的需求…'
+              : '输入比赛名称，或像聊天一样描述需求（如：我想找寒假能准备的算法赛）...'"
             class="w-full bg-transparent text-base text-slate-800 dark:text-slate-100 placeholder:text-slate-500 dark:placeholder:text-slate-500
                    font-medium focus:outline-none disabled:opacity-60"
             :disabled="searching"
@@ -563,6 +612,53 @@ watch(
           </svg>
           {{ searchError }}
         </p>
+        </div>
+
+        <!-- 官方风：右侧情报栏（近期截止 + 示例提问），把首屏右半区用起来 -->
+        <aside
+          v-if="theme === 'official'"
+          class="hero-in brief hidden w-[300px] shrink-0 lg:block"
+          :style="{ animationDelay: '360ms' }"
+          aria-label="情报速览"
+        >
+          <div class="brief__head">
+            <span class="brief__eyebrow">情报速览</span>
+            <span class="brief__en">BRIEF</span>
+          </div>
+
+          <p class="brief__label">近期截止</p>
+          <ul class="brief__list">
+            <li
+              v-for="item in deadlineBrief"
+              :key="item.id"
+              class="brief__row"
+              role="button"
+              tabindex="0"
+              @click="goDetail(item.id)"
+              @keyup.enter="goDetail(item.id)"
+            >
+              <span class="brief__name">{{ item.title }}</span>
+              <span class="brief__meta">
+                <span v-if="item.endText">报名截止 {{ item.endText }}</span>
+                <span v-else>报名时间待定</span>
+                <span v-if="item.badge" class="brief__days">{{ item.badge }}</span>
+              </span>
+            </li>
+            <li v-if="!deadlineBrief.length" class="brief__row brief__row--empty">暂无在报赛事</li>
+          </ul>
+          <button type="button" class="brief__more" @click="goCompetitions">
+            查看全部赛事
+            <span aria-hidden="true">→</span>
+          </button>
+
+          <p class="brief__label brief__label--gap">试试这样问</p>
+          <ul class="brief__chips">
+            <li v-for="q in QUICK_QUERIES" :key="q">
+              <button type="button" class="brief-chip" @click="applyQuickQuery(q)">{{ q }}</button>
+            </li>
+          </ul>
+        </aside>
+        </div>
       </div>
 
       <!-- 首屏底部居中：向下探索 -->
