@@ -29,11 +29,14 @@ export function coverGlyph(title) {
   return matched ? matched[0].toUpperCase() : '赛'
 }
 
-// 简称归一化：只保留汉字，必须恰好 2 个；否则视为无有效简称
+// 简称归一化：只保留汉字，取前 2 个；不足 2 个视为无有效简称
+// （2026-11-14 放宽：4 字简称如「金种子杯」取前两字「金种」；此前要求恰好 2 字，
+//  4 字简称会退化成名称首字，封面看起来只有「一个字」）
 export function coverShortName(shortName) {
   if (typeof shortName !== 'string') return ''
   const chars = shortName.normalize('NFKC').match(HAN) || []
-  return chars.length === 2 ? chars.join('') : ''
+  if (chars.length < 2) return ''
+  return chars.slice(0, 2).join('')
 }
 
 /**
