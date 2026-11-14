@@ -1,19 +1,23 @@
 <script setup>
-// 统一封面：程序化生成的「深蓝科技几何」封面（纯 SVG，无网络请求、无积分、不依赖爬取的图）。
-// 全站所有赛事图片窗口（列表卡片 / 详情页头图）都走这一套，保证风格一致。
+// 统一封面：程序化生成，纯 SVG，无网络请求、无积分、不依赖爬取的图。
 //
-// 信息编码：底色永远是同一套深蓝；类别只改「光晕 + 徽记」的色相与几何母题，
-// 于是远看是同一系列，近看能区分工科/理科/商科/文科。
+// 三种主题 = 同一套构图的三种「材质」，几何母题与前景结构完全共用，只换底色/线条/质感：
+//   tech    科技蓝：深蓝渐变 + 光晕 + 粒子 + 发光线稿（海报感）
+//   official 官方风：浅蓝绿纸面 + 证书波纹 + 双线内框 + 印章环 + 墨线线稿（公文/证书感）
+//   minimal  极简风：纯白 + 4% 微网格 + 超细单线稿 + 一枚类别色小方块（图纸/瑞士海报感）
+//
+// 信息编码不变：类别只改「类别色 + 几何母题」，于是同一主题下远看是一系列，近看能区分。
 // 若以后要给某些赛事换成真 AI 图，把 COVER_USE_REMOTE 打开即可回退到 image_url。
 import { computed } from 'vue'
 import { coverFallback } from '@/utils/coverFallback'
+import { theme } from '@/composables/useTheme'
 
 const props = defineProps({
   title: { type: String, default: '' },
   shortName: { type: String, default: '' },
   category: { type: String, default: '' },
   seed: { type: [String, Number], default: '' },
-  variant: { type: String, default: 'card' } // card | hero
+  variant: { type: String, default: 'card' } // card | hero | thumb
 })
 
 let uidSeq = 0
@@ -25,6 +29,12 @@ const fb = computed(() => coverFallback({
 }))
 
 const uid = `ca${++uidSeq}`
+
+/** 当前主题对应的封面材质 */
+const mode = computed(() => {
+  const t = theme.value
+  return t === 'tech' ? 'tech' : t === 'minimal' ? 'minimal' : 'official'
+})
 
 // 同一赛事在列表、详情页拿到同一版式：用 seed（赛事 id）而不是标题做微扰
 const drift = computed(() => {
@@ -40,12 +50,37 @@ const drift = computed(() => {
 })
 
 const hue = computed(() => fb.value.hue)
-const accent = computed(() => `hsl(${hue.value} 85% 62%)`)
 const accentSoft = computed(() => `hsl(${hue.value} 78% 46%)`)
 const accentDeep = computed(() => `hsl(${hue.value} 72% 30%)`)
-const lineColor = '#9dc0ff'
 
-// 粒子：同一赛事每次渲染位置一致（用 seed 做伪随机），保证列表与详情页对得上
+/** 类别色：深色主题用亮色发光，浅色主题用降饱和的墨色，避免刺眼 */
+const accent = computed(() => {
+  if (mode.value === 'tech') return `hsl(${hue.value} 85% 62%)`
+  if (mode.value === 'minimal') return `hsl(${hue.value} 34% 40%)`
+  return `hsl(${hue.value} 54% 32%)`
+})
+
+// 大块实心（柱体、圆盘）在浅色材质里改成墨线轮廓：纸上印一块色会糊成脏斑
+const solidFill = computed(() => (mode.value === 'tech' ? accent.value : 'none'))
+const solidStroke = computed(() => (mode.value === 'tech' ? 'none' : accent.value))
+const solidStrokeOpacity = computed(() => (mode.value === 'tech' ? 0 : 0.55))
+
+/** 浅色主题的线条/文字墨色 */
+const ink = '#1f3a5f'
+const inkSoft = 'rgb(31 58 95 / 0.32)'
+const inkHair = 'rgb(31 58 95 / 0.16)'
+
+// 线稿参数按材质切换：深色主题粗发光，浅色主题细墨线
+const motifStroke = computed(() => (
+  mode.value === 'tech' ? `url(#${uid}-stroke)` : mode.value === 'official' ? accent.value : accent.value
+))
+const motifWidth = computed(() => (mode.value === 'tech' ? 4 : mode.value === 'official' ? 3 : 2.2))
+const motifFilter = computed(() => (mode.value === 'tech' ? 'drop-shadow(0 4px 22px rgb(120 170 255 / 0.45))' : 'none'))
+const motifOpacity = computed(() => (mode.value === 'tech' ? 1 : 0.95))
+// 官方风右侧要留印章位，线稿整体左移一点，避免压住印章文字
+const motifShift = computed(() => (mode.value === 'tech' ? 0 : mode.value === 'official' ? -56 : -18))
+
+// 粒子只用于科技蓝
 const particles = computed(() => {
   const s = String(props.seed ?? props.title ?? 'kuao')
   let h = 2166136261
@@ -74,13 +109,23 @@ const motif = computed(() => {
   return 'orbit'
 })
 
+const sealY = computed(() => Math.round((drift.value.glowY / 100) * 900 + 150))
+
 const styleVars = computed(() => ({ '--accent-h': hue.value }))
+
+const sizeClass = computed(() => (
+  props.variant === 'hero' ? 'cover-art--hero' : props.variant === 'thumb' ? 'cover-art--thumb' : ''
+))
+
+// 详情页头图是超宽画幅（约 4.8:1），16:9 的上下边会被裁掉：
+// 边框类装饰在头图里改成「页边线 + 左侧色条」，否则只剩两条断掉的竖线
+const isHero = computed(() => props.variant === 'hero')
 </script>
 
 <template>
   <div
     class="cover-art relative h-full w-full overflow-hidden"
-    :class="variant === 'hero' ? 'cover-art--hero' : variant === 'thumb' ? 'cover-art--thumb' : ''"
+    :class="[`cover-art--${mode}`, sizeClass]"
     :style="styleVars"
     aria-hidden="true"
   >
@@ -91,6 +136,7 @@ const styleVars = computed(() => ({ '--accent-h': hue.value }))
       role="presentation"
     >
       <defs>
+        <!-- 科技蓝 -->
         <linearGradient :id="`${uid}-stroke`" x1="0" y1="0" x2="1" y2="1">
           <stop offset="0%" stop-color="#dbe8ff" stop-opacity="0.95" />
           <stop offset="55%" :stop-color="accent" stop-opacity="0.9" />
@@ -127,50 +173,143 @@ const styleVars = computed(() => ({ '--accent-h': hue.value }))
         <mask :id="`${uid}-gridmask`">
           <rect width="1600" height="900" :fill="`url(#${uid}-fade)`" />
         </mask>
+
+        <!-- 官方风：纸面 + 点阵 -->
+        <linearGradient :id="`${uid}-paper`" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stop-color="#ffffff" />
+          <stop offset="50%" stop-color="#f3f9fc" />
+          <stop offset="100%" stop-color="#dcecf4" />
+        </linearGradient>
+        <radialGradient :id="`${uid}-paperwash`">
+          <stop offset="0%" :stop-color="accent" stop-opacity="0.16" />
+          <stop offset="66%" :stop-color="accent" stop-opacity="0.05" />
+          <stop offset="100%" :stop-color="accent" stop-opacity="0" />
+        </radialGradient>
+        <pattern :id="`${uid}-dots`" width="26" height="26" patternUnits="userSpaceOnUse">
+          <circle cx="1.6" cy="1.6" r="1.1" fill="#1f3a5f" fill-opacity="0.16" />
+        </pattern>
+
+        <!-- 极简风：微网格 + 极浅纸面 -->
+        <pattern :id="`${uid}-micro`" width="48" height="48" patternUnits="userSpaceOnUse">
+          <path d="M48 0H0v48" fill="none" stroke="#0f172a" stroke-opacity="0.075" stroke-width="1" />
+        </pattern>
+        <linearGradient :id="`${uid}-plain`" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stop-color="#fdfefe" />
+          <stop offset="100%" stop-color="#f4f6f8" />
+        </linearGradient>
+        <radialGradient :id="`${uid}-soft`">
+          <stop offset="0%" :stop-color="accent" stop-opacity="0.12" />
+          <stop offset="60%" :stop-color="accent" stop-opacity="0.04" />
+          <stop offset="100%" :stop-color="accent" stop-opacity="0" />
+        </radialGradient>
       </defs>
 
-      <rect width="1600" height="900" :fill="`url(#${uid}-base)`" />
-      <ellipse
-        :cx="(drift.glowX / 100) * 1600"
-        :cy="(drift.glowY / 100) * 900"
-        rx="700"
-        ry="470"
-        :fill="`url(#${uid}-glow)`"
-      />
-      <rect width="1600" height="900" :fill="`url(#${uid}-grid)`" :mask="`url(#${uid}-gridmask)`" />
-
-      <!-- 悬浮粒子：给纯渐变加一点空气感，位置由 seed 固定 -->
-      <g>
-        <circle
-          v-for="(p, i) in particles"
-          :key="`p${i}`"
-          :cx="p.x"
-          :cy="p.y"
-          :r="p.r"
-          :fill="p.warm ? accent : '#dbe8ff'"
-          :fill-opacity="p.o"
+      <!-- ================= 底色层 ================= -->
+      <template v-if="mode === 'tech'">
+        <rect width="1600" height="900" :fill="`url(#${uid}-base)`" />
+        <ellipse
+          :cx="(drift.glowX / 100) * 1600"
+          :cy="(drift.glowY / 100) * 900"
+          rx="700"
+          ry="470"
+          :fill="`url(#${uid}-glow)`"
         />
-      </g>
+        <rect width="1600" height="900" :fill="`url(#${uid}-grid)`" :mask="`url(#${uid}-gridmask)`" />
 
-      <!-- 底部光边：统一的一道 accent 亮线，强化海报感 -->
-      <rect x="0" y="884" width="1600" height="2.5" :fill="accent" opacity="0.45" />
-      <rect x="0" y="858" width="1600" height="26" :fill="accent" opacity="0.08" />
+        <!-- 悬浮粒子 -->
+        <g>
+          <circle
+            v-for="(p, i) in particles"
+            :key="`p${i}`"
+            :cx="p.x"
+            :cy="p.y"
+            :r="p.r"
+            :fill="p.warm ? accent : '#dbe8ff'"
+            :fill-opacity="p.o"
+          />
+        </g>
 
-      <!-- 斜向光带：两束，极低不透明度，负责把画面拉出纵深 -->
-      <g :transform="`rotate(${drift.angle} 1180 430)`">
-        <rect x="820" y="-120" width="150" height="1200" :fill="`url(#${uid}-beam)`" />
-        <rect x="1060" y="-120" width="62" height="1200" :fill="`url(#${uid}-beam)`" opacity="0.7" />
-      </g>
+        <!-- 底部光边 -->
+        <rect x="0" y="884" width="1600" height="2.5" :fill="accent" opacity="0.45" />
+        <rect x="0" y="858" width="1600" height="26" :fill="accent" opacity="0.08" />
 
-      <!-- 几何母题：同一套线框语言，按类别换形状 -->
+        <!-- 斜向光带 -->
+        <g :transform="`rotate(${drift.angle} 1180 430)`">
+          <rect x="820" y="-120" width="150" height="1200" :fill="`url(#${uid}-beam)`" />
+          <rect x="1060" y="-120" width="62" height="1200" :fill="`url(#${uid}-beam)`" opacity="0.7" />
+        </g>
+      </template>
+
+      <template v-else-if="mode === 'official'">
+        <rect width="1600" height="900" :fill="`url(#${uid}-paper)`" />
+        <ellipse
+          :cx="(drift.glowX / 100) * 1600"
+          :cy="(drift.glowY / 100) * 900"
+          rx="760"
+          ry="520"
+          :fill="`url(#${uid}-paperwash)`"
+        />
+        <rect width="1600" height="900" :fill="`url(#${uid}-dots)`" opacity="0.55" />
+
+        <!-- 证书波纹：两条相位错开的正弦，极低透明度 -->
+        <g fill="none" :stroke="ink" stroke-opacity="0.1" stroke-width="1.6">
+          <path d="M-40 214 C 230 160, 470 268, 760 214 S 1290 160, 1660 214" />
+          <path d="M-40 246 C 230 192, 470 300, 760 246 S 1290 192, 1660 246" />
+          <path d="M-40 690 C 230 636, 470 744, 760 690 S 1290 636, 1660 690" />
+          <path d="M-40 722 C 230 668, 470 776, 760 722 S 1290 668, 1660 722" />
+        </g>
+
+        <!-- 双线内框：卡片用完整边框，头图只留页边线 -->
+        <g v-if="!isHero">
+          <rect x="28" y="28" width="1544" height="844" fill="none" :stroke="ink" stroke-opacity="0.36" stroke-width="2.5" />
+          <rect x="46" y="46" width="1508" height="808" fill="none" :stroke="ink" stroke-opacity="0.2" stroke-width="1.2" />
+        </g>
+        <template v-else>
+          <rect x="0" y="452" width="1600" height="2" :fill="ink" opacity="0.14" />
+          <rect x="0" y="0" width="10" height="900" :fill="accent" opacity="0.55" />
+        </template>
+
+        <!-- 印章环：双环 + 齿边 + 竖排大类名，颜色跟类别走 -->
+        <g :transform="`translate(1352 ${sealY})`" fill="none" :stroke="accent" stroke-opacity="0.4">
+          <circle r="140" stroke-width="4" />
+          <circle r="116" stroke-width="1.6" stroke-dasharray="4 10" />
+          <text
+            y="18"
+            text-anchor="middle"
+            :fill="accent"
+            :fill-opacity="0.55"
+            stroke="none"
+            :transform="`rotate(${drift.rotate - 4})`"
+            font-size="52"
+            font-weight="700"
+            letter-spacing="4"
+          >{{ fb.major || fb.catLabel }}</text>
+        </g>
+
+        <!-- 顶部类别色细条 -->
+        <rect x="0" y="0" width="1600" height="7" :fill="accent" opacity="0.9" />
+      </template>
+
+      <template v-else>
+        <rect width="1600" height="900" :fill="`url(#${uid}-plain)`" />
+        <ellipse cx="1120" cy="420" rx="620" ry="430" :fill="`url(#${uid}-soft)`" />
+        <rect width="1600" height="900" :fill="`url(#${uid}-micro)`" />
+        <!-- 顶边发丝线：唯一的类别色锚点，细到像印刷对位线 -->
+        <rect x="0" y="0" width="1600" height="3" :fill="accent" opacity="0.75" />
+        <rect v-if="isHero" x="0" y="0" width="10" height="900" :fill="accent" opacity="0.5" />
+        <rect x="0" y="897" width="1600" height="3" fill="#0f172a" fill-opacity="0.07" />
+      </template>
+
+      <!-- ================= 几何母题（三套材质共用同一套形状） ================= -->
       <g
         fill="none"
-        :stroke="`url(#${uid}-stroke)`"
-        stroke-width="4"
+        :stroke="motifStroke"
+        :stroke-width="motifWidth"
+        :opacity="motifOpacity"
         stroke-linecap="round"
         stroke-linejoin="round"
-        :transform="`rotate(${drift.rotate} 1120 430)`"
-        style="filter: drop-shadow(0 4px 22px rgb(120 170 255 / 0.45))"
+        :transform="`translate(${motifShift} 0) rotate(${drift.rotate} 1120 430)`"
+        :style="{ filter: motifFilter }"
       >
         <template v-if="motif === 'orbit'">
           <circle cx="1120" cy="430" r="250" stroke-opacity="0.55" />
@@ -218,10 +357,10 @@ const styleVars = computed(() => ({ '--accent-h': hue.value }))
         </template>
 
         <template v-else-if="motif === 'rise'">
-          <rect x="900" y="560" width="56" height="120" :fill="accent" stroke="none" opacity="0.3" />
-          <rect x="986" y="470" width="56" height="210" :fill="accent" stroke="none" opacity="0.42" />
-          <rect x="1072" y="370" width="56" height="310" :fill="accent" stroke="none" opacity="0.56" />
-          <rect x="1158" y="270" width="56" height="410" :fill="accent" stroke="none" opacity="0.7" />
+          <rect x="900" y="560" width="56" height="120" :fill="solidFill" :stroke="solidStroke" :stroke-opacity="solidStrokeOpacity" :opacity="mode === 'tech' ? 0.3 : 1" />
+          <rect x="986" y="470" width="56" height="210" :fill="solidFill" :stroke="solidStroke" :stroke-opacity="solidStrokeOpacity" :opacity="mode === 'tech' ? 0.42 : 1" />
+          <rect x="1072" y="370" width="56" height="310" :fill="solidFill" :stroke="solidStroke" :stroke-opacity="solidStrokeOpacity" :opacity="mode === 'tech' ? 0.56 : 1" />
+          <rect x="1158" y="270" width="56" height="410" :fill="solidFill" :stroke="solidStroke" :stroke-opacity="solidStrokeOpacity" :opacity="mode === 'tech' ? 0.7 : 1" />
           <path d="M880 640 L1300 200" stroke-opacity="0.5" />
           <path d="M1214 200 L1300 200 L1300 286" stroke-opacity="0.7" :stroke="accent" />
           <circle cx="1158" cy="270" r="9" :fill="accent" stroke="none" />
@@ -232,12 +371,12 @@ const styleVars = computed(() => ({ '--accent-h': hue.value }))
           <path d="M900 680 Q1080 470 1280 680" stroke-opacity="0.35" />
           <path d="M940 740 Q1080 570 1240 740" stroke-opacity="0.22" />
           <circle cx="1090" cy="500" r="86" :stroke="accent" stroke-opacity="0.55" />
-          <circle cx="1090" cy="500" r="34" :fill="accent" stroke="none" opacity="0.7" />
+          <circle cx="1090" cy="500" r="34" :fill="solidFill" :stroke="solidStroke" :stroke-opacity="solidStrokeOpacity" :opacity="mode === 'tech' ? 0.7 : 1" />
           <circle cx="1250" cy="420" r="12" :fill="accent" stroke="none" opacity="0.55" />
         </template>
       </g>
 
-      <rect width="1600" height="900" :fill="`url(#${uid}-vignette)`" />
+      <rect v-if="mode === 'tech'" width="1600" height="900" :fill="`url(#${uid}-vignette)`" />
     </svg>
 
     <!-- 前景：类别徽记 + 分类标签（文字用 HTML 渲染，缩放更清晰） -->
@@ -253,18 +392,14 @@ const styleVars = computed(() => ({ '--accent-h': hue.value }))
 <style scoped>
 .cover-art {
   container-type: inline-size;
+}
+
+/* ================= 科技蓝 ================= */
+.cover-art--tech {
   background: #071026;
 }
 
-.cover-art__pad {
-  padding: 3.2cqw;
-}
-
-.cover-art__row {
-  gap: 2.4cqw;
-}
-
-.cover-mark {
+.cover-art--tech .cover-mark {
   display: flex;
   flex: none;
   align-items: center;
@@ -285,32 +420,106 @@ const styleVars = computed(() => ({ '--accent-h': hue.value }))
   text-shadow: 0 1px 2px rgb(0 0 0 / 0.25);
 }
 
+.cover-art--tech .cover-tag {
+  color: rgb(226 236 255 / 0.72);
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+/* ================= 官方风：印章式方块 + 宋体小字 ================= */
+.cover-art--official {
+  background: #f3f9fc;
+  box-shadow: inset 0 0 0 1px rgb(31 58 95 / 0.12);
+}
+
+.cover-art--official .cover-mark {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: clamp(40px, 13cqw, 62px);
+  height: clamp(40px, 13cqw, 62px);
+  border-radius: clamp(6px, 1.6cqw, 10px);
+  border: 1px solid hsl(var(--accent-h) 52% 30% / 0.35);
+  background: hsl(var(--accent-h) 52% 38%);
+  box-shadow: inset 0 0 0 2px rgb(255 255 255 / 0.22);
+  color: #fff;
+  font-size: clamp(15px, 5cqw, 25px);
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0.02em;
+}
+
+.cover-art--official .cover-tag {
+  color: #38536f;
+  font-family: ui-serif, Georgia, 'Songti SC', 'SimSun', serif;
+  font-weight: 600;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+}
+
+/* ================= 极简风：空心细框 + 灰字 ================= */
+.cover-art--minimal {
+  background: #fbfcfd;
+  box-shadow: inset 0 0 0 1px rgb(15 23 42 / 0.08);
+}
+
+.cover-art--minimal .cover-mark {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: clamp(34px, 10cqw, 46px);
+  height: clamp(34px, 10cqw, 46px);
+  border-radius: 2px;
+  border: 1.5px solid hsl(var(--accent-h) 32% 52% / 0.55);
+  background: transparent;
+  color: hsl(var(--accent-h) 38% 40%);
+  font-size: clamp(13px, 4cqw, 20px);
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0;
+}
+
+.cover-art--minimal .cover-tag {
+  color: #6b7480;
+  font-weight: 500;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+}
+
+/* ================= 共用排版 ================= */
+.cover-art__pad {
+  padding: 3.2cqw;
+}
+
+.cover-art__row {
+  gap: 2.4cqw;
+}
+
 .cover-mark--wide {
   letter-spacing: -0.04em;
 }
 
 .cover-tag {
-  color: rgb(226 236 255 / 0.72);
   font-size: clamp(10px, 2.9cqw, 13px);
-  font-weight: 600;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
 .cover-art--hero .cover-mark {
-  width: clamp(60px, 9cqw, 96px);
-  height: clamp(60px, 9cqw, 96px);
-  font-size: clamp(20px, 3.4cqw, 34px);
+  width: clamp(58px, 8.6cqw, 92px);
+  height: clamp(58px, 8.6cqw, 92px);
+  font-size: clamp(20px, 3.2cqw, 32px);
 }
 
 .cover-art--hero .cover-tag {
   font-size: clamp(12px, 1.5cqw, 15px);
 }
 
-/* 工作台顶部小图（约 96×64）：只留徽记，字与标签都按比例缩，避免溢出 */
+/* 工作台顶部小图（约 96×64）：只留徽记，字与标签按比例缩，避免溢出 */
 .cover-art--thumb .cover-art__pad {
   padding: 8cqw;
 }
@@ -318,7 +527,7 @@ const styleVars = computed(() => ({ '--accent-h': hue.value }))
 .cover-art--thumb .cover-mark {
   width: clamp(18px, 26cqw, 30px);
   height: clamp(18px, 26cqw, 30px);
-  border-radius: 7px;
+  border-radius: 4px;
   font-size: clamp(10px, 13cqw, 14px);
 }
 
