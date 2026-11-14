@@ -38,45 +38,47 @@ async function loadPreparedStates(list) {
 }
 
 /* ================= 左侧筛选竖栏 ================= */
-// 平台只收录教育部 84 项核心国赛，「赛事级别」不再区分，只按学科大类筛选
-// 学科多选：数组里可同时存大类（工科）与细分（计算机&信息技术）
-// 数组为空 = 展示全部竞赛；有值 = 按数组里的分类做 OR 过滤
-const selectedMajors = ref([])
-// 竖向折叠：同一时刻只展开一个大类的细分方向
-const openMajor = ref('')
+// 平台只收录教育部 84 项核心国赛，「赛事级别」不再区分，只按学科细分方向筛选。
+// 大类（工科 / 理科…）本身不参与筛选，只负责展开自己的细分方向；
+// 同一时刻只展开一个大类，切换大类会清空上一个大类已选的细分。
+const activeMajor = ref('')
+const selectedMinors = ref([])
 
-function isSelected(value) {
-  return selectedMajors.value.includes(value)
+const minorOptions = computed(() => CATEGORY_TREE[activeMajor.value] || [])
+const selectedMinorCount = computed(() => selectedMinors.value.length)
+
+function isMinorSelected(minor) {
+  return selectedMinors.value.includes(minor)
 }
 
-// 大类 / 细分统一 toggle：选中则加入，已选中则移除
-function toggleSelection(value) {
-  const index = selectedMajors.value.indexOf(value)
+// 点大类 = 展开 / 收起细分方向，不会把「整个工科」加进筛选
+function toggleMajorOpen(major) {
+  if (activeMajor.value === major) {
+    activeMajor.value = ''
+    return
+  }
+  // 换大类时清掉上一个大的细分选择，避免筛到当前展开列表里看不见的方向
+  if (selectedMinors.value.length) selectedMinors.value = []
+  activeMajor.value = major
+}
+
+// 细分方向 toggle：有选 = 只看这些方向，全取消 = 回到全部
+function toggleMinor(minor) {
+  const index = selectedMinors.value.indexOf(minor)
   if (index >= 0) {
-    selectedMajors.value.splice(index, 1)
+    selectedMinors.value.splice(index, 1)
   } else {
-    selectedMajors.value.push(value)
+    selectedMinors.value.push(minor)
   }
 }
 
-// 点胶囊上的 X：只移除对应的那一项
-function removeSelection(value) {
-  selectedMajors.value = selectedMajors.value.filter((item) => item !== value)
+function removeMinor(minor) {
+  selectedMinors.value = selectedMinors.value.filter((item) => item !== minor)
 }
 
-// 只要该大类本身或其任一细分被选中，就高亮大类
-function isMajorActive(major) {
-  if (isSelected(major)) return true
-  return (CATEGORY_TREE[major] || []).some((minor) => isSelected(minor))
-}
-
-function selectAll() {
-  selectedMajors.value = []
-}
-
-// 折叠展开：已展开则收起，否则展开该大类
-function toggleMajorOpen(major) {
-  openMajor.value = openMajor.value === major ? '' : major
+function clearMajors() {
+  selectedMinors.value = []
+  activeMajor.value = ''
 }
 
 // ---------- 报名状态 ----------
@@ -102,13 +104,11 @@ function statusOf(item) {
   return 'open'
 }
 
-// 学科过滤后的集合：状态计数基于它，保证「选中工科后，报名中 X 项」是这一学科内的数量
+// 学科过滤后的集合：状态计数基于它，保证「选中某方向后，报名中 X 项」是这一方向内的数量
 const majorFiltered = computed(() => {
   const base = competitions.value
-  if (selectedMajors.value.length === 0) return base
-  return base.filter((item) =>
-    selectedMajors.value.some((value) => item.major === value || item.minor === value)
-  )
+  if (selectedMinors.value.length === 0) return base
+  return base.filter((item) => selectedMinors.value.includes(item.minor))
 })
 
 const filtered = computed(() => {
@@ -127,29 +127,39 @@ const statusPoolTotal = computed(
   () => competitions.value.filter((item) => activeStatus.value === 'all' || statusOf(item) === activeStatus.value).length
 )
 
-// 每个大类在「当前状态过滤下」还有多少项，用于竖向清单右侧的数字
+// 状态过滤后的池子：大类 / 细分右侧的数字都基于它
+const statusPool = computed(() =>
+  competitions.value.filter((item) => activeStatus.value === 'all' || statusOf(item) === activeStatus.value)
+)
+
+// 每个大类在当前状态过滤下还有多少项
 const majorCounts = computed(() => {
-  const pool = competitions.value.filter(
-    (item) => activeStatus.value === 'all' || statusOf(item) === activeStatus.value
-  )
   const counts = {}
   for (const major of MAJOR_ORDER) counts[major] = 0
-  for (const item of pool) {
+  for (const item of statusPool.value) {
     if (counts[item.major] !== undefined) counts[item.major] += 1
   }
   return counts
 })
 
+// 每个细分方向在当前状态过滤下还有多少项
+const minorCounts = computed(() => {
+  const counts = {}
+  for (const item of statusPool.value) {
+    if (!item.minor) continue
+    counts[item.minor] = (counts[item.minor] || 0) + 1
+  }
+  return counts
+})
+
 function clearAll() {
-  selectedMajors.value = []
+  clearMajors()
   activeStatus.value = 'all'
-  openMajor.value = ''
 }
 
 const hasFilter = computed(
-  () => selectedMajors.value.length > 0 || activeStatus.value !== 'all'
+  () => selectedMinors.value.length > 0 || activeStatus.value !== 'all'
 )
-
 // ---------- 数据格式化（统一走 utils/timeFormat） ----------
 import { formatSignUp, formatContest, countdownState } from '../utils/timeFormat'
 
@@ -239,10 +249,10 @@ onMounted(() => {
           <button
             type="button"
             class="shrink-0 rounded-full px-3.5 py-2 text-sm font-semibold transition-colors"
-            :class="selectedMajors.length === 0
+            :class="selectedMinors.length === 0
               ? 'bg-slate-900 text-white dark:bg-white dark:text-slate-900'
               : 'bg-white text-slate-600 ring-1 ring-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:ring-slate-700'"
-            @click="selectAll"
+            @click="clearMajors"
           >
             全部学科
           </button>
@@ -251,12 +261,26 @@ onMounted(() => {
             :key="major"
             type="button"
             class="shrink-0 rounded-full px-3.5 py-2 text-sm font-semibold transition-colors"
-            :class="isMajorActive(major)
+            :class="activeMajor === major
+              ? 'bg-slate-900 text-white dark:bg-white dark:text-slate-900'
+              : 'bg-white text-slate-600 ring-1 ring-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:ring-slate-700'"
+            @click="toggleMajorOpen(major)"
+          >
+            {{ major }}<span v-if="activeMajor === major" class="ml-1 opacity-70">▾</span>
+          </button>
+        </div>
+        <div v-if="activeMajor" class="flex flex-wrap gap-2">
+          <button
+            v-for="minor in minorOptions"
+            :key="minor"
+            type="button"
+            class="shrink-0 rounded-full px-3 py-1.5 text-xs font-bold transition-colors"
+            :class="isMinorSelected(minor)
               ? 'bg-blue-600 text-white'
               : 'bg-white text-slate-600 ring-1 ring-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:ring-slate-700'"
-            @click="toggleSelection(major)"
+            @click="toggleMinor(minor)"
           >
-            {{ major }}
+            {{ minor }} <span class="tabular-nums opacity-60">{{ minorCounts[minor] || 0 }}</span>
           </button>
         </div>
         <div class="flex flex-wrap gap-2">
@@ -284,7 +308,6 @@ onMounted(() => {
           </button>
         </div>
       </div>
-
       <!-- ========== 主体：左筛选竖栏 + 右列表 ========== -->
       <div class="lg:grid lg:grid-cols-[248px_minmax(0,1fr)] lg:gap-10 xl:gap-14">
         <!-- 左竖栏 -->
@@ -297,10 +320,10 @@ onMounted(() => {
                   <span class="mr-1.5 font-mono text-slate-300 dark:text-slate-600">01</span>学科门类
                 </h2>
                 <button
-                  v-if="selectedMajors.length"
+                  v-if="selectedMinors.length"
                   type="button"
                   class="text-[11px] font-bold text-slate-400 transition-colors hover:text-slate-700 dark:hover:text-slate-200"
-                  @click="selectAll"
+                  @click="clearMajors"
                 >
                   重置
                 </button>
@@ -309,67 +332,68 @@ onMounted(() => {
               <button
                 type="button"
                 class="mb-1 flex w-full items-center justify-between rounded-md px-2.5 py-[7px] text-left text-[14px] font-semibold transition-colors"
-                :class="selectedMajors.length === 0
+                :class="selectedMinors.length === 0
                   ? (isOfficial ? 'bg-[#12294a] text-white' : 'bg-blue-600 text-white')
                   : 'text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800'"
-                @click="selectAll"
+                @click="clearMajors"
               >
                 <span>全部学科</span>
                 <span class="text-xs tabular-nums opacity-60">{{ statusPoolTotal }}</span>
               </button>
 
               <div v-for="major in MAJOR_ORDER" :key="major" class="mb-0.5">
-                <div
-                  class="flex items-center rounded-md transition-colors"
-                  :class="isMajorActive(major)
-                    ? (isOfficial ? 'bg-[#12294a] text-white' : 'bg-blue-600 text-white')
+                <!-- 大类只是「展开细分方向」的开关，点它不会把整个大类塞进筛选 -->
+                <button
+                  type="button"
+                  class="flex w-full items-center gap-1.5 rounded-md px-2.5 py-[7px] text-left text-[14px] font-semibold transition-colors"
+                  :class="activeMajor === major
+                    ? 'bg-slate-100 text-slate-900 dark:bg-slate-800 dark:text-white'
                     : 'text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-800'"
+                  :aria-expanded="activeMajor === major"
+                  :aria-label="`${activeMajor === major ? '收起' : '展开'}${major}细分方向`"
+                  @click="toggleMajorOpen(major)"
                 >
-                  <button
-                    type="button"
-                    class="flex min-w-0 flex-1 items-center gap-1.5 px-2.5 py-[7px] text-left text-[14px] font-semibold"
-                    @click="toggleSelection(major)"
+                  <span class="truncate">{{ major }}</span>
+                  <span
+                    class="ml-auto shrink-0 text-xs tabular-nums"
+                    :class="activeMajor === major && selectedMinorCount
+                      ? (isOfficial ? 'font-bold text-[#12294a] dark:text-white' : 'font-bold text-blue-600 dark:text-blue-300')
+                      : 'opacity-50'"
                   >
-                    <span class="truncate">{{ major }}</span>
-                    <span
-                      v-if="isSelected(major)"
-                      class="ml-0.5 rounded-sm bg-white/20 px-1 text-[10px] font-bold tracking-wide"
-                    >已选</span>
-                  </button>
-                  <span class="shrink-0 pr-1 text-xs tabular-nums opacity-50">{{ majorCounts[major] }}</span>
-                  <button
-                    type="button"
-                    class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md opacity-60 transition hover:opacity-100"
-                    :aria-label="`${openMajor === major ? '收起' : '展开'}${major}细分方向`"
-                    :aria-expanded="openMajor === major"
-                    @click="toggleMajorOpen(major)"
+                    <template v-if="activeMajor === major && selectedMinorCount">{{ selectedMinorCount }}/{{ majorCounts[major] }}</template>
+                    <template v-else>{{ majorCounts[major] }}</template>
+                  </span>
+                  <svg
+                    class="h-3 w-3 shrink-0 opacity-50 transition-transform"
+                    :class="activeMajor === major ? 'rotate-180' : ''"
+                    fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"
                   >
-                    <svg
-                      class="h-3 w-3 transition-transform"
-                      :class="openMajor === major ? 'rotate-180' : ''"
-                      fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"
-                    >
-                      <path stroke-linecap="round" stroke-linejoin="round" d="M6 9l6 6 6-6" />
-                    </svg>
-                  </button>
-                </div>
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M6 9l6 6 6-6" />
+                  </svg>
+                </button>
 
-                <!-- 细分方向：竖向展开，多选 -->
+                <!-- 细分方向：点哪个就只看哪个，可多选 -->
                 <div
-                  v-if="openMajor === major"
-                  class="mb-1 mt-1 space-y-0.5 border-l border-slate-200 pl-2 dark:border-slate-700"
+                  v-if="activeMajor === major"
+                  class="mb-1 mt-1.5 grid grid-cols-2 gap-1 border-l border-slate-200 pl-2.5 dark:border-slate-700"
                 >
                   <button
-                    v-for="minor in CATEGORY_TREE[major]"
+                    v-for="minor in minorOptions"
                     :key="minor"
                     type="button"
-                    class="flex w-full items-center gap-1.5 rounded px-2 py-[5px] text-left text-[12.5px] font-medium transition-colors"
-                    :class="isSelected(minor)
-                      ? 'bg-slate-200/70 font-bold text-slate-900 dark:bg-slate-700 dark:text-white'
-                      : 'text-slate-500 hover:bg-slate-100 hover:text-slate-800 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-100'"
-                    @click="toggleSelection(minor)"
+                    class="flex w-full items-center justify-between gap-1 rounded px-1.5 py-1 text-left text-[12px] font-semibold transition-colors"
+                    :class="isMinorSelected(minor)
+                      ? (isOfficial
+                        ? 'bg-[#12294a] text-white'
+                        : 'bg-blue-600 text-white')
+                      : (minorCounts[minor] || 0) === 0
+                        ? 'cursor-not-allowed bg-slate-50 text-slate-300 dark:bg-slate-800/40 dark:text-slate-600'
+                        : 'bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700'"
+                    :disabled="(minorCounts[minor] || 0) === 0"
+                    @click="toggleMinor(minor)"
                   >
-                    <span class="truncate">{{ minor }}</span>
+                    <span class="max-w-[132px] truncate" :title="minor">{{ minor }}</span>
+                    <span class="text-[10px] tabular-nums opacity-50">{{ minorCounts[minor] || 0 }}</span>
                   </button>
                 </div>
               </div>
@@ -433,13 +457,13 @@ onMounted(() => {
               </button>
 
               <!-- 已选条件 -->
-              <div v-if="selectedMajors.length" class="mt-4 flex flex-wrap gap-1.5">
+              <div v-if="selectedMinors.length" class="mt-4 flex flex-wrap gap-1.5">
                 <button
-                  v-for="selection in selectedMajors"
+                  v-for="selection in selectedMinors"
                   :key="selection"
                   type="button"
                   class="inline-flex items-center gap-1 rounded border border-slate-200 bg-white px-2 py-1 text-[11.5px] font-semibold text-slate-600 transition-colors hover:border-slate-300 hover:text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:text-white"
-                  @click="removeSelection(selection)"
+                  @click="removeMinor(selection)"
                 >
                   {{ selection }}
                   <svg class="h-2.5 w-2.5 opacity-50" fill="none" stroke="currentColor" stroke-width="3" viewBox="0 0 24 24">
@@ -491,7 +515,7 @@ onMounted(() => {
             class="rounded-2xl border border-dashed border-slate-200 px-6 py-16 text-center dark:border-slate-700"
           >
             <p class="font-bold text-slate-500 dark:text-slate-400">没有符合条件的竞赛</p>
-            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">试试放宽学科或报名状态</p>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">试试放宽学科方向或报名状态</p>
             <button
               v-if="hasFilter"
               class="mt-5 rounded-full bg-slate-900 px-5 py-2 text-sm font-bold text-white dark:bg-white dark:text-slate-900"

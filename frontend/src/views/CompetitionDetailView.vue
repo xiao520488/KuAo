@@ -34,7 +34,7 @@ watch(
 // ---- 后端字段格式化 ----
 // 双轨制：日期轨（reg_*_date / contest_*_date）优先，为空时降级到月份轨；
 // 统一实现在 utils/timeFormat，避免各页面文案漂移。
-import { toMonth, parseDate, formatSignUp, formatContest, formatStageRange, formatStageSpan, countdownState } from '../utils/timeFormat'
+import { toMonth, parseDate, formatSignUp, formatContest, formatStageRange, formatStageSpan } from '../utils/timeFormat'
 
 // 封面图：只接受 http(s) 绝对地址，其余回落大图占位
 function resolveImage(item) {
@@ -380,25 +380,6 @@ const stageList = computed(() => {
     .filter((row) => row.range || row.note)
 })
 
-// 档案栏的状态徽章：与卡片倒计时共用一套判定
-const statusBadge = computed(() =>
-  countdownState({
-    reg_start_date: detail.value?.reg_start_date,
-    reg_end_date: detail.value?.reg_end_date,
-    contest_start_date: detail.value?.contest_start_date
-  })
-)
-const STATUS_TONE = {
-  open: 'text-emerald-600 dark:text-emerald-400',
-  urgent: 'text-amber-600 dark:text-amber-400',
-  soon: 'text-blue-600 dark:text-blue-400',
-  over: 'text-slate-400 dark:text-slate-500',
-  contest: 'text-indigo-600 dark:text-indigo-400'
-}
-const statusToneClass = computed(() =>
-  statusBadge.value ? STATUS_TONE[statusBadge.value.tone] || 'text-slate-400' : 'text-slate-400'
-)
-
 const guideReady = computed(() => Boolean(detail.value?.full_process_guide))
 </script>
 
@@ -406,7 +387,7 @@ const guideReady = computed(() => Boolean(detail.value?.full_process_guide))
   <div class="min-h-screen bg-slate-50 dark:bg-slate-900">
     <Header />
 
-    <main class="mx-auto w-[92%] max-w-[1248px] pb-24 pt-28">
+    <main class="mx-auto w-full max-w-6xl px-4 pb-24 pt-28 sm:px-6">
       <!-- 加载中 -->
       <div v-if="loading" class="space-y-6">
         <div class="h-64 w-full animate-pulse rounded-2xl bg-slate-200 dark:bg-slate-700"></div>
@@ -512,10 +493,52 @@ const guideReady = computed(() => Boolean(detail.value?.full_process_guide))
           </div>
         </section>
 
-        <!-- 4. 固定左侧正文 + 右侧粘性档案栏 -->
-        <div class="mt-8 flex flex-col-reverse gap-8 lg:grid lg:grid-cols-[minmax(0,1fr)_320px] lg:items-start lg:gap-14 xl:gap-20">
-          <div class="min-w-0">
-          <!-- 4. 分块卡片：时间安排 / 赛事简介 / 参赛对象 / 内容范围 / 考试安排 -->
+        <!-- 3. 关键信息速览（真实字段；缺失时明确写“暂未收录”） -->
+        <section class="mt-8 grid grid-cols-1 gap-4 sm:grid-cols-3">
+          <div
+            class="rounded-2xl border border-slate-200/70 bg-white p-5 shadow-sm
+                   dark:border-slate-700 dark:bg-slate-800"
+          >
+            <span class="block h-1.5 w-8 rounded-full bg-blue-500"></span>
+            <p class="mt-3 text-xs font-bold tracking-wide text-slate-500 dark:text-slate-400">报名时间</p>
+            <p
+              class="mt-1.5 text-lg font-black leading-tight"
+              :class="hasRegTime ? 'text-slate-800 dark:text-slate-100' : 'text-slate-500 dark:text-slate-400'"
+            >
+              {{ hasRegTime ? regTimeText : '暂未收录' }}
+            </p>
+          </div>
+
+          <div
+            class="rounded-2xl border border-slate-200/70 bg-white p-5 shadow-sm
+                   dark:border-slate-700 dark:bg-slate-800"
+          >
+            <span class="block h-1.5 w-8 rounded-full bg-sky-500"></span>
+            <p class="mt-3 text-xs font-bold tracking-wide text-slate-500 dark:text-slate-400">比赛时间</p>
+            <p
+              class="mt-1.5 text-lg font-black leading-tight"
+              :class="hasContestTime ? 'text-slate-800 dark:text-slate-100' : 'text-slate-500 dark:text-slate-400'"
+            >
+              {{ hasContestTime ? contestTimeText : '暂未收录' }}
+            </p>
+          </div>
+
+          <div
+            class="rounded-2xl border border-slate-200/70 bg-white p-5 shadow-sm
+                   dark:border-slate-700 dark:bg-slate-800"
+          >
+            <span class="block h-1.5 w-8 rounded-full bg-amber-500"></span>
+            <p class="mt-3 text-xs font-bold tracking-wide text-slate-500 dark:text-slate-400">赛事类别</p>
+            <p
+              class="mt-1.5 text-lg font-black leading-tight"
+              :class="detail.category ? 'text-slate-800 dark:text-slate-100' : 'text-slate-500 dark:text-slate-400'"
+            >
+              {{ detail.category || '暂未收录' }}
+            </p>
+          </div>
+        </section>
+
+        <!-- 4. 分块卡片：时间安排 / 赛事简介 / 参赛对象 / 内容范围 / 考试安排 -->
         <section class="mt-8">
           <div class="mb-4 flex flex-wrap items-end justify-between gap-3">
             <div>
@@ -536,13 +559,13 @@ const guideReady = computed(() => Boolean(detail.value?.full_process_guide))
             </a>
           </div>
 
-          <div class="grid gap-5 lg:grid-cols-2">
+          <div class="grid gap-5 lg:grid-cols-12">
             <!-- 时间安排 -->
             <article
               class="relative overflow-hidden rounded-3xl border border-blue-200/80 bg-gradient-to-br
                      from-blue-50/90 via-white to-sky-50/70 p-6 shadow-sm
                      dark:border-blue-400/20 dark:from-blue-500/[0.10] dark:via-slate-800 dark:to-sky-500/[0.06]
-                    "
+                     lg:col-span-7"
             >
               <div class="flex items-center gap-2">
                 <span class="h-4 w-[3px] rounded-full bg-blue-500" aria-hidden="true"></span>
@@ -641,7 +664,7 @@ const guideReady = computed(() => Boolean(detail.value?.full_process_guide))
             <!-- 赛事简介 -->
             <article
               class="rounded-3xl border border-slate-200/70 bg-white p-6 shadow-sm
-                     dark:border-slate-700 dark:bg-slate-800"
+                     dark:border-slate-700 dark:bg-slate-800 lg:col-span-5"
             >
               <div class="flex items-center gap-2">
                 <span class="h-4 w-[3px] rounded-full bg-slate-400" aria-hidden="true"></span>
@@ -673,7 +696,7 @@ const guideReady = computed(() => Boolean(detail.value?.full_process_guide))
             <article
               class="rounded-3xl border border-teal-200/80 bg-gradient-to-br from-teal-50/90 via-white
                      to-emerald-50/60 p-5 shadow-sm dark:border-teal-400/20 dark:from-teal-500/[0.09]
-                     dark:via-slate-800 dark:to-emerald-500/[0.05]"
+                     dark:via-slate-800 dark:to-emerald-500/[0.05] lg:col-span-4"
             >
               <div class="flex items-center gap-2">
                 <span class="h-4 w-[3px] rounded-full bg-teal-500" aria-hidden="true"></span>
@@ -716,7 +739,7 @@ const guideReady = computed(() => Boolean(detail.value?.full_process_guide))
             <article
               class="rounded-3xl border border-amber-200/80 bg-gradient-to-br from-amber-50/90 via-white
                      to-orange-50/60 p-5 shadow-sm dark:border-amber-400/20 dark:from-amber-500/[0.09]
-                     dark:via-slate-800 dark:to-orange-500/[0.05]"
+                     dark:via-slate-800 dark:to-orange-500/[0.05] lg:col-span-4"
             >
               <div class="flex items-center gap-2">
                 <span class="h-4 w-[3px] rounded-full bg-amber-500" aria-hidden="true"></span>
@@ -759,7 +782,7 @@ const guideReady = computed(() => Boolean(detail.value?.full_process_guide))
             <article
               class="rounded-3xl border border-violet-200/80 bg-gradient-to-br from-violet-50/90 via-white
                      to-fuchsia-50/60 p-5 shadow-sm dark:border-violet-400/20 dark:from-violet-500/[0.09]
-                     dark:via-slate-800 dark:to-fuchsia-500/[0.05] lg:col-span-2"
+                     dark:via-slate-800 dark:to-fuchsia-500/[0.05] lg:col-span-4"
             >
               <div class="flex items-center gap-2">
                 <span class="h-4 w-[3px] rounded-full bg-violet-500" aria-hidden="true"></span>
@@ -945,81 +968,7 @@ const guideReady = computed(() => Boolean(detail.value?.full_process_guide))
             </div>
           </div>
         </section>
-          </div>
-
-          <!-- 右侧档案栏：桌面端粘性跟随，移动端排在标题下方 -->
-          <aside class="min-w-0 lg:sticky lg:top-24">
-            <div class="rounded-2xl border border-slate-200/70 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
-              <div class="flex items-baseline justify-between gap-2 border-b border-slate-200 pb-3 dark:border-slate-700">
-                <h2 class="text-[11.5px] font-bold uppercase tracking-[0.16em] text-slate-400 dark:text-slate-500">
-                  赛事档案 · DOSSIER
-                </h2>
-                <span v-if="statusBadge" class="shrink-0 text-[11.5px] font-bold" :class="statusToneClass">
-                  {{ statusBadge.text }}
-                </span>
-              </div>
-
-              <dl class="divide-y divide-slate-100 dark:divide-slate-700/70">
-                <div class="py-3.5">
-                  <dt class="text-[11px] font-bold tracking-wide text-slate-400 dark:text-slate-500">报名时间</dt>
-                  <dd
-                    class="mt-1 leading-snug"
-                    :class="hasRegTime
-                      ? 'text-[15px] font-black text-slate-800 dark:text-slate-100'
-                      : 'text-[13.5px] font-semibold text-slate-400 dark:text-slate-500'"
-                  >
-                    {{ hasRegTime ? regTimeText : '暂未收录' }}
-                  </dd>
-                </div>
-                <div class="py-3.5">
-                  <dt class="text-[11px] font-bold tracking-wide text-slate-400 dark:text-slate-500">比赛时间</dt>
-                  <dd
-                    class="mt-1 leading-snug"
-                    :class="hasContestTime
-                      ? 'text-[15px] font-black text-slate-800 dark:text-slate-100'
-                      : 'text-[13.5px] font-semibold text-slate-400 dark:text-slate-500'"
-                  >
-                    {{ hasContestTime ? contestTimeText : '暂未收录' }}
-                  </dd>
-                </div>
-                <div class="py-3.5">
-                  <dt class="text-[11px] font-bold tracking-wide text-slate-400 dark:text-slate-500">赛事类别</dt>
-                  <dd
-                    class="mt-1 leading-snug"
-                    :class="detail.category
-                      ? 'text-[15px] font-black text-slate-800 dark:text-slate-100'
-                      : 'text-[13.5px] font-semibold text-slate-400 dark:text-slate-500'"
-                  >
-                    {{ detail.category || '暂未收录' }}
-                  </dd>
-                </div>
-              </dl>
-
-              <a
-                v-if="officialIsReal"
-                :href="officialUrl"
-                target="_blank"
-                rel="noopener noreferrer"
-                class="mt-1 flex items-center justify-between gap-2 rounded-xl border border-slate-200 px-3.5 py-2.5
-                       text-[12.5px] font-bold text-slate-600 transition-colors
-                       hover:border-slate-300 hover:text-slate-900
-                       dark:border-slate-700 dark:text-slate-300 dark:hover:text-white"
-              >
-                <span class="truncate">官网 {{ officialHost }}</span>
-                <span aria-hidden="true">↗</span>
-              </a>
-
-              <a
-                href="#guide"
-                class="mt-3 flex w-full items-center justify-center gap-1.5 rounded-xl bg-slate-900 px-4 py-3
-                       text-[13.5px] font-bold text-white transition-colors
-                       hover:bg-slate-800 dark:bg-white dark:text-slate-900 dark:hover:bg-slate-100"
-              >
-                查看 AI 全流程攻略
-              </a>
-            </div>
-          </aside>
-        </div>      </template>
+      </template>
     </main>
   </div>
 </template>
