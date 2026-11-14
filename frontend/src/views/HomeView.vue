@@ -5,7 +5,7 @@ import CompetitionCard from '@/components/CompetitionCard.vue'
 import CoverArt from '@/components/CoverArt.vue'
 import BackToTop from '@/components/BackToTop.vue'
 import { useRoute, useRouter } from 'vue-router'
-import { getHotCompetitions, searchCompetitions, checkPrepared } from '@/services/api'
+import { getCompetitions, getHotCompetitions, searchCompetitions, checkPrepared } from '@/services/api'
 import { authState } from '@/services/auth'
 import { theme } from '@/composables/useTheme'
 
@@ -14,6 +14,8 @@ const route = useRoute()
 const router = useRouter()
 
 const competitions = ref([])
+// 收录总数：数据条上写「已收录竞赛 N 项」，数字来自后端全量列表，不写死
+const totalCount = ref(0)
 const loading = ref(true)
 const errorMsg = ref('')
 
@@ -168,7 +170,18 @@ function bumpListAnimation() {
   listAnimKey.value += 1
 }
 
+/** 统计已收录竞赛条数（全量列表长度，失败则保持 0 由模板降级显示） */
+async function loadTotalCount() {
+  try {
+    const all = await getCompetitions()
+    totalCount.value = Array.isArray(all) ? all.length : 0
+  } catch {
+    totalCount.value = 0
+  }
+}
+
 onMounted(() => {
+  loadTotalCount()
   // 双 rAF：确保首帧已经绘制出「位移 + 透明」的初始态，
   // 下一帧再切到终态，过渡才会真正发生（单帧内改值可能被浏览器合并而跳过动画）
   requestAnimationFrame(() => {
@@ -591,8 +604,8 @@ watch(
           :style="{ animationDelay: '320ms' }"
         >
           <div class="stat-strip__item">
-            <span class="stat-strip__num">4<small>类</small></span>
-            <span class="stat-strip__label">学科门类</span>
+            <span class="stat-strip__num">{{ totalCount || '—' }}<small>项</small></span>
+            <span class="stat-strip__label">已收录竞赛</span>
           </div>
           <div class="stat-strip__item">
             <span class="stat-strip__num">AI</span>
