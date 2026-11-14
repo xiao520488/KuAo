@@ -1416,3 +1416,75 @@ scp .\workspace\competitions-upload.db kuao@112.126.90.252:/tmp/competitions-upl
 | cron 生效时间 | |
 | 首次验收人 | |
 | 回滚 commit / 备份 | |
+
+---
+
+## 附录 F：2026-11-14 实际上云记录（`/root/KuAo` + `/var/www/html`）
+
+本附录记录**当前真实拓扑**，与上文 `/opt/kuao` + `kuao` 用户的旧方案不同，以本附录为准。
+
+| 项 | 实际值 |
+|---|---|
+| 服务器 / 用户 | 阿里云 Ubuntu `112.126.90.252` / **root** |
+| 代码仓库 | `/root/KuAo`（systemd 服务名 `kuao-backend.service`） |
+| 后端 / venv | `/root/KuAo/backend`、`/root/KuAo/backend/venv` |
+| 生产库 | `/root/KuAo/backend/competitions.db`（本次后 **13 MB**） |
+| Nginx 静态根 | **`/var/www/html`**（**不是** `frontend/dist`） |
+| 备份 | `/root/KuAo/backend/backups/`、`*.bak-pre-ncss-*` |
+
+### F.1 两个必须记住的坑
+
+1. **前端产物要铺到 `/var/www/html`**：`/root/KuAo/frontend/dist` 只是构建目录，nginx 读的是
+   `/var/www/html`。只换 dist 不 `cp`，线上仍是旧包（表现为 `index.html` 引用的 `index-*.js` 哈希没变）。
+   ```bash
+   cp -r /root/KuAo/frontend/dist/. /var/www/html/
+   chmod -R a+rX /var/www/html && nginx -t && systemctl reload nginx
+   ```
+   自检：`curl -s http://127.0.0.1/ | grep -o '/assets/[^"]*' | head -2` 必须出现本次构建的哈希。
+2. **服务器没有 `unzip`，且 Windows `Compress-Archive` 的包会解错**：
+   Compress-Archive 的条目用 `\` 作分隔符，Linux 解出来是 `assets\index-xxx.js` 这种**扁平文件名**
+   （`assets` 不是目录），页面引用 `/assets/...` 全部 404 → 白屏。
+   正确做法：**本地用 Python `zipfile` 以 `/` 归档 → 服务器用 Python `extractall`**，或先
+   `apt install unzip -y` 再用 `unzip`（`unzip` 能处理 `/` 的包，处理不了 `\` 的包）。
+
+### F.2 本次发布顺序（可复用模板）
+
+```bash
+# 服务器：停服 + 备份 + 拉代码
+cd /root/KuAo && systemctl stop kuao-backend
+git pull origin master && git log --oneline -2
+cd backend && cp competitions.db "competitions.db.bak-pre-$(date +%m%d-%H%M)"
+
+# 补列（只加列，不动数据）
+./venv/bin/python migrate_production.py --db-path competitions.db
+./venv/bin/python migrate_production.py --db-path competitions.db --apply
+
+# 同步业务表（只增不删；users / ai_usage / feedbacks 等受保护表不碰）
+./venv/bin/python sync_prod_safe.py --source snapshots/snapshot-<TS>.db --target competitions.db
+./venv/bin/python sync_prod_safe.py --source snapshots/snapshot-<TS>.db --target competitions.db --apply
+
+systemctl start kuao-backend && sleep 3 && systemctl is-active kuao-backend
+
+# 前端：解压到临时目录 → 校验 assets 是目录 → 铺到真实根
+cd /root/KuAo/frontend && rm -rf dist-new && mkdir -p dist-new
+/root/KuAo/backend/venv/bin/python -c "import zipfile;zipfile.ZipFile('/tmp/dist.zip').extractall('/root/KuAo/frontend/dist-new')"
+ls dist-new/assets | head -3
+cp -r dist-new/. /var/www/html/ && chmod -R a+rX /var/www/html
+nginx -t && systemctl reload nginx
+```
+
+### F.3 本次结果
+
+| 指标 | 值 |
+|---|---|
+| 发布 commit | `d429e08` |
+| `awards` 总行数 | **14,248**（大创 14,178：2025/2024/2023 = 5221/4637/4320） |
+| `GET /api/competitions/1/awards?limit=1` | `total: 14178` |
+| `offset=14160` | 返回 18 条 |
+| DB 体积 | 624 KB → **13 MB** |
+| 受保护表 | 行数指纹未变（users=7, ai_usage=7, feedbacks=3, ideas=20, insights=15, ai_jobs=20） |
+
+### F.4 建议（未执行，低风险）
+
+把 nginx 的 `root /var/www/html;` 改成 `root /root/KuAo/frontend/dist;`，以后只换 dist 目录、不再 `cp`，
+回滚只需改回一行。改前务必 `cp -a /etc/nginx/sites-available/kuao{,.bak}`。
