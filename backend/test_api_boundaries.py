@@ -474,6 +474,50 @@ class CompetitionBoundaryTest(_TempDBTestCase):
             self.client.get("/api/competitions/abc").status_code, 422
         )
 
+    def test_algorithm_only_competition_returns_empty_awards(self) -> None:
+        """纯算法/知识类赛事（has_project_awards=0）：awards 接口直接返回空，不查库。"""
+        algo_id = db.add_competition(
+            {
+                "name": "纯算法边界测试赛",
+                "category": "程序设计",
+                "official_url": "https://example.com/algo-only",
+            }
+        )
+        project_id = db.add_competition(
+            {
+                "name": "作品类边界测试赛",
+                "category": "设计",
+                "official_url": "https://example.com/project",
+            }
+        )
+        for cid, title in (
+            (algo_id, "张三（C/C++程序设计大学A组）"),
+            (project_id, "某智能监测系统"),
+        ):
+            db.create_award({"competition_id": cid, "title": title, "year": 2026})
+
+        with db.get_conn() as conn:
+            conn.execute(
+                "UPDATE competitions SET has_project_awards = 0 WHERE id = ?", (algo_id,)
+            )
+
+        algo_resp = self.client.get(f"/api/competitions/{algo_id}/awards")
+        self.assertEqual(algo_resp.status_code, 200)
+        self.assertEqual(algo_resp.json()["total"], 0)
+        self.assertEqual(algo_resp.json()["items"], [])
+
+        # 回归对照：作品类赛事照常返回数据
+        project_resp = self.client.get(f"/api/competitions/{project_id}/awards")
+        self.assertEqual(project_resp.status_code, 200)
+        self.assertEqual(project_resp.json()["total"], 1)
+
+        # 接口只负责不返回，物理清除由 cleanup_algorithm_only_awards.py 负责
+        with db.get_conn() as conn:
+            left = conn.execute(
+                "SELECT COUNT(*) FROM awards WHERE competition_id = ?", (algo_id,)
+            ).fetchone()[0]
+        self.assertEqual(left, 1)
+
     def test_month_query_boundaries(self) -> None:
         for month in (0, 13, -1):
             response = self.client.get("/api/competitions", params={"month": month})

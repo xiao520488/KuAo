@@ -122,10 +122,11 @@ const tabs = [
 ]
 const activeTab = ref('ai')
 
-// 纯算法/知识类赛事只公示名单、没有项目作品：直接不展示「灵感工作台」Tab，
-// 避免入口亮着让人误以为还能生成灵感（后端同样会 400 拦截）。
+// 纯算法/知识类赛事（蓝桥杯、ACM-ICPC）只公示获奖名单、没有项目作品：
+// 「往年获奖作品」名单对刷题备赛毫无价值（用户要的是刷题路线与真题解析），
+// 「灵感工作台」也不做项目分析。因此只保留「AI备赛」一个 Tab，其余全部隐藏。
 const visibleTabs = computed(() => (
-  algorithmOnly.value ? tabs.filter((tab) => tab.key !== 'idea') : tabs
+  algorithmOnly.value ? tabs.filter((tab) => tab.key === 'ai') : tabs
 ))
 
 /* =========================================================
@@ -1913,7 +1914,7 @@ onBeforeUnmount(() => {
             {{ competition.title || '该赛事' }} · {{ algorithmOnly ? '算法竞技赛事' : '专属灵感工作台' }}
           </p>
           <p v-if="algorithmOnly" class="mt-1 text-xs font-medium text-blue-700/70">
-            该赛事只公示获奖名单、没有项目作品，平台不做项目灵感分析；下方保留历年获奖名单可查，备赛请直接进入算法刷题训练。
+            该赛事只公示个人获奖名单、没有项目作品，平台不做作品与灵感分析；备赛请直接使用「AI备赛」生成刷题路线。
           </p>
           <p v-else class="mt-1 text-xs font-medium text-blue-700/70">
             只展示当前赛事真实获奖作品生成的洞察与选题；切换赛事不会混入其它比赛的数据。
@@ -2034,12 +2035,9 @@ onBeforeUnmount(() => {
               d="M16 18l6-6-6-6M8 6l-6 6 6 6M14.5 4l-5 16" />
           </svg>
         </div>
-        <h3 class="mt-4 text-base font-bold text-slate-900 dark:text-slate-100">算法竞技赛事，无需项目灵感分析</h3>
+        <h3 class="mt-4 text-base font-bold text-slate-900 dark:text-slate-100">算法竞技赛事，无需作品与灵感分析</h3>
         <p class="mt-2 max-w-xl text-sm leading-6 text-slate-500 dark:text-slate-400">
-          该赛事为算法竞技类，主要考察编程基本功与算法能力。平台已为您收录历年获奖名单（证明赛事含金量），建议直接进行算法刷题训练，无需进行项目灵感分析。
-        </p>
-        <p v-if="awardsCount > 0" class="mt-3 text-xs font-medium text-slate-400 dark:text-slate-500">
-          已收录 {{ awardsCount }} 条历年获奖记录，可在「往年获奖作品」中查看。
+          该赛事为算法竞技类，考察编程基本功与算法能力，只公示个人获奖名单、没有项目作品。平台不做作品与灵感分析，请直接使用「AI备赛」生成刷题路线图。
         </p>
       </div>
 

@@ -53,6 +53,23 @@
 | 11-09 | 管理后台、双轨制日期、两字简称、批量审核 |
 | 11-10 | 修「审核通过即空壳」：通过后自动补简称 + 赛氪详情/日期/封面；晚间再修名录匹配：名称 → 赛氪本地索引（`saikr_match.py`），清理 5 条空壳，详情页隐藏名录目录链接 |
 
+### 0.6 已废弃：纯算法赛个人获奖名单（勿再抓，2026-11-14 决策）
+
+> 蓝桥杯、ACM-ICPC、百度之星这类**算法竞技赛**只公示「姓名（C/C++程序设计大学A组）」式个人名单，
+> 没有项目作品，对备赛（刷题路线、真题解析）没有业务价值。名单留下来只占空间、干扰 AI 结论。
+
+- **代码作废**：`crawler_official_awards.py` 中所有蓝桥杯相关解析（`LANQIAO_*` 常量、`lanqiao_list_news`、
+  `lanqiao_detail`、名单表格解析、`crawl_lanqiao`）自即日起**不再使用**。脚本内置 `LANQIAO_DEPRECATED = True`，
+  运行会打印 `[废弃]` 并直接返回空列表，**不会写库**。以后不要再抓任何纯算法赛的个人名单。
+- **平台口径**：`competitions.has_project_awards = 0` 的赛事，工作台只保留「AI备赛」一个 Tab
+  （「往年获奖作品」「灵感工作台」全部隐藏）；`GET /api/competitions/{id}/awards` 直接返回空列表，不查库。
+- **数据清理**：库内 13,620 条蓝桥杯名单已于 2026-11-14 物理删除，
+  命令 `python cleanup_algorithm_only_awards.py --all-awards --apply`（自动备份 + VACUUM），
+  `competitions.db` 由 **9.48 MB 缩到 0.59 MB**（释放 8.89 MB / 93.8%），`integrity_check = ok`。
+- **误删恢复**：全量行导出在 `workspace/deleted-algo-awards-<时间戳>.json|csv`，整库备份在
+  `competitions.db.bak-cleanup-<时间戳>`。要恢复必须先改 `LANQIAO_DEPRECATED`，否则下次清理又会被删。
+- **智能体口径**：算法赛的 AI 产出只走 `ALGO_PLAN_SYSTEM_PROMPT`（刷题路线图），不再生成项目灵感/选题趋势。
+
 ---
 ## 一、架构、数据契约与文件清单
 ### 1.1 三条数据流

@@ -58,6 +58,23 @@ LANQIAO_COMPETITION_HINTS = {
     "provincial": "“蓝桥杯”全国软件大赛·省赛",
 }
 
+# ---------------------------------------------------------------------------
+# 【已废弃 2026-11-14】蓝桥杯个人获奖名单抓取
+#
+# 蓝桥杯是纯算法竞技赛，官网只公示「姓名（组别）」式个人名单，没有项目作品。
+# 这些名单对备赛（刷题路线、真题解析）没有业务价值，平台也不再展示
+# （competitions.has_project_awards = 0 时隐藏「往年获奖作品」「灵感工作台」，
+#  /api/competitions/{id}/awards 直接返回空）。
+#
+# 因此本文件中 lanqiao_* 相关解析逻辑整体作废：保留代码只是为了留档与万一
+# 需要回溯抓取规则，正常运行一律直接退出，不再写库。详见 CRAWLER_HANDOVER.md §0.6。
+# ---------------------------------------------------------------------------
+LANQIAO_DEPRECATED = True
+LANQIAO_DEPRECATED_REASON = (
+    "蓝桥杯等纯算法赛只公示个人获奖名单、无项目作品，名单对备赛无价值；"
+    "该抓取逻辑已于 2026-11-14 废弃，库内历史名单亦已物理删除。"
+)
+
 AWARD_GRADES = ("特等奖", "一等奖", "二等奖", "三等奖", "优秀奖", "优胜奖", "金奖", "银奖", "铜奖")
 SCHOOL_HINTS = ("大学", "学院", "学校", "职院", "中学", "研究院", "职业技术", "分校")
 CN_DIGITS = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
@@ -547,6 +564,11 @@ def keep_news(title: str) -> bool:
 
 def crawl_lanqiao(args) -> list[dict]:
     import sqlite3
+
+    if LANQIAO_DEPRECATED:
+        log(f"[废弃] 蓝桥杯个人名单抓取已停用：{LANQIAO_DEPRECATED_REASON}")
+        log("[废弃] 如需重启，请先修改 crawler_official_awards.py 的 LANQIAO_DEPRECATED，并同步更新 CRAWLER_HANDOVER.md")
+        return []
 
     session = make_session()
     CACHE_DIR.mkdir(parents=True, exist_ok=True)

@@ -462,7 +462,8 @@ def _row_to_award(row: Dict[str, Any]) -> Award:
     summary="获取某竞赛的获奖作品列表",
     description=(
         "按竞赛 ID 返回数据库中的真实获奖作品（Tab 2 往年获奖作品数据源）。"
-        "已排除被拒绝的脏数据。"
+        "已排除被拒绝的脏数据。纯算法/知识类赛事（has_project_awards=false，如蓝桥杯、"
+        "ACM-ICPC）只公示个人获奖名单、没有项目作品，名单对备赛无价值，直接返回空列表。"
     ),
     responses={404: {"description": "竞赛不存在"}},
 )
@@ -471,8 +472,14 @@ def list_competition_awards(
     limit: int = Query(20, ge=1, le=100, description="最多返回条数"),
 ) -> AwardList:
     """获取指定竞赛的获奖作品列表。"""
-    if db_get_competition(id) is None:
+    comp = db_get_competition(id)
+    if comp is None:
         raise HTTPException(status_code=404, detail=f"竞赛 ID={id} 不存在")
+
+    # 纯算法/知识类赛事：获奖公示只有个人名单，没有可分析的项目作品。
+    # 直接返回空，不查 awards 表（这类赛事的数据也已在库中物理清除）。
+    if not comp.get("has_project_awards", 1):
+        return AwardList(competition_id=id, total=0, items=[])
 
     rows = db_list_awards_by_competition(id, limit=limit)
     items = [_row_to_award(r) for r in rows]
