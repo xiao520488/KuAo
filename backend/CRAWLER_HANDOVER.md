@@ -1207,3 +1207,68 @@ backend\venv\Scripts\python.exe backend\backfill_stage_schedule.py --apply --all
 2. `stage_schedule.span_excluded()`：顶部总跨度排除 报名/备案/申请/审核/公示/证书/颁发（阶段名或 note 命中即排除），
    三创赛顶部由「2025-10-20 – 2026-08-10」纠正为「2026-03-11 – 2026-08-10」。
 3. 存量回填：`enrich_saikr_details.py --ids <38 条全空赛事>` + `backfill_stage_schedule.py --ids <12 条有考试无阶段>`。
+
+### 13.8 特批赛事接入：「金种子杯」（湖南省赛，2026-11-14）
+
+**为什么特批**：它不在教育部 84 项目录（是省级赛），但用户要长期跟踪、且有自己的参赛项目。
+直接进库会被 `cleanup_non_core_races.py` 判成「省/区域赛→转占位」或「非白名单→删」。
+
+**白名单改造（`competition_whitelist.py`）**
+
+| 新增 | 作用 |
+|---|---|
+| `SPECIAL_APPROVED` | 特批赛事元组 `(名称, 官网)`，当前 1 项：湖南省“金种子杯”大学生创业大赛 |
+| `SPECIAL_ALIASES` | 允许「金种子杯」「湖南省金种子杯大学生创业投资大赛」等简称命中 |
+| `match_special()` / `is_special()` | 归一化后 longest-match，返回官方名 |
+| `gate()` | **先查特批**再查省级/84 项，命中返回 `(True, '特批：…')` |
+| `cleanup_non_core_races.py` | `classify()` 增加首个分支：特批 → `keep`，不再降级/删除 |
+
+**赛事事实**
+
+| 项 | 值 |
+|---|---|
+| 主办 | 湖南省人民政府（省教育厅代章组委会） |
+| 定位 | 省级，创业类，湖南支持大学生创业「七个一」行动核心赛事 |
+| 届次 | 2025 首届（传统/优势/新兴/未来产业 4 赛道）；2026 第二届（6 主赛道 + AI 3D 专项赛 + 揭榜挂帅） |
+| 奖项规模 | 2025：金奖 16 / 银奖 32 / 铜奖 48 / 优胜奖 63 = **159**；2026：20 / 39 / 58 / 88 = **205** |
+| 关键日期 | 2025 报名 3-12 起、决赛 5-23~24、颁奖 5-25；2026 报名 2025-09 起、决赛 2026-05-15~16、公示 06-03、公布 07-08 |
+| 库内 id | **120**（`competitions`），`level=provincial`、`level_label=省级`、`category=创业`、`has_project_awards=1`、`is_active=1` |
+
+**数据源（都在 jyt.hunan.gov.cn / xsc.jyt.hunan.gov.cn）**
+
+| 届 | 文件 | CMS ID | 形态 |
+|---|---|---|---|
+| 2025 | 关于公布 2025 年获奖名单的通知 | 128694 | 1 个 PDF，31 页，4 赛道合订（表头：序号/参赛项目/名次/参赛队员/指导老师/所属学校） |
+| 2026 | 关于公布第二届获奖名单的通知（附件 1—7） | 131085–131091 | 每赛道 1 个 PDF；131092 是优秀组织奖（已跳过） |
+
+下载地址模板：`https://cms.jyt.hunan.gov.cn/zcms/contentcore/resource/download?ID=<ID>`。
+注意 `www.hunan.gov.cn` 的 TLS 会报 `BAD_ECPOINT`，改走教育局镜像即可；`xsc.hnedu.gov.cn` 证书域名不匹配，需 `verify=False`。
+
+**适配器（`crawler_official_awards.py`，`--source jzz`）**
+
+```bash
+# 1) 赛事入库（幂等：存在则更新关键字段）
+venv\Scripts\python.exe seed_jzz_competition.py            # dry-run
+venv\Scripts\python.exe seed_jzz_competition.py --apply
+
+# 2) 抓奖（默认 dry-run）
+venv\Scripts\python.exe crawler_official_awards.py --source jzz --print-rows 3
+venv\Scripts\python.exe crawler_official_awards.py --source jzz --year 2025      # 只抓某一届
+venv\Scripts\python.exe crawler_official_awards.py --source jzz --apply          # 真写库
+```
+
+字段映射：`参赛项目→title`、`名次→award_grade`、`参赛队员→负责人+成员数（写进 summary）`、
+`指导老师→advisor`、`所属学校→team`、`赛道→track`、`year/session` 按届次。
+
+**踩过的三个坑**
+
+1. **PDF 文本层英文无空格**：`SiC High-Temp Ion Implantation Equipment R&D & Industrialization` 被抽成
+   `SiCHigh-TempIonImplantation…`。用 `_jzz_latin_split()` 按大小写边界（`a-z→[A-Z][a-z]`、`[A-Z]→[A-Z][a-z]`、
+   `[a-z]→[A-Z]&`）补空格，再统一 `&` 两侧空格。
+2. **单赛道 PDF 别开页内识别**：AI 3D 专项赛的页眉里出现「新消费」字样，按页识别会把 5 行错记到
+   「新消费与AI+文化科技赛道」。改为：文件名已定赛道时 `default_track` 优先，只有 2025 的合订本才逐页识别。
+3. **重抓会重复**：`content_hash` 用了 `(comp, session, year, school, title, track, grade)`，改赛道/标题后
+   旧行不会自动消失，需先 `delete from awards where competition_id=120` 再整轮重抓（本轮共重抓 5 次才定稿）。
+
+**结果**：`awards` 364 行（2025 159 + 2026 205），`/api/competitions/120/awards` 返回 `total=364`、
+`offset=340` 取到 20 条；全库 awards 14,612。

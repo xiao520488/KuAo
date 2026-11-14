@@ -231,6 +231,50 @@ _INDEX = _build_index()
 _BY_INDEX = {idx: (idx, name, url) for idx, name, url in WHITELIST}
 
 
+# ---------------------------------------------------------------- 特批赛事
+# 不在教育部 84 项目录里、但经产品确认要长期保留并抓取获奖名单的赛事。
+# 命中后 gate() 直接放行，cleanup_non_core_races.py 视为「核心保留」，
+# 不再因为「省级」或「非 84 项」被降级成占位/删除。
+# 加新赛事只需在下面追加一行（名称 + 官网），必要时补 SPECIAL_ALIASES。
+SPECIAL_APPROVED: tuple[tuple[str, str], ...] = (
+    (
+        "湖南省“金种子杯”大学生创业大赛",
+        "https://jyt.hunan.gov.cn/sjyt/xxgk/tzgg/202510/t20251014_1167745.html",
+    ),
+)
+
+SPECIAL_ALIASES: dict[str, tuple[str, ...]] = {
+    "湖南省“金种子杯”大学生创业大赛": ("金种子杯", "金种子杯大学生创业大赛", "湖南省金种子杯大学生创业投资大赛"),
+}
+
+_SPECIAL: tuple[tuple[str, str, str], ...] = tuple(
+    (name, url, key)
+    for name, url in SPECIAL_APPROVED
+    for key in [normalize(_base_name(name))]
+    + [normalize(a) for a in SPECIAL_ALIASES.get(name, ())]
+    if len(key) >= 3
+)
+
+
+def match_special(name: str):
+    """特批赛事匹配：返回 {"name","url","matched"}，未命中返回 None。"""
+    norm = normalize(name)
+    if not norm:
+        return None
+    best = None
+    for spec_name, url, key in _SPECIAL:
+        if key in norm or (len(norm) >= 4 and norm in key):
+            if best is None or len(key) > best[0]:
+                best = (len(key), spec_name, url, key)
+    if best is None:
+        return None
+    return {"name": best[1], "url": best[2], "matched": best[3]}
+
+
+def is_special(name: str) -> bool:
+    return match_special(name) is not None
+
+
 def match(name: str):
     """返回命中的白名单条目 dict（index/name/url/matched），未命中返回 None。
 
@@ -278,10 +322,14 @@ def gate(name: str) -> tuple[bool, str]:
     """入库闸门（候选/主表统一口径）。
 
     返回 (allowed, reason)：
+      * 特批赛事    -> True（"特批：名称"）
       * 省级/区域赛 -> False（"省级/区域赛事"）
       * 不在 84 项   -> False（"不在教育部 84 项白名单"）
       * 命中          -> True（"#序号 官方名"）
     """
+    spec = match_special(name)
+    if spec is not None:
+        return True, "特批：%s" % spec["name"]
     hit = match(name)
     if is_provincial(name):
         return False, "省级/区域赛事（非 84 项国家级核心赛）"
@@ -291,7 +339,11 @@ def gate(name: str) -> tuple[bool, str]:
 
 
 def summary() -> str:
-    return "白名单 %d 项（来源：%s）" % (len(WHITELIST), ROSTER_SOURCE)
+    extra = "，另特批 %d 项：%s" % (
+        len(SPECIAL_APPROVED),
+        "、".join(n for n, _ in SPECIAL_APPROVED),
+    ) if SPECIAL_APPROVED else ""
+    return "白名单 %d 项（来源：%s）%s" % (len(WHITELIST), ROSTER_SOURCE, extra)
 
 
 # ---------------------------------------------------------------- 学科分类

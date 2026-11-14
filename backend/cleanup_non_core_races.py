@@ -86,8 +86,11 @@ def classify(conn):
         dep_sum = sum(deps.values())
         provincial = whitelist.is_provincial(name)
         hit = whitelist.match(name)
+        special = whitelist.match_special(name)
 
-        if provincial and dep_sum == 0:
+        if special:
+            action, reason = "keep", "特批赛事，保留（%s）" % special["name"]
+        elif provincial and dep_sum == 0:
             action, reason = "delete", "省/区域赛且无关联数据"
         elif provincial:
             action, reason = "placeholder", "省/区域赛，有真实获奖→转占位"

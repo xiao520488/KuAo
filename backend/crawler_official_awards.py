@@ -1110,18 +1110,295 @@ def crawl_ncss(args) -> list[dict]:
     return all_rows
 
 
+# --------------------------------------------------------------------------- 金种子杯（湖南省赛，特批）
+JZZ_NAME = "湖南省“金种子杯”大学生创业大赛"
+JZZ_OFFICIAL_URL = "https://jyt.hunan.gov.cn/sjyt/xxgk/tzgg/202510/t20251014_1167745.html"
+JZZ_CMS = "https://cms.jyt.hunan.gov.cn/zcms/contentcore/resource/download?ID=%d"
+JZZ_GRADES = ("金奖", "银奖", "铜奖", "优胜奖")
+JZZ_EDITIONS: dict[int, dict] = {
+    2025: {
+        "session": "第1届",
+        "page": "https://xsc.jyt.hunan.gov.cn/c/2025-10-14/1167745.shtml",
+        "files": [
+            (128694, "2025年获奖名单（4 个赛道合订）"),
+        ],
+    },
+    2026: {
+        "session": "第2届",
+        "page": "https://xsc.jyt.hunan.gov.cn/c/2026-07-08/1180348.shtml",
+        "files": [
+            (131085, "先进制造与高端装备赛道"),
+            (131086, "人工智能与信息技术赛道"),
+            (131087, "新能源与新材料赛道"),
+            (131088, "空天海洋与低空经济赛道"),
+            (131089, "现代农业与大健康产业赛道"),
+            (131090, "新消费与AI+文化科技赛道"),
+            (131091, "AI 3D大模型应用专项赛"),
+            (131092, "优秀组织奖"),
+        ],
+    },
+}
+# (页内识别词, 规范赛道名)；顺序敏感，长词优先
+JZZ_TRACK_TOKENS: tuple[tuple[str, str], ...] = (
+    ("先进制造与高端装备", "先进制造与高端装备赛道"),
+    ("人工智能与信息技术", "人工智能与信息技术赛道"),
+    ("新能源与新材料", "新能源与新材料赛道"),
+    ("空天海洋与低空经济", "空天海洋与低空经济赛道"),
+    ("现代农业与大健康", "现代农业与大健康产业赛道"),
+    ("新消费", "新消费与AI+文化科技赛道"),
+    ("AI3D", "AI 3D大模型应用专项赛"),
+    ("传统产业", "传统产业赛道"),
+    ("优势产业", "优势产业赛道"),
+    ("新兴产业", "新兴产业赛道"),
+    ("未来产业", "未来产业赛道"),
+)
+JZZ_HEADER_FIELDS = ("序号", "参赛项目", "名次", "参赛队员", "指导老师", "所属学校")
+# 英文品牌名，拆分空格时先占位保护，避免被大小写规则切断
+JZZ_LATIN_KEEP = ("MetaSample",)
+
+
+def _jzz_clean(value: Any) -> str:
+    """压平单元格里的换行/全角空格；中英混排时按需补空格，避免把英文单词粘成一坨。"""
+    parts = [p.strip() for p in re.split(r"[\r\n\u3000]+", str(value or "")) if p.strip()]
+    if not parts:
+        return ""
+    out = parts[0]
+    for nxt in parts[1:]:
+        sep = " " if (out and nxt and out[-1].isascii() and out[-1].isalnum()
+                      and nxt[0].isascii() and nxt[0].isalnum()) else ""
+        out = out + sep + nxt
+    return re.sub(r"[ \t]{2,}", " ", out).strip()
+
+
+def _jzz_latin_split(title: str) -> str:
+    """PDF 文本层把英文单词的空格吞了（SiCHigh-TempIon…），按大小写边界补回来。"""
+    if not title:
+        return title
+
+    def fix(chunk: str) -> str:
+        if " " in chunk.strip() or len(re.findall(r"[A-Za-z]", chunk)) < 6:
+            return chunk
+        out = chunk
+        for i, token in enumerate(JZZ_LATIN_KEEP):
+            out = out.replace(token, "ZZ%dZZ" % i)
+        out = re.sub(r"(?<=[a-z0-9])(?=[A-Z][a-z])", " ", out)
+        out = re.sub(r"(?<=[A-Z])(?=[A-Z][a-z])", " ", out)
+        out = re.sub(r"(?<=[a-z])(?=[A-Z]&)", " ", out)
+        out = re.sub(r"(?<=[a-z])(?=\d)", " ", out)
+        out = re.sub(r"(?<=[:：])(?=[A-Z][a-z])", " ", out)
+        out = re.sub(r"\s*&\s*", " & ", out)
+        for i, token in enumerate(JZZ_LATIN_KEEP):
+            out = out.replace("ZZ%dZZ" % i, token)
+        return re.sub(r"(?<=[A-Za-z])(?=\d)", " ", out)
+
+    return re.sub(r"[ ]{2,}", " ", " ".join(fix(c) for c in title.split(" "))).strip()
+
+
+def _jzz_track_of(text: str, fallback: str = "") -> str:
+    flat = re.sub(r"[\s\u3000]+", "", text or "")
+    for token, name in JZZ_TRACK_TOKENS:
+        if token.upper() in flat.upper():
+            return name
+    return fallback
+
+
+def _jzz_header_map(cells: Sequence[str]) -> dict | None:
+    names = [_jzz_clean(c) for c in cells]
+    if not any(n in ("参赛项目", "项目名称") for n in names):
+        return None
+    mapping = {}
+    for i, name in enumerate(names):
+        if name in ("参赛项目", "项目名称"):
+            mapping["title"] = i
+        elif name in ("名次", "奖项"):
+            mapping["grade"] = i
+        elif name in ("参赛队员", "项目负责人", "团队成员"):
+            mapping["members"] = i
+        elif name in ("指导老师", "指导教师"):
+            mapping["advisor"] = i
+        elif name in ("所属学校", "学校", "单位"):
+            mapping["school"] = i
+    return mapping if {"title", "grade"} <= set(mapping) else None
+
+
+def jzz_pdf_rows(
+    pdf_path: Path,
+    *,
+    default_track: str = "",
+    stats: dict | None = None,
+) -> Iterator[dict]:
+    """逐页抽表：序号/参赛项目/名次/参赛队员/指导老师/所属学校。"""
+    import pdfplumber
+
+    stats = stats if stats is not None else {}
+    track = default_track
+    with pdfplumber.open(str(pdf_path)) as doc:
+        for page_no, page in enumerate(doc.pages, start=1):
+            try:
+                text = page.extract_text() or ""
+            except Exception:  # noqa: BLE001
+                text = ""
+            if default_track:
+                track = default_track        # 单赛道 PDF：文件名已定赛道，别被页内无关词带偏
+            else:
+                found = _jzz_track_of(text)  # 合订本 PDF：按页识别赛道
+                if found:
+                    track = found
+            mapping = None
+            for table in page.extract_tables() or []:
+                for cells in table:
+                    header = _jzz_header_map(cells)
+                    if header:
+                        mapping = header
+                        continue
+                    if not mapping:
+                        continue
+                    cells = list(cells)
+
+                    def get(key, _cells=cells, _mapping=mapping):
+                        idx = _mapping.get(key)
+                        return _jzz_clean(_cells[idx]) if idx is not None and idx < len(_cells) else ""
+
+                    title, grade = get("title"), get("grade")
+                    if not title or grade not in JZZ_GRADES:
+                        stats["dropped"] = stats.get("dropped", 0) + 1
+                        continue
+                    advisor = get("advisor")
+                    yield {
+                        "title": title,
+                        "grade": grade,
+                        "members": get("members"),
+                        "advisor": "" if advisor in ("/", "无") else advisor,
+                        "school": get("school"),
+                        "track": track or default_track,
+                        "page": page_no,
+                    }
+
+
+def resolve_jzz_competition(con) -> dict | None:
+    row = con.execute(
+        "select id, name, category from competitions where name = ?", (JZZ_NAME,)
+    ).fetchone()
+    if row:
+        return dict(row)
+    row = con.execute(
+        "select id, name, category from competitions where name like ? order by id", ("%金种子杯%",)
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def build_jzz_awards(
+    pdf_path: Path,
+    *,
+    competition: dict,
+    year: int,
+    session_label: str,
+    source_url: str,
+    default_track: str = "",
+    stats: dict | None = None,
+) -> list[dict]:
+    rows: list[dict] = []
+    for row in jzz_pdf_rows(pdf_path, default_track=default_track, stats=stats):
+        members = [m for m in re.split(r"[，,、；;]", row["members"]) if m]
+        leader = members[0] if members else ""
+        track = row["track"] or default_track or "综合"
+        summary = f"赛道：{track}；负责人：{leader or '—'}；成员：{max(len(members) - 1, 0)} 人"
+        if row["advisor"]:
+            summary += f"；指导老师：{row['advisor']}"
+        rows.append(
+            {
+                "competition_id": competition["id"],
+                "competition_raw": competition["name"],
+                "category": competition.get("category") or "创业",
+                "level": "provincial",
+                "award_level": "省级",
+                "year": year,
+                "session": session_label,
+                "title": _jzz_latin_split(row["title"]),
+                "team": row["school"] or "",
+                "award_grade": row["grade"],
+                "track": track,
+                "summary": summary,
+                "advisor": row["advisor"] or None,
+                "source_url": source_url,
+                "source_type": "crawl",
+                "confidence": 1.0,
+                "review_status": "approved",
+                "content_hash": digest(
+                    competition["id"], session_label, year, row["school"], row["title"], track, row["grade"]
+                ),
+            }
+        )
+    return rows
+
+
+def crawl_jzz(args) -> list[dict]:
+    import sqlite3
+
+    session = make_session()
+    cache_dir = CACHE_DIR / "jzz"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    con = sqlite3.connect(DB_PATH)
+    con.row_factory = sqlite3.Row
+    competition = resolve_jzz_competition(con)
+    if not competition:
+        log(f"[金种子杯] 库里找不到「{JZZ_NAME}」，先跑 seed_jzz_competition.py")
+        con.close()
+        return []
+    log(f"[金种子杯] 目标赛事 id={competition['id']} {competition['name']}")
+
+    years = sorted(JZZ_EDITIONS, reverse=True)
+    if args.year:
+        years = [y for y in years if y == args.year]
+    if args.limit_years:
+        years = years[: args.limit_years]
+
+    all_rows: list[dict] = []
+    for year in years:
+        edition = JZZ_EDITIONS[year]
+        session_label = edition["session"]
+        files = edition["files"]
+        if args.max_files:
+            files = files[: args.max_files]
+        if args.list_only:
+            for fid, hint in files:
+                log(f"  {year} {session_label} | {hint} | {JZZ_CMS % fid}")
+            continue
+        for fid, hint in files:
+            if "优秀组织奖" in hint:  # 组织奖不是项目奖
+                continue
+            url = JZZ_CMS % fid
+            dest = cache_dir / f"{year}-{fid}.pdf"
+            stats: dict = {}
+            if not dest.exists() or dest.stat().st_size < 1024:
+                download_file(session, url, dest)
+            rows = build_jzz_awards(
+                dest,
+                competition=competition,
+                year=year,
+                session_label=session_label,
+                source_url=edition["page"],
+                default_track=hint if hint.endswith(("赛道", "专项赛")) else "",
+                stats=stats,
+            )
+            log(f"  {year} {session_label} | {hint} -> {len(rows)} 条（丢弃 {stats.get('dropped', 0)} 行）")
+            all_rows.extend(rows)
+    con.close()
+    return all_rows
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     try:
         sys.stdout.reconfigure(encoding="utf-8")
     except Exception:  # noqa: BLE001
         pass
 
-    parser = argparse.ArgumentParser(description="官网获奖名单定向爬虫（蓝桥杯 / 大创）")
+    parser = argparse.ArgumentParser(description="官网获奖名单定向爬虫（蓝桥杯 / 大创 / 金种子杯）")
     parser.add_argument(
         "--source",
-        choices=["lanqiao", "ncss"],
+        choices=["lanqiao", "ncss", "jzz"],
         default="lanqiao",
-        help="lanqiao=蓝桥杯（已废弃）；ncss=中国国际大学生创新大赛（cy.ncss.cn）",
+        help="lanqiao=蓝桥杯（已废弃）；ncss=中国国际大学生创新大赛；jzz=湖南省金种子杯",
     )
     parser.add_argument("--keyword", default="获奖名单", help="列表接口的标题过滤词")
     parser.add_argument("--page-size", type=int, default=100)
@@ -1147,7 +1424,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         log(f"找不到数据库：{DB_PATH}")
         return 2
 
-    rows = crawl_ncss(args) if args.source == "ncss" else crawl_lanqiao(args)
+    if args.source == "ncss":
+        rows = crawl_ncss(args)
+    elif args.source == "jzz":
+        rows = crawl_jzz(args)
+    else:
+        rows = crawl_lanqiao(args)
     if args.list_only:
         return 0
 
