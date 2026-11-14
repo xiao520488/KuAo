@@ -637,6 +637,30 @@ class AiPlanBoundaryTest(_TempDBTestCase):
         self.assertEqual(body["status"], "refine")
         self.assertEqual(body["mode"], "refine")
 
+    def test_algorithm_only_competition_uses_playbook_prompt(self) -> None:
+        """纯算法类赛事：必须换成刷题路线图人格，且作品赛词汇被兜底改写。"""
+        cid = self._new_competition("蓝桥杯全国软件和信息技术专业人才大赛")
+        db.update_competition(cid, {"has_project_awards": 0})
+        _, token = self._new_user("plan_algo_user")
+        with patch(
+            "llm.chat",
+            return_value="【计划】\n## 刷题路线图\n- 第 1 周：前端开发基础\n- 组队分工待定",
+        ) as chat:
+            response = self.client.post(
+                "/api/ai/plan",
+                json={"competition_id": cid, "user_input": "直接生成"},
+                headers=self._auth(token),
+            )
+            system = chat.call_args.kwargs.get("system") or ""
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("算法刷题路线图", system)
+        self.assertIn("绝对禁止", system)
+        body = response.json()
+        self.assertEqual(body["status"], "plan")
+        # 兜底改写：作品赛词汇一个都不许留
+        self.assertNotIn("前端开发", body["reply"])
+        self.assertNotIn("组队分工", body["reply"])
+
     def test_llm_error_maps_to_502(self) -> None:
         _, token = self._new_user("plan_error_user")
         with patch("llm.chat", side_effect=llm.LLMError("upstream timeout")):

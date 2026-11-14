@@ -1266,6 +1266,9 @@ onBeforeUnmount(() => {
               <template v-if="hasPlan">
                 计划已生成但已切到对话视图，你可以继续提问，或随时返回查看当前计划
               </template>
+              <template v-else-if="algorithmOnly">
+                告诉我你的目标奖项、比赛语言和当前刷题量，我来排一份刷题路线图
+              </template>
               <template v-else>
                 先聊聊你的目标与时间安排，信息足够后 AI 会立刻生成计划文档
               </template>
@@ -1300,7 +1303,7 @@ onBeforeUnmount(() => {
               <path stroke-linecap="round" stroke-linejoin="round"
                 d="M12 3v2m0 14v2M5 12H3m18 0h-2M7.05 7.05L5.64 5.64m12.72 12.72l-1.41-1.41M7.05 16.95l-1.41 1.41m12.72-12.72l-1.41 1.41" />
             </svg>
-            {{ generating ? '生成中…' : '生成专属备赛计划' }}
+            {{ generating ? '生成中…' : (algorithmOnly ? '生成刷题路线图' : '生成专属备赛计划') }}
           </button>
         </div>
 
@@ -1320,7 +1323,11 @@ onBeforeUnmount(() => {
                  dark:bg-slate-900/60 dark:text-slate-400"
         >
           <p class="font-bold text-slate-600 dark:text-slate-300">可以直接这样告诉我：</p>
-          <ul class="mt-1.5 list-disc space-y-1 pl-4">
+          <ul v-if="algorithmOnly" class="mt-1.5 list-disc space-y-1 pl-4">
+            <li>“C++ 选手，LeetCode 做过 200 题，每天能刷 2 小时，目标省一等奖。”</li>
+            <li>“二分和 DP 有基础，图论基本没刷过，距离比赛还有 2 个月。”</li>
+          </ul>
+          <ul v-else class="mt-1.5 list-disc space-y-1 pl-4">
             <li>“我是大二学生，数学基础一般，每天能投入 2 小时。”</li>
             <li>“目标国赛一等奖，距离比赛还有 3 个月。”</li>
           </ul>
