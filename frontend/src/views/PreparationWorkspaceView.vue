@@ -114,8 +114,7 @@ watch(routedId, () => {
   closeWork()
   // 共性报告属于竞赛级数据，切走后不再展示上一场赛事的分析
   resetCommonAnalysis()
-  // 新赛事的洞察折叠状态同样要重置（默认全部收起）
-  openInsightKeys.value = []
+  // 新赛事的洞察折叠状态随卡片重建自动归零（每张卡片各自持有 open 标记）
   // 新赛事的报告可能有缓存（终身一次），只读探测一次，不扣配额
   loadCommonCache()
 })
@@ -882,15 +881,7 @@ const visibleInsights = computed(() => visibleItems.value.filter((it) => it.sour
 const visibleIdeas = computed(() => visibleItems.value.filter((it) => it.source === 'idea'))
 
 /* ---- 赛事洞察：终身一次 + 默认折叠（正文是长结论，不再整段铺开） ---- */
-const openInsightKeys = ref([])
-function isInsightOpen(key) {
-  return openInsightKeys.value.includes(key)
-}
-function toggleInsight(key) {
-  openInsightKeys.value = isInsightOpen(key)
-    ? openInsightKeys.value.filter((k) => k !== key)
-    : [...openInsightKeys.value, key]
-}
+// 折叠状态挂在卡片自身（item.open）上，左右/多张卡片彼此完全独立，不存在共享 key
 
 function applyFavoriteFlags() {
   inspirations.value.forEach((it) => {
@@ -930,6 +921,7 @@ function normalizeInspirationItems(payload) {
     return {
       key: `insight-${r.id}`,
       id: r.id,
+      open: false,
       source: 'insight',
       kind: r.kind || '',
       tag,
@@ -943,7 +935,13 @@ function normalizeInspirationItems(payload) {
 
   const ideas = (payload?.ideas || []).map(normalizeIdea).filter(Boolean)
 
-  return [...ideas, ...insights]
+  // 同 key 重复会让 Vue 复用同一个 DOM 节点，折叠状态就会串台，这里先去重
+  const seen = new Set()
+  return [...ideas, ...insights].filter((it) => {
+    if (seen.has(it.key)) return false
+    seen.add(it.key)
+    return true
+  })
 }
 
 /** 单条 idea（后端行 / 「换一批」接口返回项）-> 页面卡片结构 */
@@ -1777,20 +1775,11 @@ onBeforeUnmount(() => {
               class="pointer-events-none absolute inset-x-0 bottom-0 h-16 rounded-b-2xl bg-gradient-to-t from-slate-50 dark:from-slate-900 to-transparent"
             ></div>
           </div>
-          <div class="mt-3 flex items-center justify-between gap-3">
-            <p class="text-[11px] font-medium text-slate-500 dark:text-slate-400">
-              <template v-if="commonJustGenerated">已生成 {{ commonJustGenerated }} 字，点【展开全部】查看全文</template>
-              <template v-else>该赛事的共性分析终身只生成一次，已为你保存</template>
-            </p>
-            <button
-              type="button"
-              class="shrink-0 rounded-full px-4 py-1.5 text-xs font-bold text-blue-700 dark:text-blue-300
-                     ring-1 ring-blue-200 dark:ring-blue-500/30 transition-colors hover:bg-blue-50 dark:hover:bg-blue-500/15"
-              @click="toggleCommon"
-            >
-              {{ commonOpen ? '收起' : '展开全部' }}
-            </button>
-          </div>
+          <!-- 只保留右上角那一个【展开全部 / 收起】，这里不再重复放按钮 -->
+          <p class="mt-3 text-[11px] font-medium text-slate-500 dark:text-slate-400">
+            <template v-if="commonJustGenerated">已生成 {{ commonJustGenerated }} 字，点右上角【展开全部】查看全文</template>
+            <template v-else>该赛事的共性分析终身只生成一次，已为你保存</template>
+          </p>
         </template>
       </div>
 
@@ -2383,7 +2372,8 @@ onBeforeUnmount(() => {
             </p>
           </header>
 
-          <div class="grid grid-cols-1 gap-5 md:grid-cols-2">
+          <!-- items-start：卡片各自按内容高度收放，避免栅格拉伸让「没展开的那张」看起来也变高了 -->
+          <div class="grid grid-cols-1 items-start gap-5 md:grid-cols-2">
             <article
               v-for="item in visibleInsights"
               :key="item.key"
@@ -2403,11 +2393,11 @@ onBeforeUnmount(() => {
               >
                 <span
                   class="markdown-body block text-sm leading-relaxed text-slate-700 dark:text-slate-200"
-                  :class="isInsightOpen(item.key) ? '' : 'max-h-32 overflow-hidden'"
+                  :class="item.open ? '' : 'max-h-32 overflow-hidden'"
                   v-html="item.html"
                 ></span>
                 <span
-                  v-if="!isInsightOpen(item.key)"
+                  v-if="!item.open"
                   class="pointer-events-none absolute inset-x-0 bottom-0 block h-12 bg-gradient-to-t from-white dark:from-slate-800 to-transparent"
                 ></span>
               </span>
@@ -2424,16 +2414,16 @@ onBeforeUnmount(() => {
                   class="inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-bold
                          text-blue-700 dark:text-blue-300 ring-1 ring-blue-200 dark:ring-blue-500/30
                          transition-colors hover:bg-blue-50 dark:hover:bg-blue-500/15"
-                  @click="toggleInsight(item.key)"
+                  @click="item.open = !item.open"
                 >
                   <svg
                     class="h-3.5 w-3.5 transition-transform"
-                    :class="isInsightOpen(item.key) ? 'rotate-180' : ''"
+                    :class="item.open ? 'rotate-180' : ''"
                     fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"
                   >
                     <path stroke-linecap="round" stroke-linejoin="round" d="M6 9l6 6 6-6" />
                   </svg>
-                  {{ isInsightOpen(item.key) ? '收起' : '展开全部' }}
+                  {{ item.open ? '收起' : '展开全部' }}
                 </button>
                 <button
                   type="button"
