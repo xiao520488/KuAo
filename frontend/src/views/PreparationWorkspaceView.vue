@@ -846,22 +846,8 @@ async function parseWork() {
 /* =========================================================
    Tab3\uff1a\u7075\u611f\u5de5\u4f5c\u53f0 + \u6211\u7684\u6536\u85cf\uff08localStorage\uff09
    ========================================================= */
-const INSIGHT_TAGS = {
-  experience: '获奖经验',
-  trend: '选题趋势',
-  gap: '空白机会'
-}
-
-// 不同洞察类型的标签配色：经验=蓝、趋势=绿、空白=橙，便于一眼区分
-const INSIGHT_TAG_STYLES = {
-  experience: 'bg-blue-50 text-blue-700 ring-blue-200 dark:bg-blue-500/15 dark:text-blue-300 dark:ring-blue-500/30',
-  trend: 'bg-emerald-50 text-emerald-700 ring-emerald-200 dark:bg-emerald-500/15 dark:text-emerald-300 dark:ring-emerald-500/30',
-  gap: 'bg-orange-50 text-orange-700 ring-orange-200 dark:bg-orange-500/15 dark:text-orange-300 dark:ring-orange-500/30'
-}
-
-function insightTagClass(kind) {
-  return INSIGHT_TAG_STYLES[kind] || 'bg-slate-100 text-slate-600 ring-slate-200 dark:bg-slate-700/60 dark:text-slate-300 dark:ring-slate-600'
-}
+// 「赛事洞察」（获奖经验/选题趋势/空白机会）已并入「往年获奖作品」Tab 的
+// 【AI 深度赛事研判报告】大卡片，灵感工作台只保留「选题灵感」，不再有洞察卡片。
 
 // 收藏 key / 读写统一由 services/favorites.js 管理（含脏数据校验）
 const favIds = ref(loadFavoriteIds())
@@ -876,12 +862,8 @@ const favoriteList = computed(() => inspirations.value.filter((it) => favIds.val
 
 // 当前视图下可见的卡片：全部灵感 / 我的收藏
 const visibleItems = computed(() => (showFavorites.value ? favoriteList.value : inspirations.value))
-// 两大板块：赛事洞察（经验 / 趋势 / 空白）与 选题灵感（idea）互相隔离渲染
-const visibleInsights = computed(() => visibleItems.value.filter((it) => it.source === 'insight'))
+// 灵感工作台只剩「选题灵感」（idea）一种卡片
 const visibleIdeas = computed(() => visibleItems.value.filter((it) => it.source === 'idea'))
-
-/* ---- 赛事洞察：终身一次 + 默认折叠（正文是长结论，不再整段铺开） ---- */
-// 折叠状态挂在卡片自身（item.open）上，左右/多张卡片彼此完全独立，不存在共享 key
 
 function applyFavoriteFlags() {
   inspirations.value.forEach((it) => {
@@ -913,31 +895,13 @@ function cleanRefs(list) {
   return nums.slice(0, 3)
 }
 
-/** 后端返回的 insights / ideas -> 页面统一卡片结构（key 跨表唯一） */
+/** 后端返回的 ideas -> 页面统一卡片结构（key 唯一，重复即去重） */
 function normalizeInspirationItems(payload) {
-  const insights = (payload?.insights || []).map((r) => {
-    const tag = INSIGHT_TAGS[r.kind] || '赛事洞察'
-    const md = stripIdClutter(r.content_md)
-    return {
-      key: `insight-${r.id}`,
-      id: r.id,
-      open: false,
-      source: 'insight',
-      kind: r.kind || '',
-      tag,
-      title: tag,
-      text: '',
-      html: md ? renderMarkdown(md) : '',
-      refs: cleanRefs(r.evidence),
-      favorite: false
-    }
-  })
-
   const ideas = (payload?.ideas || []).map(normalizeIdea).filter(Boolean)
 
-  // 同 key 重复会让 Vue 复用同一个 DOM 节点，折叠状态就会串台，这里先去重
+  // 同 key 重复会让 Vue 复用同一个 DOM 节点，状态就会串台，这里先去重
   const seen = new Set()
-  return [...ideas, ...insights].filter((it) => {
+  return ideas.filter((it) => {
     if (seen.has(it.key)) return false
     seen.add(it.key)
     return true
@@ -1699,10 +1663,11 @@ onBeforeUnmount(() => {
               <svg class="h-5 w-5 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" d="M12 3l1.9 4.6L18.5 9.5l-4.6 1.9L12 16l-1.9-4.6L5.5 9.5l4.6-1.9L12 3z" />
               </svg>
-              获奖作品共性分析
+              AI 深度赛事研判报告
             </h3>
             <p class="mt-1 text-xs font-medium text-slate-500 dark:text-slate-400">
-              跨赛道抽取 20-30 件获奖作品，拆解技术栈组合、系统架构套路与评审技术关注点。
+              跨年份均衡抽取最多 100 件金奖/银奖作品，输出共性技术套路、红蓝海商业趋势、
+              评审核心偏好与备赛最高建议。
             </p>
           </div>
 
@@ -1724,7 +1689,7 @@ onBeforeUnmount(() => {
             >
               <path stroke-linecap="round" stroke-linejoin="round" d="M12 3a9 9 0 109 9" />
             </svg>
-            AI 分析获奖作品共性
+            生成 AI 深度赛事研判报告
           </button>
 
           <button
@@ -1778,7 +1743,7 @@ onBeforeUnmount(() => {
           <!-- 只保留右上角那一个【展开全部 / 收起】，这里不再重复放按钮 -->
           <p class="mt-3 text-[11px] font-medium text-slate-500 dark:text-slate-400">
             <template v-if="commonJustGenerated">已生成 {{ commonJustGenerated }} 字，点右上角【展开全部】查看全文</template>
-            <template v-else>该赛事的共性分析终身只生成一次，已为你保存</template>
+            <template v-else>该研判报告终身只生成一次，已为你保存</template>
           </p>
         </template>
       </div>
@@ -2172,27 +2137,6 @@ onBeforeUnmount(() => {
             {{ showFavorites ? '查看全部' : '我的收藏' }}
           </button>
           <button
-            v-if="!algorithmOnly"
-            type="button"
-            class="inline-flex items-center gap-2 rounded-full px-4 py-2 text-xs font-bold transition-colors"
-            :class="canGenerateInspiration
-              ? 'bg-blue-600 text-white shadow-sm shadow-blue-600/25 hover:bg-blue-700 dark:hover:bg-blue-600'
-              : 'cursor-not-allowed bg-slate-200 text-slate-400 dark:bg-slate-700 dark:text-slate-500'"
-            :disabled="!canGenerateInspiration"
-            :title="awardsCount > 0 ? '' : '该赛事暂无公开的历年获奖作品，AI 缺少提炼素材'"
-            @click="onGenerateInspiration"
-          >
-            <svg v-if="inspireBusy" class="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
-              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
-              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
-            </svg>
-            <svg v-else class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round"
-                d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z" />
-            </svg>
-            {{ inspireBusy ? 'AI 正在深度挖掘获奖套路…' : '生成专属灵感' }}
-          </button>
-          <button
             type="button"
             class="inline-flex items-center gap-2 rounded-full bg-white dark:bg-slate-800 px-4 py-2 text-xs font-bold
                    text-blue-700 dark:text-blue-300 ring-1 ring-blue-200 dark:ring-blue-500/30 transition-colors hover:bg-blue-100 dark:hover:bg-blue-500/25"
@@ -2298,29 +2242,33 @@ onBeforeUnmount(() => {
         </div>
 
         <template v-if="awardsCount > 0">
-          <h3 class="mt-4 text-base font-bold text-slate-900 dark:text-slate-100">还没有生成专属灵感</h3>
+          <h3 class="mt-4 text-base font-bold text-slate-900 dark:text-slate-100">还没有选题灵感</h3>
           <p class="mt-2 max-w-xl text-sm leading-6 text-slate-500 dark:text-slate-400">
             平台已收录该赛事 {{ awardsCount }} 件获奖作品。点一下，AI 会通读这些作品，
-            提炼评审偏好、选题趋势与可以直接借鉴的创新点。
+            给你出 3 个可以直接落地的选题方向，越点越多。
           </p>
 
-          <!-- 空状态：按钮紧贴提示语正下方，居中显示 -->
+          <!-- 空状态：按钮居中显示（已有灵感时按钮在列表最下方） -->
           <button
             type="button"
             data-testid="more-ideas-empty"
             class="mt-5 inline-flex items-center gap-2 rounded-full bg-gradient-to-r from-violet-600 to-fuchsia-600 px-7 py-3 text-sm font-black text-white shadow-lg shadow-violet-500/25 transition-all
                    hover:-translate-y-0.5 hover:shadow-xl hover:shadow-violet-500/30
                    disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0"
-            :disabled="inspireBusy || !canGenerateInspiration"
-            @click="onGenerateInspiration"
+            :disabled="moreIdeasLoading"
+            @click="loadMoreIdeas"
           >
             <span
-              v-if="inspireBusy"
+              v-if="moreIdeasLoading"
               class="inline-block h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white"
             ></span>
             <span v-else aria-hidden="true">✨</span>
-            {{ inspireBusy ? '正在生成专属灵感…' : '生成更多选题灵感' }}
+            {{ moreIdeasLoading ? '正在生成选题灵感…' : '生成更多选题灵感' }}
           </button>
+          <p v-if="moreIdeasError" class="mt-3 text-xs font-medium text-rose-500">{{ moreIdeasError }}</p>
+          <p v-else class="mt-3 text-[11px] font-medium text-slate-500 dark:text-slate-400">
+            点一次新增 3 条全新选题，越点越多
+          </p>
 
           <button
             type="button"
@@ -2357,92 +2305,6 @@ onBeforeUnmount(() => {
 
       <!-- 灵感卡片列表（全部 / 收藏）：按板块分区渲染 -->
       <div v-else class="space-y-8">
-        <!-- ===== 板块一：赛事洞察（经验 / 趋势 / 空白） ===== -->
-        <section v-if="visibleInsights.length">
-          <header class="mb-4">
-            <h2 class="flex items-center gap-2 text-lg font-black tracking-tight text-slate-900 dark:text-slate-100">
-              <span aria-hidden="true">📊</span>
-              赛事洞察
-              <span class="rounded-full bg-slate-100 dark:bg-slate-700/60 px-2 py-0.5 text-[11px] font-bold text-slate-500 dark:text-slate-400">
-                {{ visibleInsights.length }} 条
-              </span>
-            </h2>
-            <p class="mt-1 text-xs font-medium text-slate-500 dark:text-slate-400">
-              从历年获奖作品中提炼的获奖经验、选题趋势与空白机会
-            </p>
-          </header>
-
-          <!-- items-start：卡片各自按内容高度收放，避免栅格拉伸让「没展开的那张」看起来也变高了 -->
-          <div class="grid grid-cols-1 items-start gap-5 md:grid-cols-2">
-            <article
-              v-for="item in visibleInsights"
-              :key="item.key"
-              class="flex flex-col rounded-2xl bg-white dark:bg-slate-800 p-5 ring-1 ring-slate-200/70 dark:ring-slate-700 shadow-sm transition-all
-                     hover:shadow-lg hover:shadow-slate-900/10"
-            >
-              <span
-                class="mb-3 w-fit rounded-full px-2.5 py-1 text-xs font-bold ring-1"
-                :class="insightTagClass(item.kind)"
-              >
-                {{ item.tag }}
-              </span>
-
-              <span
-                v-if="item.html"
-                class="relative block"
-              >
-                <span
-                  class="markdown-body block text-sm leading-relaxed text-slate-700 dark:text-slate-200"
-                  :class="item.open ? '' : 'max-h-32 overflow-hidden'"
-                  v-html="item.html"
-                ></span>
-                <span
-                  v-if="!item.open"
-                  class="pointer-events-none absolute inset-x-0 bottom-0 block h-12 bg-gradient-to-t from-white dark:from-slate-800 to-transparent"
-                ></span>
-              </span>
-
-              <p v-if="item.refs && item.refs.length" class="mt-3 text-[11px] font-medium text-slate-500 dark:text-slate-400">
-                参考样本 ID：{{ item.refs.join('、') }}
-              </p>
-
-              <div class="mt-auto flex items-center justify-between gap-2 pt-4">
-                <button
-                  v-if="item.html"
-                  type="button"
-                  :data-testid="`insight-toggle-${item.id}`"
-                  class="inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-bold
-                         text-blue-700 dark:text-blue-300 ring-1 ring-blue-200 dark:ring-blue-500/30
-                         transition-colors hover:bg-blue-50 dark:hover:bg-blue-500/15"
-                  @click="item.open = !item.open"
-                >
-                  <svg
-                    class="h-3.5 w-3.5 transition-transform"
-                    :class="item.open ? 'rotate-180' : ''"
-                    fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"
-                  >
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M6 9l6 6 6-6" />
-                  </svg>
-                  {{ item.open ? '收起' : '展开全部' }}
-                </button>
-                <button
-                  type="button"
-                  class="inline-flex items-center gap-2 rounded-full px-4 py-1.5 text-xs font-bold transition-colors"
-                  :class="item.favorite
-                    ? 'bg-amber-50 dark:bg-amber-500/15 text-amber-700 dark:text-amber-300 ring-1 ring-amber-200 dark:ring-amber-500/30'
-                    : 'text-slate-500 dark:text-slate-400 ring-1 ring-slate-200 dark:ring-slate-700 hover:text-slate-900 dark:hover:text-white hover:ring-slate-300 dark:hover:ring-slate-600'"
-                  @click="toggleFavorite(item)"
-                >
-                  <svg class="h-4 w-4" :fill="item.favorite ? 'currentColor' : 'none'" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M11.48 3.5l2.31 4.68 5.16.75-3.73 3.64.88 5.14-4.62-2.43-4.62 2.43.88-5.14L3.01 8.93l5.16-.75z" />
-                  </svg>
-                  {{ item.favorite ? '已收藏' : '收藏' }}
-                </button>
-              </div>
-            </article>
-          </div>
-        </section>
-
         <!-- ===== 板块二：选题灵感（idea） =====
              洞察已有、选题还没生成时也要露出底部按钮，否则用户无处追加 -->
         <section v-if="visibleIdeas.length || !showFavorites">

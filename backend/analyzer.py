@@ -266,6 +266,178 @@ def sample_cross_track(works: list, *, per_track: int = PER_TRACK_MAX,
     return sampled[:max_total], meta
 
 
+# ---------------------------------------------------------------------------
+# 「AI 深度赛事研判报告」抽样：年份均衡 + 奖项顺延（2026-11-14 重构）
+# ---------------------------------------------------------------------------
+# 规则（与产品定稿一致）：
+#   1. 年份均衡：按年份分组平均分配名额（两届 -> 每年 50 条）；
+#   2. 奖项顺延：每年名额内先取金奖/一等奖，不足再用银奖/二等奖补齐；
+#   3. 异常兜底：全库金银奖合计不足 100 条 -> 全量使用，不再下探铜奖；
+#   4. 上限 100 条，样本按 id 升序，保证 prompt 指纹稳定（缓存能命中）。
+REPORT_SAMPLE_CAP = 100
+_GOLD_TIER = "金奖"
+_SILVER_TIER = "银奖"
+_YEAR_RE = re.compile(r"(19|20)\d{2}")
+
+
+def _year_key(row: dict) -> Optional[int]:
+    """取年份整数；取不到返回 None（这类行排最后，只在名额有剩时补）。"""
+    raw = row.get("year")
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        return None
+    m = _YEAR_RE.search(str(raw))
+    if m:
+        return int(m.group(0))
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def sample_year_balanced(
+    works: list, *, cap: int = REPORT_SAMPLE_CAP
+) -> tuple:
+    """年份均衡 + 奖项顺延抽样。
+
+    返回 ``(sampled_rows, meta)``：
+      * ``sampled_rows``：按 id 升序的样本（≤ cap 条）；
+      * ``meta``：``{"cap", "total_awards", "gold_total", "silver_total",
+        "sampled", "fallback_all", "years": [{year, quota, gold_avail,
+        silver_avail, gold_picked, silver_picked, picked}]}``，
+        供前端/日志核对抽样是否真的「按年均衡、金银优先」。
+    """
+    rows = sorted(works, key=_id_key)
+    cap = max(1, int(cap))
+
+    gold_all = [r for r in rows if _grade_tier(r) == _GOLD_TIER]
+    silver_all = [r for r in rows if _grade_tier(r) == _SILVER_TIER]
+    high_pool = gold_all + silver_all          # 只在金银档里抽（规则 3：不下探铜奖）
+
+    meta = {
+        "cap": cap,
+        "total_awards": len(rows),
+        "gold_total": len(gold_all),
+        "silver_total": len(silver_all),
+        "sampled": 0,
+        "fallback_all": False,
+        "years": [],
+    }
+
+    # 规则 3：金银奖全库都不够 cap -> 全量使用
+    if len(high_pool) <= cap:
+        meta["fallback_all"] = True
+        meta["sampled"] = len(high_pool)
+        meta["years"] = _year_stats(high_pool, high_pool)
+        return high_pool, meta
+
+    # 按年份分桶（None 年份单独一桶，排在最后）
+    buckets: dict = {}
+    for row in high_pool:
+        buckets.setdefault(_year_key(row), []).append(row)
+    years = sorted([y for y in buckets if y is not None], reverse=True)
+    if None in buckets:
+        years.append(None)
+
+    picked: list = []
+    year_meta = []
+    n_years = len(years)
+    base, extra = divmod(cap, max(n_years, 1))
+    for idx, year in enumerate(years):
+        quota = base + (1 if idx < extra else 0)
+        bucket = buckets.get(year) or []
+        gold_rows = [r for r in bucket if _grade_tier(r) == _GOLD_TIER]
+        silver_rows = [r for r in bucket if _grade_tier(r) == _SILVER_TIER]
+
+        # 规则 2：先金奖，不足用银奖补
+        got_gold = _pick_spread(gold_rows, min(quota, len(gold_rows)))
+        picked_gold_ids = {id(r) for r in got_gold}
+        need = quota - len(got_gold)
+        got_silver = _pick_spread(
+            [r for r in silver_rows if id(r) not in picked_gold_ids],
+            min(need, len(silver_rows)),
+        )
+        got = got_gold + got_silver
+        picked.extend(got)
+        year_meta.append(
+            {
+                "year": year,
+                "quota": quota,
+                "gold_avail": len(gold_rows),
+                "silver_avail": len(silver_rows),
+                "gold_picked": len(got_gold),
+                "silver_picked": len(got_silver),
+                "picked": len(got),
+            }
+        )
+
+    # 某些年份金银奖不足额（小赛事）：剩余名额从其它年份的剩余金银奖里补齐
+    used = {id(r) for r in picked}
+    if len(picked) < cap:
+        rest_gold = [r for r in gold_all if id(r) not in used]
+        rest_silver = [r for r in silver_all if id(r) not in used]
+        need = cap - len(picked)
+        fill = _pick_spread(rest_gold, min(need, len(rest_gold)))
+        need -= len(fill)
+        if need > 0:
+            fill += _pick_spread(
+                [r for r in rest_silver if id(r) not in fill], need
+            )
+        picked.extend(fill)
+        # 把补来的样本记到各自年份的 picked 上，保持 meta 与样本一致
+        for row in fill:
+            y = _year_key(row)
+            for item in year_meta:
+                if item["year"] == y:
+                    item["picked"] += 1
+                    if _grade_tier(row) == _GOLD_TIER:
+                        item["gold_picked"] += 1
+                    else:
+                        item["silver_picked"] += 1
+                    break
+            else:  # 该年份原本不在 meta（理论上不会发生）
+                year_meta.append(
+                    {
+                        "year": y,
+                        "quota": 0,
+                        "gold_avail": 0,
+                        "silver_avail": 0,
+                        "gold_picked": 1 if _grade_tier(row) == _GOLD_TIER else 0,
+                        "silver_picked": 1 if _grade_tier(row) == _SILVER_TIER else 0,
+                        "picked": 1,
+                    }
+                )
+
+    picked = sorted(picked, key=_id_key)[:cap]
+    meta["sampled"] = len(picked)
+    meta["years"] = sorted(
+        (m for m in year_meta if m["picked"] > 0),
+        key=lambda m: (m["year"] is None, -(m["year"] or 0)),
+    )
+    return picked, meta
+
+
+def _year_stats(selected: list, high_pool: list) -> list:
+    """全量兜底时也给出分年统计（quota 记为实际条数）。"""
+    rows = selected
+    gold = [r for r in high_pool if _grade_tier(r) == _GOLD_TIER]
+    silver = [r for r in high_pool if _grade_tier(r) == _SILVER_TIER]
+    out = []
+    for year in sorted({_year_key(r) for r in rows}, key=lambda y: (y is None, -(y or 0))):
+        ys = [r for r in rows if _year_key(r) == year]
+        out.append(
+            {
+                "year": year,
+                "quota": len(ys),
+                "gold_avail": len([r for r in gold if _year_key(r) == year]),
+                "silver_avail": len([r for r in silver if _year_key(r) == year]),
+                "gold_picked": len([r for r in ys if _grade_tier(r) == _GOLD_TIER]),
+                "silver_picked": len([r for r in ys if _grade_tier(r) == _SILVER_TIER]),
+                "picked": len(ys),
+            }
+        )
+    return out
+
+
 def _scope(competition_id: int, year_from: int, year_to: int) -> str:
     return f"competition:{int(competition_id)}|year:{year_from}-{year_to}"
 

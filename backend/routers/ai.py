@@ -125,7 +125,11 @@ class AnalyzeResponse(BaseModel):
     competition_id: int = Field(..., description="对应的竞赛 ID")
     competition_name: Optional[str] = Field(None, description="竞赛名称")
     work_count: int = Field(..., description="参与本次分析的样本条数（跨赛道抽样的作品数）")
-    track_count: int = Field(0, description="样本覆盖的赛道数")
+    sample_size: int = Field(0, description="本次抽样条数（年份均衡后，上限 100）")
+    year_count: int = Field(0, description="样本覆盖的年份届数")
+    year_stats: List[Dict[str, Any]] = Field(
+        default_factory=list, description="分年抽样明细（年份/名额/金奖/银奖）"
+    )
     cached: bool = Field(
         True, description="True=直接命中终身缓存（未消耗配额、未调用大模型）"
     )
@@ -573,9 +577,9 @@ def generate_plan(
 # POST /api/ai/analyze
 # ---------------------------------------------------------------------------
 ANALYZE_SYSTEM_PROMPT = (
-    "你是一位资深技术评审与系统架构师，擅长把获奖作品拆解成可复用的技术栈组合与架构套路。"
-    "你只从技术实现、工程完成度、评审技术关注点角度分析，"
-    "不讨论商业趋势、市场机会、红海蓝海或组队策略（那是另一个功能）。"
+    "你是顶级创投评委，连年坐在大学生创新创业大赛终审席，看过上千个项目，"
+    "一眼分出「能拿奖」和「能活下去」，也清楚评委在答辩现场真正在想什么。"
+    "技术套路讲透、商业趋势讲准、评审偏好讲白、备赛动作讲到能直接执行。"
     "只依据给定样本归纳，不得编造未出现的作品信息。输出使用 Markdown。"
 )
 
@@ -641,76 +645,117 @@ def _fmt_works(works: List[Dict[str, Any]]) -> str:
     return "\n\n".join(blocks)
 
 
+def _fmt_report_samples(works: List[Dict[str, Any]]) -> str:
+    """研判报告的样本渲染：一行一件，极简字段。
+
+    研判报告一次要吃 100 件样本，沿用 _fmt_works 的八行块会把 prompt 顶到
+    6 万字以上（成本翻倍、还可能被上下文截断）。这里压成单行：
+    年份 · 奖项 · 赛道 ｜ 标题 ｜ 摘要要点 ｜ 技术栈要点，每行 ≤ 200 字。
+    """
+    def _cut(value: Any, n: int) -> str:
+        text = " ".join(str(value or "").split())
+        return text if len(text) <= n else text[:n] + "…"
+
+    lines = []
+    for i, w in enumerate(works, 1):
+        award = _clean_field(w.get("award_grade") or w.get("award_level")) or "等级未标注"
+        year = w.get("year")
+        year_str = f"{year}年" if year else "年份未标注"
+        track = _cut(w.get("track"), 24) or "未分赛道"
+        summary = _cut(_clean_field(w.get("summary")), 78)
+        if summary.lstrip().startswith("准考证号"):
+            summary = ""
+        tech = w.get("tech_stack") or []
+        if isinstance(tech, (list, tuple)):
+            tech = "、".join(str(t) for t in tech[:5] if str(t).strip())
+        tech = _cut(tech, 44)
+        head = f"{i}.【{year_str} · {award} · {track}】{_cut(w.get('title'), 56)}"
+        tail = "；".join(x for x in (summary, tech) if x)
+        lines.append(f"{head}｜{tail}" if tail else head)
+    return "\n".join(lines)
+
+
 def _build_analyze_prompt(
     competition_name: Optional[str],
     ctx: str,
     works: List[Dict[str, Any]],
-    track_meta: Optional[List[Dict[str, Any]]] = None,
+    sample_meta: Optional[Dict[str, Any]] = None,
 ) -> str:
-    """构建「跨赛道 · 技术拆解与架构套路」分析 prompt。
+    """构建【AI 深度赛事研判报告】的 prompt（2026-11-14 定稿）。
 
-    与「灵感工作台 · 赛事洞察」（analyzer.py 的 insights）严格分工：
-    这里只谈技术栈、系统架构、工程亮点与评审技术关注点；
-    商业趋势 / 红蓝海 / 组队策略一律不出现，避免两块内容重复。
+    样本口径：年份均衡 + 奖项顺延（analyzer.sample_year_balanced），
+    上限 100 条金银奖作品，跨届均衡，避免「某一年霸榜」把结论带偏。
+
+    内容口径：把原「获奖作品共性分析（技术向）」与灵感工作台的
+    「获奖经验 / 选题趋势 / 空白机会」合成一份四维报告，不再分块重复。
     """
-    parts = []
+    meta = sample_meta or {}
+    gold_total = int(meta.get("gold_total") or 0)
+    silver_total = int(meta.get("silver_total") or 0)
 
+    parts: List[str] = []
     if ctx:
         parts.append(ctx)
         parts.append("")
 
     parts.append(f"【参评赛事】{competition_name or '未知赛事'}")
-    tracks = [str(m.get("track")) for m in (track_meta or []) if m.get("track")]
-    if tracks:
-        parts.append(
-            f"【样本覆盖赛道】{'、'.join(tracks)}"
-            f"（共 {len(tracks)} 个赛道，已跨赛道抽样，非全量名单）"
+    parts.append(
+        f"【样本规模】{len(works)} 件获奖作品"
+        f"（全库金奖/一等奖 {gold_total} 件、银奖/二等奖 {silver_total} 件，"
+        "按年份均衡抽取，上限 100 件）"
+    )
+    years = [y for y in (meta.get("years") or []) if y.get("picked")]
+    if years:
+        desc = "、".join(
+            f"{y.get('year') if y.get('year') else '年份未知'} 届 {y.get('picked')} 件"
+            f"（金奖 {y.get('gold_picked')} / 银奖 {y.get('silver_picked')}）"
+            for y in years
         )
-    parts.append(f"【样本数量】{len(works)} 件获奖作品")
+        parts.append(f"【年份分布】{desc}，已跨年均衡，不是某一年的名单")
     parts.append("")
     parts.append("【获奖作品样本】")
     parts.append("")
-    parts.append(_fmt_works(works))
+    parts.append(_fmt_report_samples(works))
     parts.append("")
-    parts.append("【任务要求：只做技术拆解与架构套路】")
+    parts.append("【你的身份】你是顶级创投评委，连年坐在这类赛事的终审席。")
     parts.append(
-        "不要写市场分析、商业趋势、红海蓝海或组队策略（那是「赛事洞察」的职责）。请输出："
+        "以下是跨年均衡抽取的百大金银奖项目。请写一份极其深度的《AI 深度赛事研判报告》，"
+        "只写四个维度，二级标题严格照抄下面四个短标题（不要加副标题、不要改写）："
+        "「## 1. 共性技术套路」「## 2. 红蓝海商业趋势」「## 3. 评审核心偏好」「## 4. 备赛最高建议」。"
+    )
+    parts.append("各维度要求：")
+    parts.append(
+        "1. 共性技术套路：跨届、跨赛道反复出现的技术栈组合与系统架构套路，"
+        "哪些已是「标配」、哪些真正拉分，每条结论都要点到具体技术名词"
+        "（传感器、模型、框架、部署形态）；"
     )
     parts.append(
-        "1. **技术栈共性**：跨赛道反复出现的硬件/软件/算法组合，哪些组合已成为「标配」，"
-        "哪些是真正的加分项；"
+        "2. 红蓝海商业趋势：哪些方向已被挤满（红海，同质化严重、评委会审美疲劳），"
+        "哪些正在变热、谁在推动、为什么是现在，哪些仍是空白机会（蓝海），"
+        "并写清蓝海为什么至今没被占住；"
     )
     parts.append(
-        "2. **系统架构套路**：获奖项目常见的分层方式（感知—决策—执行 / 端—边—云 / "
-        "数据—模型—应用），说明每层选了什么技术、为什么这种分层能打动技术评审；"
+        "3. 评审核心偏好：评委在材料评审与答辩现场真正在看什么（技术可信度、"
+        "商业闭环、团队执行力、社会价值、现场表达），哪些细节会直接加分、"
+        "哪些会一票否决，给出评委最常追问的问题及应答方向；"
     )
     parts.append(
-        "3. **工程亮点**：从「能跑」到「能拿奖」的工程细节——实时性、鲁棒性、离线可用、"
-        "成本控制、可演示性、部署形态；"
-    )
-    parts.append(
-        "4. **评审技术关注点**：答辩时评委必问的技术问题（指标怎么测、数据哪来的、"
-        "模型为什么这么选、失败情况怎么兜底），并给出准备回答的方向；"
-    )
-    parts.append(
-        "5. **跨赛道差异**：每个赛道在技术选型上的显著差异，一行一个赛道，"
-        "不要强行拉平；"
-    )
-    parts.append(
-        "6. **可复用技术清单**：给下一届参赛队一份 5 条技术检查清单（可直接勾选执行）。"
+        "4. 备赛最高建议：给下一届参赛队的最高优先级动作清单，按「现在就该做」"
+        "到「决赛前再做」排序，每条都要能直接执行（做什么、谁来做、做到什么程度算过线）。"
     )
     parts.append("")
     parts.append("约束：")
-    parts.append("- 只基于上面的样本归纳，不要编造样本中不存在的技术、指标或赛道；")
+    parts.append("- 只基于上面的样本归纳，不要编造样本中不存在的技术、指标、赛道或作品；")
     parts.append("- 禁止输出任何百分比、占比、条数统计，也不要罗列作品 id / 编号；")
-    parts.append("- 使用 Markdown，二级标题分维度，观点具体到技术名词，避免空泛套话。")
+    parts.append("- 四个维度必须全部写出，缺任何一个都算不合格（只写三段=失败，必须补第 4 段）；")
+    parts.append("- 全文 1800-2600 字，每段都要落到具体名词与动作，宁可信息密集也不要草草收尾。")
     return "\n".join(parts)
 
 
 def _competition_analysis_input(competition_id: int) -> tuple:
     """组装「赛事共性分析」的 prompt 上下文。
 
-    返回 ``(prompt, comp, works, track_meta)``；
+    返回 ``(prompt, comp, works, sample_meta)``；
     POST /analyze 与 GET /analysis 共用，保证两边的指纹口径完全一致
     （否则 GET 判「已缓存」、POST 判「指纹不符」，会互相打脸）。
 
@@ -732,14 +777,14 @@ def _competition_analysis_input(competition_id: int) -> tuple:
     if not all_works:
         raise ValueError("no_awards")
 
-    works, track_meta = analyzer.sample_cross_track(all_works)
+    works, sample_meta = analyzer.sample_year_balanced(all_works)
     if not works:
         raise ValueError("no_awards")
 
     ctx = _competition_context(competition_id)
     comp_name = comp.get("name")
-    prompt = _build_analyze_prompt(comp_name, ctx, works, track_meta)
-    return prompt, comp, works, track_meta
+    prompt = _build_analyze_prompt(comp_name, ctx, works, sample_meta)
+    return prompt, comp, works, sample_meta
 
 
 @router.post(
@@ -778,9 +823,9 @@ def analyze_work(
             req.competition_id,
         )
 
-    # 1-3. 取全量作品 -> 跨赛道抽样 -> 拼 prompt（与 GET 缓存口径一致）
+    # 1-3. 取全量作品 -> 年份均衡+奖项顺延抽样 -> 拼 prompt（与 GET 缓存口径一致）
     try:
-        prompt, comp, works, track_meta = _competition_analysis_input(
+        prompt, comp, works, sample_meta = _competition_analysis_input(
             req.competition_id
         )
     except LookupError as exc:
@@ -810,7 +855,9 @@ def analyze_work(
             competition_id=req.competition_id,
             competition_name=comp_name,
             work_count=len(works),
-            track_count=len(track_meta),
+            sample_size=len(works),
+            year_count=len([y for y in (sample_meta or {}).get('years') or [] if y.get('picked')]),
+            year_stats=list((sample_meta or {}).get('years') or []),
             cached=True,
         )
 
@@ -829,7 +876,7 @@ def analyze_work(
             prompt,
             system=ANALYZE_SYSTEM_PROMPT,
             temperature=0.5,
-            max_tokens=3072,
+            max_tokens=4096,
         )
     except llm.LLMError as exc:
         logger.error("作品聚合分析失败: %r", exc)
@@ -852,7 +899,9 @@ def analyze_work(
         competition_id=req.competition_id,
         competition_name=comp_name,
         work_count=len(works),
-        track_count=len(track_meta),
+        sample_size=len(works),
+        year_count=len([y for y in (sample_meta or {}).get('years') or [] if y.get('picked')]),
+        year_stats=list((sample_meta or {}).get('years') or []),
         cached=False,
     )
 
