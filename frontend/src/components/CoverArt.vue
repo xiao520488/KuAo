@@ -126,6 +126,7 @@ const isHero = computed(() => props.variant === 'hero')
   <div
     class="cover-art relative h-full w-full overflow-hidden"
     :class="[`cover-art--${mode}`, sizeClass]"
+    :key="mode"
     :style="styleVars"
     aria-hidden="true"
   >
@@ -403,6 +404,23 @@ const isHero = computed(() => props.variant === 'hero')
 <style scoped>
 .cover-art {
   container-type: inline-size;
+  /* 换主题时整块重绘，淡入 240ms 避免材质「硬切」 */
+  animation: cover-art-in 240ms ease-out both;
+}
+
+@keyframes cover-art-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cover-art {
+    animation: none;
+  }
 }
 
 /* ================= 科技蓝 ================= */
