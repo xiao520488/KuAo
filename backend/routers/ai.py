@@ -675,6 +675,20 @@ def _fmt_report_samples(works: List[Dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+def _sample_items(works: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """把抽样结果映射成前端可展示的明细（让用户能逐条核对这 100 件是谁）。"""
+    items = []
+    for w in works:
+        items.append({
+            "id": w.get("id"),
+            "title": " ".join(str(w.get("title") or "").split())[:60],
+            "year": w.get("year"),
+            "award": _clean_field(w.get("award_grade") or w.get("award_level")),
+            "track": " ".join(str(w.get("track") or "").split())[:24],
+        })
+    return items
+
+
 def _build_analyze_prompt(
     competition_name: Optional[str],
     ctx: str,
@@ -923,6 +937,17 @@ class CachedAnalysisResponse(BaseModel):
             "需要重新生成一次；False=缓存与当前数据一致或从未生成"
         ),
     )
+    sample_size: int = Field(
+        0, description="本次研判抽样条数（年份均衡 + 奖项顺延，上限 100）"
+    )
+    year_stats: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="分年抽样明细（year/quota/gold_picked/silver_picked/picked）",
+    )
+    sample_items: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="样本逐条明细（id/title/year/award/track），供前端展示核对",
+    )
     updated_at: Optional[str] = None
 
 
@@ -960,16 +985,21 @@ def get_cached_analysis(
 
     content = ((row or {}).get("content_md") or "").strip()
     stale = False
-    if content:
-        # 只有「已有缓存」时才值得拼一次 prompt 比对指纹（纯本地计算，不花钱）
-        try:
-            prompt, _comp, _works, _meta = _competition_analysis_input(
-                competition_id
-            )
+    sample_size = 0
+    year_stats: List[Dict[str, Any]] = []
+    sample_items: List[Dict[str, Any]] = []
+    # 无论有没有缓存都拼一次（纯本地计算、不花钱），
+    # 顺便把「这次报告的抽样口径」回给前端，让用户看得见 100 件是怎么来的。
+    try:
+        prompt, _comp, works, meta = _competition_analysis_input(competition_id)
+        sample_size = len(works)
+        year_stats = list(meta.get("years") or [])
+        sample_items = _sample_items(works)
+        if content:
             stale = ((row or {}).get("input_hash")
                      != _analysis_input_hash(prompt))
-        except (LookupError, ValueError):
-            stale = False
+    except (LookupError, ValueError):
+        stale = False
 
     return CachedAnalysisResponse(
         competition_id=competition_id,
@@ -977,6 +1007,9 @@ def get_cached_analysis(
         analysis=content,
         cached=bool(content),
         stale=bool(stale),
+        sample_size=sample_size,
+        year_stats=year_stats,
+        sample_items=sample_items,
         updated_at=(row or {}).get("updated_at"),
     )
 

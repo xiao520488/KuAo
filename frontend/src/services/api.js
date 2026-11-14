@@ -371,7 +371,10 @@ export function analyzeWorks(competitionId) {
   if (cid === null) return Promise.reject(new Error('竞赛 ID 无效'))
 
   return api.post('/ai/analyze', { competition_id: cid }).then((data) => ({
-    analysis: typeof data?.analysis === 'string' ? data.analysis : ''
+    analysis: typeof data?.analysis === 'string' ? data.analysis : '',
+    sample_size: Number(data?.sample_size) || 0,
+    year_stats: Array.isArray(data?.year_stats) ? data.year_stats : [],
+    sample_items: Array.isArray(data?.sample_items) ? data.sample_items : []
   }))
 }
 
@@ -395,7 +398,10 @@ export function getCachedAnalysis(competitionId) {
     competition_id: Number(data?.competition_id) || cid,
     analysis: typeof data?.analysis === 'string' ? data.analysis : '',
     cached: Boolean(data?.cached),
-    stale: Boolean(data?.stale)
+    stale: Boolean(data?.stale),
+    sample_size: Number(data?.sample_size) || 0,
+    year_stats: Array.isArray(data?.year_stats) ? data.year_stats : [],
+    sample_items: Array.isArray(data?.sample_items) ? data.sample_items : []
   }))
 }
 

@@ -611,6 +611,23 @@ const commonLoading = ref(false)    // 请求中
 const commonError = ref('')
 const commonOpen = ref(false)       // 默认收起：报告很长，先给 3-5 行预览
 const commonJustGenerated = ref(0)  // >0 表示本次刚生成，用于提示「点开看」
+// 抽样口径（后端回传）：让用户看得见这份报告到底读了多少件、「100 件」是怎么来的
+const commonSampleSize = ref(0)
+const commonYearStats = ref([])
+const commonSampleItems = ref([])
+const sampleListOpen = ref(false)
+const commonSampleLine = computed(() => {
+  if (!commonSampleSize.value) return ''
+  const parts = commonYearStats.value
+    .filter((y) => Number(y?.picked) > 0)
+    .map((y) => {
+      const yr = y?.year ? `${y.year} 届` : '年份未知'
+      const g = Number(y?.gold_picked) || 0
+      const s = Number(y?.silver_picked) || 0
+      return `${yr} ${Number(y.picked)} 件（金 ${g} · 银 ${s}）`
+    })
+  return `本次研判基于 ${commonSampleSize.value} 件样本${parts.length ? '：' + parts.join('；') : ''}`
+})
 let commonAutoRefreshed = false     // 每个竞赛只静默重算一次（防止死循环）
 const hasCommon = computed(() => !!commonText.value)
 const commonHtml = computed(() => (commonText.value ? renderMarkdown(commonText.value) : ''))
@@ -629,6 +646,9 @@ async function loadCommonCache() {
   try {
     const res = await getCachedAnalysis(cid)
     if (routedId.value !== cid) return
+    commonSampleSize.value = res?.sample_size || 0
+    commonYearStats.value = res?.year_stats || []
+    commonSampleItems.value = res?.sample_items || []
     if (res?.cached && res.analysis) {
       commonText.value = res.analysis
       commonOpen.value = false
@@ -666,6 +686,9 @@ async function runCommonAnalysis() {
     // 请求期间已切到别的竞赛 → 丢弃本次结果，避免串台
     if (routedId.value !== cid) return
     const analysis = res?.analysis || ''
+    commonSampleSize.value = res?.sample_size || 0
+    commonYearStats.value = res?.year_stats || []
+    commonSampleItems.value = res?.sample_items || []
     if (!analysis) {
       commonError.value = '未获取到分析内容，请稍后重试'
     } else {
@@ -1669,6 +1692,49 @@ onBeforeUnmount(() => {
               跨年份均衡抽取最多 100 件金奖/银奖作品，输出共性技术套路、红蓝海商业趋势、
               评审核心偏好与备赛最高建议。
             </p>
+            <p
+              v-if="commonSampleLine"
+              data-testid="common-sample-line"
+              class="mt-1.5 text-xs font-semibold text-blue-700 dark:text-blue-300"
+            >
+              {{ commonSampleLine }}
+            </p>
+
+            <!-- 逐条明细：报告读的到底是哪 100 件，点开就能核对 -->
+            <div v-if="commonSampleItems.length" class="mt-2">
+              <button
+                type="button"
+                data-testid="common-sample-toggle"
+                class="inline-flex items-center gap-1 text-xs font-semibold text-slate-500 transition-colors hover:text-blue-700 dark:text-slate-400 dark:hover:text-blue-300"
+                @click="sampleListOpen = !sampleListOpen"
+              >
+                <svg
+                  class="h-3.5 w-3.5 transition-transform"
+                  :class="sampleListOpen ? 'rotate-90' : ''"
+                  fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"
+                >
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" />
+                </svg>
+                {{ sampleListOpen ? '收起抽样明细' : `查看这 ${commonSampleItems.length} 件抽样明细` }}
+              </button>
+              <ol
+                v-if="sampleListOpen"
+                data-testid="common-sample-list"
+                class="mt-2 max-h-56 space-y-1 overflow-y-auto rounded-xl bg-slate-50 p-3 text-xs text-slate-600 ring-1 ring-slate-200/70 dark:bg-slate-900/60 dark:text-slate-300 dark:ring-slate-700"
+              >
+                <li
+                  v-for="(it, i) in commonSampleItems"
+                  :key="it.id || i"
+                  class="truncate"
+                >
+                  <span class="font-semibold text-slate-400 dark:text-slate-500">{{ i + 1 }}.</span>
+                  <span class="mx-1 font-semibold text-slate-700 dark:text-slate-200">{{ it.year || '年份未标' }}</span>
+                  <span class="rounded bg-amber-50 px-1 text-[11px] font-semibold text-amber-700 dark:bg-amber-500/10 dark:text-amber-300">{{ it.award || '等级未标' }}</span>
+                  <span class="ml-1 text-slate-400 dark:text-slate-500">{{ it.track }}</span>
+                  <span class="ml-1">{{ it.title }}</span>
+                </li>
+              </ol>
+            </div>
           </div>
 
           <!-- 终身一次：从未生成过才显示「生成」；已生成只显示「展开全部 / 收起」 -->
