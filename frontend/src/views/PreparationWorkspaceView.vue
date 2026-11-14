@@ -59,6 +59,10 @@ function applyDetail(d) {
       && messages.value[0].role === 'assistant') {
     messages.value[0] = greetingMessage()
   }
+  // 算法竞技赛事没有「灵感工作台」Tab：若当前停在它上面，退回第一个 Tab
+  if (competition.hasProjectAwards === false && activeTab.value === 'idea') {
+    activeTab.value = 'ai'
+  }
   // 兼容老字段（完整日期），没有再退回 *月份* 拼接
   const startT = d.contestStart || d.startTime || d.contestTime || d.registrationStart || ''
   const endT = d.contestEnd || d.endTime || d.registrationEnd || ''
@@ -117,6 +121,12 @@ const tabs = [
   { key: 'idea', label: '\u7075\u611f\u5de5\u4f5c\u53f0' }
 ]
 const activeTab = ref('ai')
+
+// 纯算法/知识类赛事只公示名单、没有项目作品：直接不展示「灵感工作台」Tab，
+// 避免入口亮着让人误以为还能生成灵感（后端同样会 400 拦截）。
+const visibleTabs = computed(() => (
+  algorithmOnly.value ? tabs.filter((tab) => tab.key !== 'idea') : tabs
+))
 
 /* =========================================================
    Tab1：AI 备赛计划（真实接口：渐进式多轮对话）
@@ -1163,7 +1173,7 @@ onBeforeUnmount(() => {
       <!-- Tab 导航 -->
       <nav class="mt-4 flex flex-nowrap items-center gap-2 overflow-x-auto pb-1 sm:flex-wrap sm:overflow-visible sm:pb-0">
         <button
-          v-for="tab in tabs"
+          v-for="tab in visibleTabs"
           :key="tab.key"
           type="button"
           class="shrink-0 whitespace-nowrap rounded-full px-4 py-2 text-sm font-bold transition-colors sm:px-5"

@@ -954,8 +954,25 @@ def _norm_name(name: str) -> str:
     return text.lower()
 
 
+# 赛事名模糊匹配阈值：过高会漏（转占位赛事，人工归并），过低会串台（错误挂到别的赛事）
+FUZZY_MATCH_THRESHOLD = 0.86
+# 子串匹配的最短赛事名长度（低于此长度的高频词，如「蓝桥杯」，容易把别的赛事吸进来）
+MIN_SUBSTRING_NAME_LEN = 8
+# 占位赛事不参与匹配，避免爬虫把自己的桶当成真赛事
+PLACEHOLDER_NAME_MARK = "待确认"
+
+
 def match_competition_id(name: str):
-    """把抽取到的赛事名映射到 competitions.id；匹配不到返回 None（保留原文）。"""
+    """把抽取到的赛事名映射到 competitions.id。
+
+    规则（由严到宽，宁可返回 None 走占位赛事，也不错误串台）：
+    1. 归一化后完全相等 -> 直接命中；
+    2. 双向子串命中 -> 取「赛事名最长」的那个（最具体）；若并列最长则视为歧义，返回 None；
+    3. 相似度兜底 -> 阈值 0.86（原 0.75 过低，容易把近似赛事名吸过来）。
+
+    None 的语义：调用方会创建/复用「待确认赛事（爬虫自动创建）」占位记录，
+    由人工归并，比错误挂到蓝桥杯这类高名气赛事上安全得多。
+    """
     if not name:
         return None
     try:
@@ -968,25 +985,50 @@ def match_competition_id(name: str):
     if not target:
         return None
 
+    hits: list[tuple[int, object, str]] = []
     for comp in competitions:
         comp_name = _norm_name(comp.get("name") or "")
-        if not comp_name:
+        if not comp_name or PLACEHOLDER_NAME_MARK in comp_name:
             continue
-        if (target == comp_name
-                or (len(comp_name) >= 6 and comp_name in target)
-                or (len(target) >= 6 and target in comp_name)):
-            logger.info("赛事名匹配成功：%s -> id=%s", name, comp.get("id"))
+        if target == comp_name:
+            logger.info("赛事名精确匹配：%s -> id=%s", name, comp.get("id"))
             return comp.get("id")
+        if (len(comp_name) >= MIN_SUBSTRING_NAME_LEN and comp_name in target) or (
+            len(target) >= MIN_SUBSTRING_NAME_LEN and target in comp_name
+        ):
+            hits.append((len(comp_name), comp.get("id"), comp_name))
 
-    best_id, best_ratio = None, 0.0
+    if hits:
+        hits.sort(key=lambda item: item[0], reverse=True)
+        if len(hits) > 1 and hits[0][0] == hits[1][0]:
+            logger.warning(
+                "赛事名同时命中多个赛事，无法判定归属，转占位待人工归并：%s -> %s",
+                name,
+                [hit[2] for hit in hits[:3]],
+            )
+            return None
+        best = hits[0]
+        logger.info("赛事名子串匹配：%s -> id=%s（赛事名 %s，长度 %s）", name, best[1], best[2], best[0])
+        return best[1]
+
+    best_id, best_ratio, best_name = None, 0.0, ""
     for comp in competitions:
-        ratio = difflib.SequenceMatcher(None, target, _norm_name(comp.get("name") or "")).ratio()
+        comp_name = _norm_name(comp.get("name") or "")
+        if not comp_name or PLACEHOLDER_NAME_MARK in comp_name:
+            continue
+        ratio = difflib.SequenceMatcher(None, target, comp_name).ratio()
         if ratio > best_ratio:
-            best_id, best_ratio = comp.get("id"), ratio
-    if best_ratio >= 0.75:
-        logger.info("赛事名模糊匹配：%s -> id=%s（相似度 %.2f）", name, best_id, best_ratio)
+            best_id, best_ratio, best_name = comp.get("id"), ratio, comp_name
+    if best_id is not None and best_ratio >= FUZZY_MATCH_THRESHOLD:
+        logger.warning(
+            "赛事名模糊匹配（低置信，建议人工复核）：%s -> id=%s（相似度 %.2f，赛事名 %s）",
+            name,
+            best_id,
+            best_ratio,
+            best_name,
+        )
         return best_id
-    logger.info("赛事名未匹配到 competitions 表")
+    logger.info("赛事名未匹配到 competitions 表（相似度 %.2f）：%s", best_ratio, name)
     return None
 
 
