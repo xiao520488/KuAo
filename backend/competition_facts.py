@@ -389,6 +389,19 @@ def stage_one(competition_id: int, *, today: Optional[date] = None,
     facts = result["facts"]
     diffs = diff_against(row, facts)
     snapshot = {field: (row.get(field) or None) for field in FACT_FIELDS}
+    if not facts:
+        # 页面能抓、但模型没抽出任何可信日期：记一笔「已抓过」好让 7 天冷却生效，
+        # 但直接标记 rejected，不往人工核对队列里灌空行。
+        sid = db.add_fact_staging(
+            competition_id=int(competition_id),
+            source_url=url,
+            payload={"facts": {}, "evidence": result["evidence"], "diffs": []},
+            current_snapshot=snapshot,
+        )
+        db.decide_fact_staging(sid, "rejected", note="官网未见可确认日期",
+                               decided_by="system")
+        return {"ok": False, "competition_id": int(competition_id), "name": row["name"],
+                "error": "官网页面里没找到可确认的日期"}
     sid = db.add_fact_staging(
         competition_id=int(competition_id),
         source_url=url,
