@@ -767,4 +767,93 @@ export function deleteAdminChangelog(changelogId) {
   if (!Number.isInteger(id) || id <= 0) return Promise.reject(new Error('日志 ID 无效'))
   return api.delete(`/admin/changelogs/${id}`)
 }
+/**
+ * 管理后台：赛事事实待确认队列
+ * GET /api/admin/competition-facts?status=pending
+ *
+ * @param {{ status?: 'pending'|'applied'|'rejected'|'all', limit?: number }} params
+ * @returns {Promise<{ total: number, items: Array<object> }>}
+ */
+export function getFactQueue(params = {}) {
+  const query = {}
+  if (params.status) query.status = params.status
+  if (params.limit) query.limit = Number(params.limit)
+
+  return api.get('/admin/competition-facts', { params: query }).then((data) => ({
+    total: data?.total ?? (data?.items?.length || 0),
+    items: data?.items || []
+  }))
+}
+
+/**
+ * 管理后台：抓官网 + 抽取日期，写入待确认队列（同步，最多 5 条）
+ * POST /api/admin/competition-facts/fetch
+ *
+ * @param {{ competition_ids?: number[], limit?: number, source_url?: string }} payload
+ * @returns {Promise<{ message: string, queued: number, results: Array<object> }>}
+ */
+export function fetchFactCandidates(payload = {}) {
+  const body = {}
+  if (Array.isArray(payload.competition_ids) && payload.competition_ids.length) {
+    body.competition_ids = payload.competition_ids.map((id) => Number(id))
+  }
+  if (payload.limit) body.limit = Number(payload.limit)
+  if (payload.source_url) body.source_url = String(payload.source_url).trim()
+
+  return api.post('/admin/competition-facts/fetch', body)
+}
+
+/** 管理后台：采纳一条抽取结果（省略 fields = 采纳全部差异字段） */
+export function applyFactCandidate(stagingId, fields = null) {
+  const id = Number(stagingId)
+  if (!Number.isInteger(id) || id <= 0) return Promise.reject(new Error('队列 ID 无效'))
+  const body = Array.isArray(fields) && fields.length ? { fields } : {}
+  return api.post(`/admin/competition-facts/${id}/apply`, body)
+}
+
+/** 管理后台：忽略一条抽取结果（不改主表） */
+export function rejectFactCandidate(stagingId) {
+  const id = Number(stagingId)
+  if (!Number.isInteger(id) || id <= 0) return Promise.reject(new Error('队列 ID 无效'))
+  return api.post(`/admin/competition-facts/${id}/reject`, {})
+}
+
+/** 管理后台：标记「官网未公布」（台账记 NULL，主表不动） */
+export function markFactUnknown(stagingId, fields = null) {
+  const id = Number(stagingId)
+  if (!Number.isInteger(id) || id <= 0) return Promise.reject(new Error('队列 ID 无效'))
+  const body = Array.isArray(fields) && fields.length ? { fields } : {}
+  return api.post(`/admin/competition-facts/${id}/unknown`, body)
+}
+
+/** 管理后台：某赛事的日期台账 GET /api/admin/competitions/:id/facts */
+export function getCompetitionFacts(competitionId) {
+  const id = Number(competitionId)
+  if (!Number.isInteger(id) || id <= 0) return Promise.reject(new Error('赛事 ID 无效'))
+  return api.get(`/admin/competitions/${id}/facts`)
+}
+
+/**
+ * 管理后台：手工校正赛事日期
+ * PUT /api/admin/competitions/:id/facts
+ *
+ * @param {number} competitionId
+ * @param {{ reg_start_date?: string, reg_end_date?: string,
+ *           contest_start_date?: string, contest_end_date?: string,
+ *           source_url?: string }} payload 空字符串表示清空该字段
+ */
+export function saveCompetitionFacts(competitionId, payload = {}) {
+  const id = Number(competitionId)
+  if (!Number.isInteger(id) || id <= 0) return Promise.reject(new Error('赛事 ID 无效'))
+
+  const body = {}
+  for (const key of ['reg_start_date', 'reg_end_date', 'contest_start_date', 'contest_end_date']) {
+    if (key in payload) body[key] = String(payload[key] || '').trim()
+  }
+  if (payload.source_url !== undefined) body.source_url = String(payload.source_url || '').trim()
+  if (!Object.keys(body).length) return Promise.reject(new Error('没有要保存的字段'))
+
+  return api.put(`/admin/competitions/${id}/facts`, body)
+}
+
 export default api

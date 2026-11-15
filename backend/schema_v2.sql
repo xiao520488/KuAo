@@ -346,3 +346,45 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_changelogs_version
     ON changelogs (version);
 CREATE INDEX IF NOT EXISTS idx_changelogs_release
     ON changelogs (release_date DESC, id DESC);
+
+-- -----------------------------------------------------------------------------
+-- 13. competition_facts_staging -- 官网抽取的赛事日期「待确认队列」
+--    payload 存模型抽取结果 JSON（facts / evidence / diffs），
+--    current_snapshot 存入库时的现库值，便于事后对比；
+--    status: pending -> applied / rejected，抽取永不直接改主表。
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS competition_facts_staging (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    competition_id    INTEGER NOT NULL REFERENCES competitions (id) ON DELETE CASCADE,
+    source_url        TEXT,
+    payload           TEXT    NOT NULL,
+    current_snapshot  TEXT,
+    status            TEXT    NOT NULL DEFAULT 'pending',
+    note              TEXT,
+    fetched_at        TEXT    NOT NULL DEFAULT (datetime('now', 'localtime')),
+    decided_at        TEXT,
+    decided_by        TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_cfs_status
+    ON competition_facts_staging (status, fetched_at DESC);
+CREATE INDEX IF NOT EXISTS idx_cfs_competition
+    ON competition_facts_staging (competition_id, id DESC);
+
+-- -----------------------------------------------------------------------------
+-- 14. competition_fact_ledger -- 事实台账（字段级来源与核对时间）
+--    value IS NULL 表示"官网未公布"（前台显示"以官网为准"，不伪造日期）；
+--    (competition_id, field) 唯一，只保留最近一次核对结果。
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS competition_fact_ledger (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    competition_id INTEGER NOT NULL REFERENCES competitions (id) ON DELETE CASCADE,
+    field          TEXT    NOT NULL,
+    value          TEXT,
+    source_url     TEXT,
+    verified_at    TEXT    NOT NULL DEFAULT (datetime('now', 'localtime')),
+    verified_by    TEXT
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS ux_cfl_competition_field
+    ON competition_fact_ledger (competition_id, field);

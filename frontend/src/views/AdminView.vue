@@ -10,6 +10,12 @@ import {
   createAdminChangelog,
   updateAdminChangelog,
   deleteAdminChangelog,
+  getFactQueue,
+  fetchFactCandidates,
+  applyFactCandidate,
+  rejectFactCandidate,
+  markFactUnknown,
+  saveCompetitionFacts,
   approveAdminCandidate,
   rejectAdminCandidate,
   markAdminFeedbackRead,
@@ -35,7 +41,7 @@ const router = useRouter()
 
 // 当前面板支持 ?tab=feedback 深链，刷新 / 前进后退后停在原面板
 const activeTab = ref(
-  ['candidates', 'feedback', 'competitions', 'changelogs'].includes(route.query.tab)
+  ['candidates', 'feedback', 'competitions', 'changelogs', 'facts'].includes(route.query.tab)
     ? route.query.tab
     : 'candidates'
 )
@@ -62,6 +68,26 @@ const COMPETITIONS_PAGE_SIZE = 10
 const changelogs = ref([])
 const changelogsLoading = ref(false)
 const changelogsError = ref('')
+
+// 赛事核对：官网抽取的待确认队列 + 手动校正日期
+const factQueue = ref([])
+const factLoading = ref(false)
+const factError = ref('')
+const factFetching = ref(false)
+const factBusyId = ref(null)
+const factIdsInput = ref('')
+const factSourceUrl = ref('')
+const factsEditOpen = ref(false)
+const factsEditItem = ref(null)
+const factsSaving = ref(false)
+const factsEditError = ref('')
+const factsForm = ref({
+  reg_start_date: '',
+  reg_end_date: '',
+  contest_start_date: '',
+  contest_end_date: '',
+  source_url: ''
+})
 
 /** 今天（本地时区）的 YYYY-MM-DD，作为发布日期默认值 */
 function todayISO() {
@@ -341,12 +367,14 @@ function switchTab(tab) {
   if (tab === 'feedback' && !feedbacks.value.length) loadFeedback()
   if (tab === 'competitions' && !competitions.value.length) loadCompetitions()
   if (tab === 'changelogs' && !changelogs.value.length) loadChangelogs()
+  if (tab === 'facts' && !factQueue.value.length) loadFacts()
 }
 
 function refresh() {
   if (activeTab.value === 'candidates') loadCandidates()
   else if (activeTab.value === 'feedback') loadFeedback()
   else if (activeTab.value === 'changelogs') loadChangelogs()
+  else if (activeTab.value === 'facts') loadFacts()
   else loadCompetitions()
 }
 
@@ -461,6 +489,134 @@ async function onMarkRead(item) {
   }
 }
 
+/* ---------------------------- 赛事核对 ---------------------------- */
+/* 抽取结果只进队列，采纳才写主表；日期必须能在官网页面上找到，否则抽取直接报错。 */
+
+async function loadFacts() {
+  factLoading.value = true
+  factError.value = ''
+  try {
+    const data = await getFactQueue({ status: 'pending', limit: 50 })
+    factQueue.value = data.items
+  } catch (err) {
+    factError.value = errorText(err, '待确认队列加载失败')
+  } finally {
+    factLoading.value = false
+  }
+}
+
+/** 抓一轮官网（同步，最多 5 条，单条约 30-60 秒） */
+async function runFactFetch() {
+  if (factFetching.value) return
+  factFetching.value = true
+  factError.value = ''
+  try {
+    showToast('正在抓官网 + 抽取日期，约 30-60 秒…')
+    const ids = factIdsInput.value
+      .split(/[\s,，]+/)
+      .map((raw) => Number(raw))
+      .filter((id) => Number.isInteger(id) && id > 0)
+    const payload = { limit: 5, competition_ids: ids }
+    // 指定赛事 1 条时才允许覆盖来源页（批量时同一个链接没有意义）
+    if (ids.length === 1 && factSourceUrl.value.trim()) {
+      payload.source_url = factSourceUrl.value.trim()
+    }
+    const data = await fetchFactCandidates(payload)
+    showToast(data?.message || '已入队')
+    const failed = (data?.results || []).filter((row) => !row.ok)
+    if (failed.length) {
+      factError.value = failed
+        .map((row) => `${row.name || row.competition_id}：${row.error}`)
+        .join('；')
+    }
+    await loadFacts()
+  } catch (err) {
+    factError.value = errorText(err, '抽取失败，请稍后重试')
+  } finally {
+    factFetching.value = false
+  }
+}
+
+async function adoptFact(item) {
+  if (factBusyId.value) return
+  factBusyId.value = item.id
+  try {
+    await applyFactCandidate(item.id)
+    showToast('已采纳，前台立即生效')
+    await loadFacts()
+  } catch (err) {
+    factError.value = errorText(err, '采纳失败')
+  } finally {
+    factBusyId.value = null
+  }
+}
+
+async function ignoreFact(item) {
+  if (factBusyId.value) return
+  factBusyId.value = item.id
+  try {
+    await rejectFactCandidate(item.id)
+    await loadFacts()
+  } catch (err) {
+    factError.value = errorText(err, '操作失败')
+  } finally {
+    factBusyId.value = null
+  }
+}
+
+async function markUnknown(item) {
+  if (factBusyId.value) return
+  factBusyId.value = item.id
+  try {
+    await markFactUnknown(item.id)
+    showToast('已标记为官网未公布')
+    await loadFacts()
+  } catch (err) {
+    factError.value = errorText(err, '操作失败')
+  } finally {
+    factBusyId.value = null
+  }
+}
+
+/* ---- 手动校正日期（赛事管理列表的「日期」按钮） ---- */
+
+function openFactsEditor(item) {
+  factsEditItem.value = item
+  factsForm.value = {
+    reg_start_date: item.reg_start_date || '',
+    reg_end_date: item.reg_end_date || '',
+    contest_start_date: item.contest_start_date || '',
+    contest_end_date: item.contest_end_date || '',
+    source_url: item.official_url || ''
+  }
+  factsEditError.value = ''
+  factsEditOpen.value = true
+}
+
+function cancelFactsEdit() {
+  if (factsSaving.value) return
+  factsEditOpen.value = false
+  factsEditItem.value = null
+}
+
+async function saveFactsEdit() {
+  const item = factsEditItem.value
+  if (!item || factsSaving.value) return
+  factsSaving.value = true
+  factsEditError.value = ''
+  try {
+    await saveCompetitionFacts(item.id, { ...factsForm.value })
+    showToast('日期已保存')
+    factsEditOpen.value = false
+    factsEditItem.value = null
+    await loadCompetitions()
+  } catch (err) {
+    factsEditError.value = errorText(err, '保存失败，请检查日期格式')
+  } finally {
+    factsSaving.value = false
+  }
+}
+
 /* ---------------------------- 侧边栏 ---------------------------- */
 
 const navItems = computed(() => [
@@ -487,6 +643,12 @@ const navItems = computed(() => [
     label: '更新日志管理',
     hint: '发布',
     count: changelogs.value.length
+  },
+  {
+    id: 'facts',
+    label: '赛事核对',
+    hint: '待确认',
+    count: factQueue.value.length
   }
 ])
 
@@ -494,6 +656,7 @@ const currentTitle = computed(() => {
   if (activeTab.value === 'candidates') return '候选赛事审核'
   if (activeTab.value === 'feedback') return '用户反馈'
   if (activeTab.value === 'changelogs') return '更新日志管理'
+  if (activeTab.value === 'facts') return '赛事核对'
   return '赛事管理'
 })
 
@@ -507,6 +670,9 @@ const currentDesc = computed(() => {
   if (activeTab.value === 'changelogs') {
     return '发布后立即出现在前台「更新日志」弹窗里；正文支持 Markdown，版本号不可重复。'
   }
+  if (activeTab.value === 'facts') {
+    return '抓官网抽出来的日期先进这里，点「采纳」才写进正式库；找不到日期的赛事，可在「赛事管理」里手动改。'
+  }
   return '正式赛事库里的全部比赛，可在这里永久删除（连带获奖作品、备赛灵感与 AI 洞察，不可恢复）。'
 })
 
@@ -514,6 +680,7 @@ const currentLoading = computed(() => {
   if (activeTab.value === 'candidates') return candidatesLoading.value
   if (activeTab.value === 'feedback') return feedbackLoading.value
   if (activeTab.value === 'changelogs') return changelogsLoading.value
+  if (activeTab.value === 'facts') return factLoading.value
   return competitionsLoading.value
 })
 
@@ -523,6 +690,7 @@ onMounted(() => {
   loadFeedback()
   loadCompetitions()
   loadChangelogs()
+  loadFacts()
 })
 </script>
 
@@ -790,6 +958,15 @@ onMounted(() => {
                       <td class="whitespace-nowrap px-3 py-3 text-right">
                         <button
                           type="button"
+                          class="mr-2 rounded-full border border-slate-200 dark:border-slate-600 px-3.5 py-1.5
+                                 text-xs font-bold text-slate-600 dark:text-slate-300
+                                 transition-colors hover:bg-slate-50 dark:hover:bg-slate-700/60"
+                          @click="openFactsEditor(item)"
+                        >
+                          日期
+                        </button>
+                        <button
+                          type="button"
                           class="rounded-full border border-red-200 dark:border-red-500/40 px-3.5 py-1.5
                                  text-xs font-bold text-red-600 dark:text-red-400
                                  transition-colors hover:bg-red-600 hover:text-white
@@ -833,6 +1010,163 @@ onMounted(() => {
                 </div>
               </div>
             </template>
+          </template>
+
+          <!-- ============ 赛事核对 ============ -->
+          <template v-else-if="activeTab === 'facts'">
+            <div class="flex flex-wrap items-center gap-3">
+              <button
+                type="button"
+                class="rounded-full bg-blue-600 px-5 py-2.5 text-sm font-bold text-white
+                       transition-colors hover:bg-blue-700 disabled:opacity-50"
+                :disabled="factFetching"
+                @click="runFactFetch"
+              >
+                {{ factFetching ? '抽取中…' : '抓官网抽 5 条' }}
+              </button>
+              <p class="text-xs leading-relaxed text-slate-500 dark:text-slate-400">
+                抽取结果只进队列，点「采纳」才写正式库；日期必须能在官网页面上找到，
+                找不到会直接报错（不会编）。
+              </p>
+            </div>
+
+            <div class="mt-3 grid gap-2 sm:grid-cols-[180px_1fr]">
+              <input
+                v-model="factIdsInput"
+                type="text"
+                placeholder="赛事 ID（可选，如 10）"
+                class="rounded-xl border border-slate-200 dark:border-slate-600
+                       bg-white dark:bg-slate-900 px-3 py-2 text-sm text-slate-700
+                       dark:text-slate-200"
+              />
+              <input
+                v-model="factSourceUrl"
+                type="url"
+                placeholder="来源页链接（可选，仅指定 1 条赛事时生效；官网首页没有日期时填通知页）"
+                class="rounded-xl border border-slate-200 dark:border-slate-600
+                       bg-white dark:bg-slate-900 px-3 py-2 text-sm text-slate-700
+                       dark:text-slate-200"
+              />
+            </div>
+
+            <div
+              v-if="factError"
+              class="mt-4 rounded-xl border border-red-100 dark:border-red-500/30 bg-red-50 dark:bg-red-500/15
+                     px-4 py-3 text-sm font-semibold text-red-600 dark:text-red-400"
+            >
+              {{ factError }}
+            </div>
+
+            <div v-if="factLoading" class="mt-4 space-y-2">
+              <div
+                v-for="n in 3"
+                :key="n"
+                class="h-20 animate-pulse rounded-2xl bg-slate-100 dark:bg-slate-700/60"
+              ></div>
+            </div>
+
+            <div
+              v-else-if="!factQueue.length"
+              class="mt-4 rounded-xl border border-dashed border-slate-200 dark:border-slate-700
+                     px-4 py-14 text-center text-sm text-slate-500 dark:text-slate-400"
+            >
+              队列是空的：点上面的按钮抓一轮官网
+            </div>
+
+            <div v-else class="mt-4 space-y-3">
+              <article
+                v-for="item in factQueue"
+                :key="item.id"
+                class="rounded-2xl border border-slate-200 dark:border-slate-700
+                       bg-white dark:bg-slate-800/60 p-4"
+              >
+                <header class="flex flex-wrap items-start justify-between gap-2">
+                  <div class="min-w-0">
+                    <p class="break-words font-bold text-slate-900 dark:text-slate-100">
+                      {{ item.competition_name }}
+                    </p>
+                    <p class="mt-1 break-all text-xs text-slate-500 dark:text-slate-400">
+                      <a
+                        v-if="item.source_url"
+                        :href="item.source_url"
+                        target="_blank"
+                        rel="noopener"
+                        class="underline hover:text-blue-600"
+                      >{{ item.source_url }}</a>
+                      · 抽取于 {{ item.fetched_at }}
+                    </p>
+                  </div>
+                  <span
+                    class="shrink-0 rounded-full bg-amber-50 dark:bg-amber-500/15 px-2.5 py-1
+                           text-xs font-bold text-amber-600 dark:text-amber-400"
+                  >
+                    待确认 {{ item.diffs.length }} 项
+                  </span>
+                </header>
+
+                <ul class="mt-3 space-y-1.5 text-sm">
+                  <li
+                    v-for="d in item.diffs"
+                    :key="d.field"
+                    class="flex flex-wrap items-center gap-2"
+                  >
+                    <span class="w-16 shrink-0 text-xs font-bold text-slate-500 dark:text-slate-400">
+                      {{ d.label }}
+                    </span>
+                    <span class="text-slate-400 line-through">{{ d.current || '空' }}</span>
+                    <span class="text-slate-400">→</span>
+                    <span class="font-bold text-emerald-600 dark:text-emerald-400">{{ d.incoming }}</span>
+                  </li>
+                </ul>
+
+                <p
+                  v-if="item.evidence"
+                  class="mt-3 rounded-lg bg-slate-50 dark:bg-slate-700/40 px-3 py-2
+                         text-xs leading-relaxed text-slate-500 dark:text-slate-400"
+                >
+                  原文：{{ item.evidence }}
+                </p>
+
+                <div class="mt-3 flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    class="rounded-full bg-emerald-600 px-4 py-1.5 text-xs font-bold text-white
+                           transition-colors hover:bg-emerald-700 disabled:opacity-50"
+                    :disabled="factBusyId === item.id"
+                    @click="adoptFact(item)"
+                  >
+                    全部采纳
+                  </button>
+                  <button
+                    type="button"
+                    class="rounded-full border border-slate-200 dark:border-slate-600 px-4 py-1.5
+                           text-xs font-bold text-slate-600 dark:text-slate-300
+                           transition-colors hover:bg-slate-50 dark:hover:bg-slate-700/60 disabled:opacity-50"
+                    :disabled="factBusyId === item.id"
+                    @click="markUnknown(item)"
+                  >
+                    官网未公布
+                  </button>
+                  <button
+                    type="button"
+                    class="rounded-full border border-slate-200 dark:border-slate-600 px-4 py-1.5
+                           text-xs font-bold text-slate-500 dark:text-slate-400
+                           transition-colors hover:bg-slate-50 dark:hover:bg-slate-700/60 disabled:opacity-50"
+                    :disabled="factBusyId === item.id"
+                    @click="ignoreFact(item)"
+                  >
+                    忽略
+                  </button>
+                  <router-link
+                    :to="`/competition/${item.competition_id}`"
+                    target="_blank"
+                    class="text-xs font-bold text-blue-600 hover:underline dark:text-blue-400"
+                  >
+                    查看赛事 →
+                  </router-link>
+                </div>
+              </article>
+            </div>
           </template>
 
           <!-- ============ 用户反馈 ============ -->
@@ -1295,6 +1629,100 @@ onMounted(() => {
                 @click="confirmDeleteChangelog"
               >
                 {{ deletingId !== null ? '删除中…' : '确认删除' }}
+              </button>
+            </div>
+          </div>
+        </div>
+      </Transition>
+    </Teleport>
+
+    <!-- 手动校正赛事日期 -->
+    <Teleport to="body">
+      <Transition name="fade">
+        <div
+          v-if="factsEditOpen"
+          class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 px-4 py-8"
+          @click.self="cancelFactsEdit"
+        >
+          <div
+            class="w-full max-w-[520px] rounded-2xl border border-slate-200 bg-white p-6
+                   shadow-xl dark:border-slate-700 dark:bg-slate-800"
+          >
+            <h2 class="text-lg font-bold text-slate-900 dark:text-slate-100">
+              校正赛事日期
+            </h2>
+            <p class="mt-1 break-words text-sm text-slate-500 dark:text-slate-400">
+              {{ factsEditItem?.name }}
+            </p>
+
+            <div v-if="factsEditError" class="mt-3 rounded-xl bg-red-50 dark:bg-red-500/15 px-3 py-2
+                                              text-sm font-semibold text-red-600 dark:text-red-400">
+              {{ factsEditError }}
+            </div>
+
+            <div class="mt-4 grid gap-3 sm:grid-cols-2">
+              <label class="block text-xs font-bold text-slate-500 dark:text-slate-400">
+                报名开始
+                <input v-model="factsForm.reg_start_date" type="date"
+                       class="mt-1 w-full rounded-xl border border-slate-200 dark:border-slate-600
+                              bg-white dark:bg-slate-900 px-3 py-2 text-sm text-slate-700
+                              dark:text-slate-200" />
+              </label>
+              <label class="block text-xs font-bold text-slate-500 dark:text-slate-400">
+                报名截止
+                <input v-model="factsForm.reg_end_date" type="date"
+                       class="mt-1 w-full rounded-xl border border-slate-200 dark:border-slate-600
+                              bg-white dark:bg-slate-900 px-3 py-2 text-sm text-slate-700
+                              dark:text-slate-200" />
+              </label>
+              <label class="block text-xs font-bold text-slate-500 dark:text-slate-400">
+                比赛开始
+                <input v-model="factsForm.contest_start_date" type="date"
+                       class="mt-1 w-full rounded-xl border border-slate-200 dark:border-slate-600
+                              bg-white dark:bg-slate-900 px-3 py-2 text-sm text-slate-700
+                              dark:text-slate-200" />
+              </label>
+              <label class="block text-xs font-bold text-slate-500 dark:text-slate-400">
+                比赛结束
+                <input v-model="factsForm.contest_end_date" type="date"
+                       class="mt-1 w-full rounded-xl border border-slate-200 dark:border-slate-600
+                              bg-white dark:bg-slate-900 px-3 py-2 text-sm text-slate-700
+                              dark:text-slate-200" />
+              </label>
+            </div>
+
+            <label class="mt-3 block text-xs font-bold text-slate-500 dark:text-slate-400">
+              信息来源（官网链接）
+              <input v-model="factsForm.source_url" type="url" placeholder="https://"
+                     class="mt-1 w-full rounded-xl border border-slate-200 dark:border-slate-600
+                            bg-white dark:bg-slate-900 px-3 py-2 text-sm text-slate-700
+                            dark:text-slate-200" />
+            </label>
+
+            <p class="mt-3 text-xs leading-relaxed text-slate-500 dark:text-slate-400">
+              留空表示清空该日期；保存后前台会显示「信息核对于今天」。
+            </p>
+
+            <div class="mt-6 flex justify-end gap-2">
+              <button
+                type="button"
+                class="rounded-full border border-slate-200 px-4 py-2 text-sm font-bold
+                       text-slate-600 transition-colors hover:bg-slate-50
+                       disabled:opacity-50 dark:border-slate-600 dark:text-slate-300
+                       dark:hover:bg-slate-700/60"
+                :disabled="factsSaving"
+                @click="cancelFactsEdit"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                class="rounded-full bg-blue-600 px-4 py-2 text-sm font-bold text-white
+                       transition-colors hover:bg-blue-700 disabled:opacity-50"
+                :disabled="factsSaving"
+                @click="saveFactsEdit"
+              >
+                {{ factsSaving ? '保存中…' : '保存' }}
               </button>
             </div>
           </div>

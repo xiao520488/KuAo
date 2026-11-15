@@ -23,6 +23,7 @@ from fastapi import APIRouter, Depends, HTTPException, Path, Query, Response
 from pydantic import BaseModel, Field
 
 import ai_jobs_runner
+import competition_facts
 import stage_schedule
 from db import get_categories as db_get_categories
 from db import get_competition as db_get_competition
@@ -75,6 +76,7 @@ def _row_to_competition(row: Dict[str, Any]) -> Competition:
     2026-11-08：full_process_guide 已从列表模型移除（改由详情返回），
     否则 30+ 条攻略会让列表响应多出上百 KB。
     """
+    status_info = competition_facts.compute_status(row)
     return Competition(
         id=row["id"],
         name=row["name"],
@@ -100,6 +102,12 @@ def _row_to_competition(row: Dict[str, Any]) -> Competition:
         sort_order=row.get("sort_order"),
         has_project_awards=bool(row.get("has_project_awards", 1)),
         created_at=row.get("created_at"),
+        # 阶段状态机（2026-11-15）：由四个日期实时推导，不落库。
+        # 前端用 status 做徽章与筛选；无日期时为 unknown「待核实」。
+        status=status_info["status"],
+        status_label=status_info["status_label"],
+        days_left=status_info["days_left"],
+        facts_checked_at=row.get("facts_checked_at"),
     )
 
 

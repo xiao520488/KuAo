@@ -273,6 +273,24 @@ function isRealOfficialSite(raw) {
 
 const officialIsReal = computed(() => isRealOfficialSite(detail.value?.official_url))
 
+// 阶段徽章配色：报名中绿、进行中蓝、未开始天蓝、已截止/已结束灰、待核实琥珀
+const statusToneClass = computed(() => {
+  const status = detail.value?.status
+  if (status === 'open') {
+    return 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300'
+  }
+  if (status === 'ongoing') {
+    return 'bg-blue-50 text-blue-700 dark:bg-blue-500/15 dark:text-blue-300'
+  }
+  if (status === 'upcoming') {
+    return 'bg-sky-50 text-sky-700 dark:bg-sky-500/15 dark:text-sky-300'
+  }
+  if (status === 'closed' || status === 'finished') {
+    return 'bg-slate-100 text-slate-500 dark:bg-slate-700/60 dark:text-slate-300'
+  }
+  return 'bg-amber-50 text-amber-600 dark:bg-amber-500/15 dark:text-amber-300'
+})
+
 // 名录类来源在库里没有独立字段（discover_source 未下发到详情），
 // 用「链接是不是目录页」反推来源文案，避免多改后端模型。
 const officialFallbackText = computed(() =>
@@ -536,6 +554,23 @@ const guideReady = computed(() => Boolean(detail.value?.full_process_guide))
               {{ detail.category || '暂未收录' }}
             </p>
           </div>
+        </section>
+
+        <!-- 3.5 阶段与核对信息：状态由服务端按日期实时推导，核对时间来自管理员台账 -->
+        <section class="mt-4 flex flex-wrap items-center gap-3 text-xs">
+          <span
+            v-if="detail.status"
+            class="rounded-full px-2.5 py-1 font-bold"
+            :class="statusToneClass"
+          >
+            {{ detail.status_label }}
+          </span>
+          <span v-if="detail.facts_checked_at" class="text-slate-500 dark:text-slate-400">
+            日期核对于 {{ String(detail.facts_checked_at).slice(0, 10) }}
+          </span>
+          <span v-else class="text-amber-600 dark:text-amber-400">
+            日期尚未人工核对，以官网当年通知为准
+          </span>
         </section>
 
         <!-- 4. 分块卡片：时间安排 / 赛事简介 / 参赛对象 / 内容范围 / 考试安排 -->

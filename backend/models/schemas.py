@@ -97,6 +97,21 @@ class Competition(BaseModel):
         ),
     )
     created_at: Optional[str] = Field(None, description="创建时间（本地时间字符串）")
+    # ---- 阶段状态机（2026-11-15）：服务端由四个日期实时推导，不落库 ----
+    status: str = Field(
+        "unknown",
+        description=(
+            "当前阶段：open=报名中 / upcoming=未开始 / closed=已截止 / "
+            "ongoing=进行中 / finished=已结束 / unknown=待核实"
+        ),
+    )
+    status_label: str = Field("待核实", description="阶段中文标签")
+    days_left: Optional[int] = Field(
+        None, description="报名中为距报名截止天数；进行中为距比赛结束天数；其余为空"
+    )
+    facts_checked_at: Optional[str] = Field(
+        None, description="该赛事日期最近一次人工核对时间；为空表示从未核对过"
+    )
 
     model_config = {
         "json_schema_extra": {

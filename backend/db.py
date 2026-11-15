@@ -29,7 +29,7 @@
   由 generate_short_names.py 批量补全，review_candidates.py 审核入库时自动生成。
 """
 
-from typing import Optional
+from typing import List, Optional
 from contextlib import contextmanager
 import difflib
 import json
@@ -638,6 +638,7 @@ def init_db(db_path: Optional[str] = None) -> None:
         _migrate_simple_columns(conn, "competition_candidates",
                                 _CANDIDATE_MIGRATION_COLUMNS)
         _ensure_ai_analysis_cache(conn)
+        _ensure_fact_tables(conn)
         conn.executescript(INDEXES_SQL)
         _backfill_detail_fields(conn)
 
@@ -3455,3 +3456,247 @@ def delete_changelog(changelog_id: int) -> None:
                            (int(changelog_id),))
         if cur.rowcount == 0:
             raise ValueError("更新日志不存在")
+
+
+# ============================================================
+# 十四、competition_facts：赛事事实台账（官网抽取 → 人工确认 → 主表）
+# ============================================================
+# 设计要点（2026-11-15）：
+#   * 旧数据只有赛氪一个来源，赛氪没有/日期错的赛事我们跟着错；
+#   * 改成「官网链接驱动」：competition_facts_staging 存待确认的抽取结果，
+#     主表只有管理员在后台「赛事校正台」采纳后才改；
+#   * competition_fact_ledger 记「字段 → 值 → 来源 URL → 核对时间」，
+#     前台可以展示"信息核对于 X 月 X 日"，value IS NULL 表示"官方未公布"。
+
+_FACTS_DDL = """
+CREATE TABLE IF NOT EXISTS competition_facts_staging (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    competition_id    INTEGER NOT NULL REFERENCES competitions (id) ON DELETE CASCADE,
+    source_url        TEXT,
+    payload           TEXT    NOT NULL,
+    current_snapshot  TEXT,
+    status            TEXT    NOT NULL DEFAULT 'pending',
+    note              TEXT,
+    fetched_at        TEXT    NOT NULL DEFAULT (datetime('now', 'localtime')),
+    decided_at        TEXT,
+    decided_by        TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_cfs_status
+    ON competition_facts_staging (status, fetched_at DESC);
+CREATE INDEX IF NOT EXISTS idx_cfs_competition
+    ON competition_facts_staging (competition_id, id DESC);
+
+CREATE TABLE IF NOT EXISTS competition_fact_ledger (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    competition_id INTEGER NOT NULL REFERENCES competitions (id) ON DELETE CASCADE,
+    field          TEXT    NOT NULL,
+    value          TEXT,
+    source_url     TEXT,
+    verified_at    TEXT    NOT NULL DEFAULT (datetime('now', 'localtime')),
+    verified_by    TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_cfl_competition_field
+    ON competition_fact_ledger (competition_id, field);
+"""
+
+# competitions 上的补列：最近一次人工核对时间（列表/详情展示"信息核对"用）
+_FACTS_COMPETITION_COLUMNS = (
+    ("facts_checked_at", "TEXT"),
+)
+
+
+def _ensure_fact_tables(conn: sqlite3.Connection) -> None:
+    """幂等建表 + 给 competitions 补 facts_checked_at 列。"""
+    conn.executescript(_FACTS_DDL)
+    existing = {r[1] for r in conn.execute("PRAGMA table_info(competitions)")}
+    for name, ddl in _FACTS_COMPETITION_COLUMNS:
+        if name not in existing:
+            conn.execute("ALTER TABLE competitions ADD COLUMN %s %s" % (name, ddl))
+
+
+def add_fact_staging(competition_id: int, source_url: str,
+                     payload: dict, current_snapshot: Optional[dict] = None) -> int:
+    """写入一条待确认的抽取结果，返回 staging id。"""
+    with get_conn() as conn:
+        _ensure_fact_tables(conn)
+        cur = conn.execute(
+            "INSERT INTO competition_facts_staging "
+            "(competition_id, source_url, payload, current_snapshot) "
+            "VALUES (?, ?, ?, ?)",
+            (int(competition_id), source_url or "",
+             json.dumps(payload or {}, ensure_ascii=False),
+             json.dumps(current_snapshot or {}, ensure_ascii=False)),
+        )
+        return int(cur.lastrowid)
+
+
+def list_fact_staging(status: str = "pending", limit: int = 50) -> list:
+    """按状态倒序列出待确认队列（带赛事名校验信息）。"""
+    try:
+        limit = max(1, min(int(limit), 200))
+    except (TypeError, ValueError):
+        limit = 50
+    sql = (
+        "SELECT s.*, c.name AS competition_name, c.official_url AS official_url, "
+        "c.reg_start_date AS reg_start_date, c.reg_end_date AS reg_end_date, "
+        "c.contest_start_date AS contest_start_date, "
+        "c.contest_end_date AS contest_end_date, "
+        "c.facts_checked_at AS facts_checked_at "
+        "FROM competition_facts_staging s "
+        "JOIN competitions c ON c.id = s.competition_id "
+        "WHERE (? = '' OR s.status = ?) "
+        "ORDER BY s.fetched_at DESC, s.id DESC LIMIT ?"
+    )
+    with get_conn() as conn:
+        _ensure_fact_tables(conn)
+        rows = conn.execute(sql, (status or "", status or "", limit)).fetchall()
+    out = []
+    for r in rows:
+        item = dict(r)
+        try:
+            item["payload"] = json.loads(item.get("payload") or "{}")
+        except ValueError:
+            item["payload"] = {}
+        try:
+            item["current_snapshot"] = json.loads(item.get("current_snapshot") or "{}")
+        except ValueError:
+            item["current_snapshot"] = {}
+        out.append(item)
+    return out
+
+
+def get_fact_staging(staging_id: int) -> Optional[dict]:
+    """取单条待确认记录（含赛事名与现值）。"""
+    sql = (
+        "SELECT s.*, c.name AS competition_name, c.official_url AS official_url, "
+        "c.reg_start_date AS reg_start_date, c.reg_end_date AS reg_end_date, "
+        "c.contest_start_date AS contest_start_date, "
+        "c.contest_end_date AS contest_end_date "
+        "FROM competition_facts_staging s "
+        "JOIN competitions c ON c.id = s.competition_id WHERE s.id = ?"
+    )
+    with get_conn() as conn:
+        _ensure_fact_tables(conn)
+        row = conn.execute(sql, (int(staging_id),)).fetchone()
+    if not row:
+        return None
+    item = dict(row)
+    for key in ("payload", "current_snapshot"):
+        try:
+            item[key] = json.loads(item.get(key) or "{}")
+        except ValueError:
+            item[key] = {}
+    return item
+
+
+def decide_fact_staging(staging_id: int, status: str, *,
+                        note: Optional[str] = None,
+                        decided_by: Optional[str] = None) -> None:
+    """把一条队列记录标记为 applied / rejected（不改主表）。"""
+    if status not in ("applied", "rejected", "pending"):
+        raise ValueError("非法状态：%s" % status)
+    with get_conn() as conn:
+        _ensure_fact_tables(conn)
+        cur = conn.execute(
+            "UPDATE competition_facts_staging SET status = ?, note = ?, "
+            "decided_at = datetime('now', 'localtime'), decided_by = ? WHERE id = ?",
+            (status, note, decided_by, int(staging_id)),
+        )
+        if cur.rowcount == 0:
+            raise ValueError("队列记录不存在")
+
+
+def set_competition_facts(competition_id: int, patch: dict, *,
+                          source_url: Optional[str] = None,
+                          verified_by: Optional[str] = None) -> dict:
+    """采纳/手工校正：写 competitions 并同步台账，返回实际写入的字段。
+
+    参数:
+        patch: {field: 'YYYY-MM-DD'|''|None}，值为空表示清空该字段。
+        source_url: 事实来源（官网链接）。
+    """
+    allowed = {"reg_start_date", "reg_end_date",
+               "contest_start_date", "contest_end_date"}
+    fields = {k: v for k, v in (patch or {}).items() if k in allowed}
+    if not fields:
+        raise ValueError("没有可写入的字段")
+    sets = ", ".join("%s = ?" % k for k in fields)
+    params = [(_date_or_none(v) if v else None) for v in fields.values()]
+    with get_conn() as conn:
+        _ensure_fact_tables(conn)
+        cur = conn.execute(
+            "UPDATE competitions SET %s, facts_checked_at = datetime('now', 'localtime') "
+            "WHERE id = ?" % sets,
+            (*params, int(competition_id)),
+        )
+        if cur.rowcount == 0:
+            raise ValueError("赛事不存在")
+        for field in fields:
+            value = _date_or_none(fields[field]) if fields[field] else None
+            conn.execute(
+                "INSERT INTO competition_fact_ledger "
+                "(competition_id, field, value, source_url, verified_by) "
+                "VALUES (?, ?, ?, ?, ?) "
+                "ON CONFLICT(competition_id, field) DO UPDATE SET "
+                "value = excluded.value, source_url = excluded.source_url, "
+                "verified_at = datetime('now', 'localtime'), "
+                "verified_by = excluded.verified_by",
+                (int(competition_id), field, value, source_url or "", verified_by),
+            )
+    return fields
+
+
+def mark_fact_unknown(competition_id: int, fields: List[str], *,
+                      source_url: Optional[str] = None,
+                      verified_by: Optional[str] = None) -> None:
+    """标记「官网未公布」：台账写 NULL 值，主表保持原样（不清空已有数据）。"""
+    keep = [f for f in (fields or []) if f in
+            ("reg_start_date", "reg_end_date",
+             "contest_start_date", "contest_end_date")]
+    if not keep:
+        raise ValueError("没有可标记的字段")
+    with get_conn() as conn:
+        _ensure_fact_tables(conn)
+        for field in keep:
+            conn.execute(
+                "INSERT INTO competition_fact_ledger "
+                "(competition_id, field, value, source_url, verified_by) "
+                "VALUES (?, ?, NULL, ?, ?) "
+                "ON CONFLICT(competition_id, field) DO UPDATE SET "
+                "value = NULL, source_url = excluded.source_url, "
+                "verified_at = datetime('now', 'localtime'), "
+                "verified_by = excluded.verified_by",
+                (int(competition_id), field, source_url or "", verified_by),
+            )
+
+
+def list_competition_facts(competition_id: int) -> list:
+    """返回某赛事的事实台账（字段 → 值 / 来源 / 核对时间）。"""
+    with get_conn() as conn:
+        _ensure_fact_tables(conn)
+        rows = conn.execute(
+            "SELECT field, value, source_url, verified_at, verified_by "
+            "FROM competition_fact_ledger WHERE competition_id = ? "
+            "ORDER BY field",
+            (int(competition_id),),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def list_competitions_for_fact_check(limit: int = 5) -> List[int]:
+    """挑出「有官网、最久没核对」的赛事 ID（默认按核对时间升序）。"""
+    try:
+        limit = max(1, min(int(limit), 100))
+    except (TypeError, ValueError):
+        limit = 5
+    sql = (
+        "SELECT id FROM competitions "
+        "WHERE COALESCE(is_active, 1) = 1 "
+        "AND official_url IS NOT NULL AND TRIM(official_url) <> '' "
+        "ORDER BY CASE WHEN facts_checked_at IS NULL THEN 0 ELSE 1 END, "
+        "facts_checked_at ASC, last_checked_at ASC, id ASC LIMIT ?"
+    )
+    with get_conn() as conn:
+        _ensure_fact_tables(conn)
+        rows = conn.execute(sql, (limit,)).fetchall()
+    return [int(r["id"]) for r in rows]
