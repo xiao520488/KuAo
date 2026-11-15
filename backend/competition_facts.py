@@ -69,6 +69,7 @@ _UA = (
 )
 _MAX_HTML_BYTES = 600_000
 _MAX_TEXT_CHARS = 8000
+_MAX_PDF_BYTES = 8_000_000
 
 
 # ---------------------------------------------------------------------------
@@ -155,14 +156,56 @@ _LINK_HINTS = (
     "新闻", "动态", "notice", "news", "announce", "schedule", "contest",
 )
 _SKIP_EXT = (
-    ".pdf", ".zip", ".rar", ".doc", ".docx", ".xls", ".xlsx",
+    ".zip", ".rar", ".doc", ".docx", ".xls", ".xlsx",
     ".jpg", ".jpeg", ".png", ".gif", ".mp4", ".mp3",
 )
 _SCORE_WORDS = ("报名", "决赛", "初赛", "复赛", "参赛", "赛程", "日程", "省赛", "国赛")
+_RE_DATEISH = re.compile(r"(\d{1,2}\s*[-月/]\s*\d{1,2}|\d{4}\s*年)")
+_PDF_HINTS = ("通知", "简章", "规程", "赛程", "日程", "方案", "附件", "办法")
 
 
-def discover_notice_links(html: str, base_url: str, *, limit: int = 6) -> List[str]:
-    """从首页挑出「看起来是通知/赛程」的同域链接。"""
+def fetch_pdf_text(url: str, *, timeout: int = 25) -> str:
+    """下载 PDF 并抽文字（官方通知常是 PDF 附件）。"""
+    if not url or not str(url).startswith(("http://", "https://")):
+        raise RuntimeError("PDF 地址无效：%r" % url)
+    resp = requests.get(
+        url,
+        timeout=timeout,
+        headers={"User-Agent": _UA, "Accept-Language": "zh-CN,zh;q=0.9"},
+        allow_redirects=True,
+    )
+    resp.raise_for_status()
+    raw = resp.content[:_MAX_PDF_BYTES]
+    if not raw.lstrip()[:4] == b"%PDF":
+        raise RuntimeError("不是 PDF 文件")
+    try:
+        from pdfminer.high_level import extract_text as _pdf_text
+        from io import BytesIO
+
+        text = _pdf_text(BytesIO(raw)) or ""
+    except ImportError as exc:
+        raise RuntimeError("服务器缺少 pdfminer，无法解析 PDF 通知") from exc
+    text = _RE_SPACE.sub(" ", text)
+    text = "\n".join(line.strip() for line in text.splitlines() if line.strip())
+    if len(text) < 60:
+        raise RuntimeError("PDF 里没抽到可用文字（可能是扫描件）")
+    return text[:_MAX_TEXT_CHARS]
+
+
+def fetch_text_any(url: str, *, timeout: int = 20) -> str:
+    """按扩展名选 PDF 或 HTML 抓取。"""
+    if urlparse(url).path.lower().endswith(".pdf"):
+        return fetch_pdf_text(url, timeout=max(timeout, 25))
+    return fetch_page(url, timeout=timeout)
+
+
+def discover_notice_links(html: str, base_url: str, *, limit: int = 6,
+                          relaxed: bool = False) -> List[str]:
+    """从页面挑出「可能是通知/赛程正文」的同域链接。
+
+    relaxed=True 时放宽标题判断（列表页里的文章标题常是「08-30 2026年…决赛」），
+    用于第二跳。
+    """
     base = urlparse(base_url)
     seen = {base_url.rstrip("/")}
     out: List[str] = []
@@ -177,10 +220,24 @@ def discover_notice_links(html: str, base_url: str, *, limit: int = 6) -> List[s
         if parsed.path.lower().endswith(_SKIP_EXT):
             continue
         label = html_to_text(frag)[:60].strip()
+        is_pdf = parsed.path.lower().endswith(".pdf")
         if not label:
-            continue
+            if not is_pdf:
+                continue
+            label = parsed.path.rsplit("/", 1)[-1]
         low = label.lower()
-        if not any(hint in low for hint in _LINK_HINTS):
+        if is_pdf:
+            # PDF 附件通常叫「点击下载 / 附件1」，只要标题像通知就收
+            if not any(hint in low for hint in _PDF_HINTS):
+                continue
+        elif relaxed:
+            if len(label) < 6:
+                continue
+            keywordish = any(hint in low for hint in _LINK_HINTS)
+            dateish = bool(_RE_DATEISH.search(label))
+            if not (keywordish or dateish):
+                continue
+        elif not any(hint in low for hint in _LINK_HINTS):
             continue
         key = link.rstrip("/")
         if key in seen:
@@ -202,27 +259,84 @@ def _page_score(text: str, year: int) -> int:
     return score
 
 
-def fetch_notice_text(url: str, *, year: Optional[int] = None,
-                      max_pages: int = 6, timeout: int = 12) -> Optional[Dict[str, Any]]:
-    """首页抓不到日期时，顺着通知链接再抓一级，返回得分最高的那页。"""
+def fetch_notice_pages(url: str, *, year: Optional[int] = None,
+                       max_pages: int = 11, timeout: int = 10,
+                       depth: int = 2) -> List[Dict[str, Any]]:
+    """首页抓不到日期时，顺着链接往下找「含日期的那一页」。
+
+    两跳：首页 → 通知列表/栏目页 → 具体通知正文（第二跳放宽标题判断，
+    因为大量站点首页只挂「08-30 2026年…决赛」这样的文章标题）。
+    总抓取页数受 max_pages 限制，PDF 最多解析 2 个。
+    """
     year = year or datetime.now(SHANGHAI).year
     try:
         home_html = fetch_html(url, timeout=timeout)
     except Exception as exc:  # noqa: BLE001 - 抓不到就当没有
         log.info("[探索] %s 首页抓取失败：%s", url, exc)
         return None
-    best: Optional[Dict[str, Any]] = None
-    for link in discover_notice_links(home_html, url, limit=max_pages):
+
+    found: List[Dict[str, Any]] = []
+    fetched = 0
+    pdf_budget = 2
+
+    def _grab(link: str) -> Optional[str]:
+        """抓候选页，HTML 页返回原文 HTML，PDF 返回抽取文本（失败 None）。"""
+        nonlocal fetched, pdf_budget
+        if fetched >= max_pages:
+            return None
+        is_pdf = urlparse(link).path.lower().endswith(".pdf")
+        if is_pdf:
+            if pdf_budget <= 0:
+                return None
+            pdf_budget -= 1
+        fetched += 1
         try:
-            text = fetch_page(link, timeout=timeout)
+            if is_pdf:
+                return fetch_pdf_text(link, timeout=max(timeout, 25))
+            return fetch_html(link, timeout=timeout)
         except Exception:  # noqa: BLE001
+            return None
+
+    def _consider(link: str, raw: Optional[str]) -> None:
+        if not raw:
+            return
+        text = raw if "<" not in raw[:200] else html_to_text(raw)
+        if len(text) < 80 or not date_tokens(text):
+            return
+        found.append({"url": link, "text": text[:_MAX_TEXT_CHARS],
+                      "score": _page_score(text, year)})
+
+    level1 = discover_notice_links(home_html, url, limit=8)
+    level2_seed: List[tuple] = []
+    for link in level1:
+        raw = _grab(link)
+        if not raw:
             continue
-        if not date_tokens(text):
+        text = raw if "<" not in raw[:200] else html_to_text(raw)
+        if date_tokens(text):
+            _consider(link, raw)
+        elif depth > 1 and len(level2_seed) < 2 and "<" in raw[:200]:
+            # 列表/栏目页本身没有日期：从里面继续找文章链接
+            level2_seed.append((link, raw))
+
+    if not found and depth > 1:
+        seen = {url.rstrip("/")}
+        for base_link, base_html in level2_seed:
+            for link in discover_notice_links(base_html, base_link, limit=6, relaxed=True):
+                key = link.rstrip("/")
+                if key in seen or fetched >= max_pages:
+                    continue
+                seen.add(key)
+                _consider(link, _grab(link))
+    found.sort(key=lambda item: item["score"], reverse=True)
+    dedup: List[Dict[str, Any]] = []
+    seen_urls = set()
+    for item in found:
+        if item["url"] in seen_urls:
             continue
-        score = _page_score(text, year)
-        if best is None or score > best["score"]:
-            best = {"url": link, "text": text, "score": score}
-    return best
+        seen_urls.add(item["url"])
+        dedup.append(item)
+    return dedup[:3]
 
 
 # ---------------------------------------------------------------------------
@@ -484,33 +598,43 @@ def stage_one(competition_id: int, *, today: Optional[date] = None,
         return {"ok": False, "competition_id": competition_id, "name": row["name"],
                 "error": "缺少官网地址"}
     used_url = url
-    text = ""
     first_error = ""
+    candidates: List[Dict[str, Any]] = []
     try:
-        text = fetch_page(url)
-        if not date_tokens(text):
-            text, first_error = "", "页面里没有「几月几日」这类日期"
+        text = fetch_text_any(url)
+        if date_tokens(text):
+            candidates.append({"url": url, "text": text, "score": 0})
+        else:
+            first_error = "页面里没有「几月几日」这类日期"
     except Exception as exc:  # noqa: BLE001 - 单条失败不影响批量
         first_error = str(exc)[:200]
         log.info("[事实] %s 首页不可用：%s", row["name"], exc)
 
-    if not text:
-        # 首页是导航/JS 渲染/无日期：顺着「通知/公告/赛程」链接再抓一级
-        found = fetch_notice_text(url, year=today.year)
-        if found:
-            text, used_url = found["text"], found["url"]
-        else:
+    if not candidates:
+        # 首页是导航/JS 渲染/无日期：顺着「通知/公告/赛程」链接往下找正文
+        candidates = fetch_notice_pages(url, year=today.year)
+        if not candidates:
             log.warning("[事实] %s 抽取失败：%s", row["name"], first_error)
             return {"ok": False, "competition_id": competition_id, "name": row["name"],
                     "error": (first_error or "官网没有可确认的日期") +
                              "；也没在首页找到含日期的通知页，请手动填通知链接"}
 
-    try:
-        result = extract_facts(row["name"], text, today=today)
-    except Exception as exc:  # noqa: BLE001 - 单条失败不影响批量
-        log.warning("[事实] %s 抽取失败：%s", row["name"], exc)
+    result: Optional[Dict[str, Any]] = None
+    last_error = ""
+    for cand in candidates[:3]:
+        try:
+            attempt = extract_facts(row["name"], cand["text"], today=today)
+        except Exception as exc:  # noqa: BLE001 - 单条失败不影响批量
+            last_error = str(exc)[:200]
+            continue
+        if attempt["facts"]:
+            result, used_url = attempt, cand["url"]
+            break
+        last_error = last_error or "官网未见可确认日期"
+    if result is None:
+        log.warning("[事实] %s 抽取失败：%s", row["name"], last_error)
         return {"ok": False, "competition_id": competition_id, "name": row["name"],
-                "error": str(exc)[:200]}
+                "error": last_error}
 
     facts = result["facts"]
     diffs = diff_against(row, facts)
