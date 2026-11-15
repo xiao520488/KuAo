@@ -3693,6 +3693,10 @@ def list_competitions_for_fact_check(limit: int = 5) -> List[int]:
         "SELECT id FROM competitions "
         "WHERE COALESCE(is_active, 1) = 1 "
         "AND official_url IS NOT NULL AND TRIM(official_url) <> '' "
+        # 7 天冷却：同一条赛事一周内不重复抓（定时任务每周跑一次，避免反复撞同一批坏页面）
+        "AND NOT EXISTS (SELECT 1 FROM competition_facts_staging s "
+        "WHERE s.competition_id = competitions.id "
+        "AND s.fetched_at >= datetime('now', 'localtime', '-7 days')) "
         "ORDER BY CASE WHEN facts_checked_at IS NULL THEN 0 ELSE 1 END, "
         "facts_checked_at ASC, last_checked_at ASC, id ASC LIMIT ?"
     )
