@@ -31,3 +31,7 @@ saikr_index.json
 logs/
 # 前端打包产物（dist/ 已忽略，这是手工打成的 tar 包，每次构建都会变）
 dist.tar.gz
+backend/chroma_db/
+backend/snapshots/
+backend/backups/
+*.db.bak-*

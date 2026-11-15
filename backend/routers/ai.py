@@ -1260,70 +1260,48 @@ def search_competitions(req: SearchRequest) -> SearchResponse:
     if not query:
         raise HTTPException(status_code=422, detail="query 不能为空")
 
-    # ---- 1. 语义召回：作品级别，多取一些便于聚集到竞赛 ----
-    # 每个竞赛可能命中多个作品，因此召回条数放大，避免只覆盖到少数竞赛。
-    award_hits: List[Dict[str, Any]] = []
+    # ---- 1. 语义检索：竞赛级，retriever 内部已融合向量相似度 + 关键词命中 ----
+    hits: List[Dict[str, Any]] = []
     retrieval_degraded = False
     try:
         # 懒加载：retriever 顶层依赖 chromadb，缺依赖时不应影响整个路由模块导入
         import retriever as _retriever
-        award_hits = _retriever.retrieve(
-            query, top_k=max(req.top_k * 4, 20), with_debug=True
-        )
+        hits = _retriever.retrieve(query, top_k=req.top_k, with_debug=True)
     except Exception as exc:
         # 向量库/embedding 异常不应让前端白屏，降级为关键词检索
         logger.warning("语义检索失败，降级为关键词检索: %r", exc)
         retrieval_degraded = True
-        award_hits = []
+        hits = []
 
-    # ---- 2. 上卷到竞赛：按 competition_id 聚合 ----
-    scores: Dict[int, float] = {}
-    hit_counts: Dict[int, int] = {}
-    for hit in award_hits:
+    # ---- 2. 兜底：语义检索无结果时走纯关键词 ----
+    if not hits:
+        try:
+            from db import list_competitions as _list_comps
+            kw = _keyword_search(query, _list_comps)
+            hits = [
+                {"competition_id": cid, "final_score": s}
+                for cid, s in sorted(kw.items(), key=lambda kv: kv[1], reverse=True)[: req.top_k]
+            ]
+            retrieval_degraded = True
+        except Exception as exc:
+            logger.warning("关键词兜底检索失败: %r", exc)
+            hits = []
+    # ---- 3. 排序取 top_k（retriever 已排好序，兜底结果按分再排一次）----
+    ranked = sorted(
+        hits,
+        key=lambda h: float(h.get("final_score") or h.get("score") or 0.0),
+        reverse=True,
+    )[: req.top_k]
+
+    # ---- 4. 补全竞赛基本信息 ----
+    items: List[SearchItem] = []
+    for hit in ranked:
         cid = hit.get("competition_id")
-        if cid is None:
-            continue
         try:
             cid = int(cid)
         except (TypeError, ValueError):
             continue
-
-        # 优先用 final_score（L2 重排分），退化到 score
-        raw_score = hit.get("final_score")
-        if raw_score is None:
-            raw_score = hit.get("score")
-        try:
-            s = float(raw_score)
-        except (TypeError, ValueError):
-            s = 0.0
-
-        hit_counts[cid] = hit_counts.get(cid, 0) + 1
-        # 同一竞赛取命中作品中的最高分作为代表分
-        if cid not in scores or s > scores[cid]:
-            scores[cid] = s
-
-    # ---- 3. 兜底：语义检索无结果时走关键词检索 ----
-    if not scores:
-        try:
-            from db import list_competitions as _list_comps
-            kw_scores = _keyword_search(query, _list_comps)
-            for cid, s in kw_scores.items():
-                scores[cid] = s
-                hit_counts.setdefault(cid, 0)
-            retrieval_degraded = True
-        except Exception as exc:
-            logger.warning("关键词兜底检索失败: %r", exc)
-
-    # ---- 4. 排序取 top_k ----
-    ranked = sorted(
-        scores.items(),
-        key=lambda kv: (kv[1], hit_counts.get(kv[0], 0)),
-        reverse=True,
-    )[: req.top_k]
-
-    # ---- 5. 补全竞赛基本信息 ----
-    items: List[SearchItem] = []
-    for cid, score in ranked:
+        score = float(hit.get("final_score") or hit.get("score") or 0.0)
         try:
             comp = get_competition(cid)
         except Exception as exc:
@@ -1349,7 +1327,7 @@ def search_competitions(req: SearchRequest) -> SearchResponse:
                     summary=normalized.summary,
                     short_name=normalized.short_name,
                     score=round(float(score), 4),
-                    matched_awards=hit_counts.get(cid, 0),
+                    matched_awards=0,
                 )
             )
         else:
@@ -1364,7 +1342,7 @@ def search_competitions(req: SearchRequest) -> SearchResponse:
                     summary=comp.get("summary"),
                     short_name=comp.get("short_name"),
                     score=round(float(score), 4),
-                    matched_awards=hit_counts.get(cid, 0),
+                    matched_awards=0,
                 )
             )
 

@@ -1,18 +1,18 @@
 # -*- coding: utf-8 -*-
-"""
-检索内核 (retriever.py) —— S1
+"""检索内核 (retriever.py) —— 竞赛语义检索
 
-职责：
-    1. Chroma 封装：集合管理 / upsert / delete / 计数（索引可重建）
-    2. 两级检索：
-         L1  向量召回   —— Chroma cosine 相似度，多召回（topK * over_fetch）
-         L2  结构化重排 —— 回 SQLite 取 awards 真值，硬过滤 + 软加权
-    3. 索引同步：sync_awards_to_chroma() 从 SQLite 全量重建/增量补齐
+职责（只做一件事）：
+    把 competitions 表里的竞赛做成向量索引，回答「我想参加 XX 类比赛」这种自然语言查询。
 
-设计约定（与架构一致）：
+三级打分（最终分 = 0.65 * 向量 + 0.35 * 关键词，命中名称再 +0.15 封顶 1.0）：
+    L1 向量召回   —— Chroma cosine 相似度，目录只有 85~100 条，全量召回后统一排序
+    L2 关键词融合 —— 名称 / 简称 / 类别 / 摘要 的模糊命中，保证「数学建模」这类精确词不被向量稀释
+    L3 真值校验   —— 回 SQLite 取真值，已删除的竞赛直接丢弃
+
+设计约定：
     - 真值源永远是 SQLite；Chroma 只是可重建的向量索引
-    - 向量库里的 id 使用 "award:{id}"，metadata 冗余少量筛选用字段
-    - L2 以 SQLite 为准：Chroma 命中的行若已删除/未审核，直接丢弃
+    - 索引条数或指纹与库不一致时自动重建（ensure_index），不依赖任何定时任务
+    - 向量库不可用时由调用方降级到纯关键词检索（见 routers/ai.py），接口永远有结果
 """
 
 import os
@@ -20,31 +20,86 @@ import os
 os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"   # 需在任何 HF 库之前
 
 import json
-from typing import Any, Dict, Iterable, List, Optional, Sequence
+import logging
+import re
+import sqlite3
+import threading
+import time
+from collections import OrderedDict
+from typing import Any, Dict, List, Optional
 
 import chromadb
 from chromadb.config import Settings
 
+import config
+import db
 import embedder
-import kb
 
 # ------------------------------------------------------------
 # 配置
 # ------------------------------------------------------------
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-CHROMA_DIR = os.getenv("KB_CHROMA_DIR", os.path.join(BASE_DIR, "chroma_db"))
-COLLECTION_NAME = os.getenv("KB_COLLECTION", "awards")
-RECALL_MULTIPLIER = int(os.getenv("KB_RECALL_MULT", "3"))   # L1 多召回倍数
-MIN_SCORE = float(os.getenv("KB_MIN_SCORE", "0.0"))        # L1 最低相似度
+CHROMA_DIR = os.getenv("KB_CHROMA_DIR", config.CHROMA_DIR or os.path.join(BASE_DIR, "chroma_db"))
+COLLECTION_NAME = os.getenv("KB_COLLECTION", "competitions")
+LEGACY_COLLECTION = "awards"          # 旧的奖项级索引，已废弃，重建时顺手删掉
 
-_ID_PREFIX = "award:"
+MIN_SIM = float(os.getenv("KB_MIN_SIM", "0.30"))      # 向量分下限（低于它且关键词也没命中就丢弃）
+VEC_WEIGHT = float(os.getenv("KB_VEC_WEIGHT", "0.65"))
+KW_WEIGHT = float(os.getenv("KB_KW_WEIGHT", "0.35"))
+NAME_BONUS = 0.15                                      # 名称精确/包含命中加成
+
+_ID_PREFIX = "comp:"
 
 _client = None
 _collection = None
+_lock = threading.Lock()
+
+# Embedding 接口故障后的冷却期：期间直接走关键词，避免每次搜索都卡 10 秒做重试
+_COOLDOWN_SEC = 60.0
+_down_until = 0.0
+logger = logging.getLogger(__name__)
+
+
+def _embed_down() -> bool:
+    return time.time() < _down_until
+
+
+def _mark_embed_down(exc: Exception) -> None:
+    global _down_until
+    _down_until = time.time() + _COOLDOWN_SEC
+    logger.warning("Embedding 不可用，%.0fs 内降级为关键词检索：%r", _COOLDOWN_SEC, exc)
 
 
 # ============================================================
-# 一、Chroma 封装
+# 一、SQLite 小工具（真值源）
+# ============================================================
+
+def _query(sql: str, params: tuple = ()) -> List[dict]:
+    """查询并返回 dict 列表（行工厂临时切换，不污染全模块连接）。"""
+    with db.get_conn() as conn:
+        prev = conn.row_factory
+        conn.row_factory = sqlite3.Row
+        try:
+            return [dict(r) for r in conn.execute(sql, params).fetchall()]
+        finally:
+            conn.row_factory = prev
+
+
+def _json_list(value) -> list:
+    """tech_stack 等 JSON 字符串字段解析失败时返回空列表。"""
+    if not value:
+        return []
+    if isinstance(value, (list, tuple)):
+        return list(value)
+    try:
+        parsed = json.loads(value)
+        return list(parsed) if isinstance(parsed, (list, tuple)) else []
+    except (json.JSONDecodeError, TypeError):
+        return []
+
+
+# ============================================================
+# 二、Chroma 封装
 # ============================================================
 
 def get_client():
@@ -59,7 +114,7 @@ def get_client():
 
 
 def get_collection():
-    """获取/创建 awards 集合（cosine 空间）。"""
+    """获取/创建竞赛集合（cosine 空间）。"""
     global _collection
     if _collection is None:
         _collection = get_client().get_or_create_collection(
@@ -69,8 +124,13 @@ def get_collection():
     return _collection
 
 
-def _doc_id(award_id: int) -> str:
-    return f"{_ID_PREFIX}{award_id}"
+def count_indexed() -> int:
+    """索引中的向量条数。"""
+    return int(get_collection().count())
+
+
+def _doc_id(cid: int) -> str:
+    return f"{_ID_PREFIX}{cid}"
 
 
 def _parse_id(doc_id: str) -> Optional[int]:
@@ -82,310 +142,281 @@ def _parse_id(doc_id: str) -> Optional[int]:
     return None
 
 
-def _award_to_text(a: dict) -> str:
-    """拼接用于向量化的文档文本（标题权重靠前）。"""
+def _competition_doc(c: dict) -> str:
+    """拼接用于向量化的文本。名称、简称、类别放最前面，权重最高。"""
     parts = [
-        a.get("title") or "",
-        a.get("competition_raw") or "",
-        a.get("category") or "",
-        a.get("track") or "",
-        a.get("summary") or "",
-        a.get("highlights") or "",
+        c.get("name") or "",
+        c.get("short_name") or "",
+        c.get("category") or "",
+        c.get("level_label") or "",
+        c.get("summary") or "",
+        c.get("track") or "",
     ]
-    # tech_stack 可能是 JSON 字符串
-    ts = a.get("tech_stack")
-    if ts:
-        try:
-            ts_list = json.loads(ts) if isinstance(ts, str) else ts
-            if isinstance(ts_list, (list, tuple)):
-                parts.append(" ".join(str(x) for x in ts_list))
-            else:
-                parts.append(str(ts_list))
-        except (json.JSONDecodeError, TypeError):
-            parts.append(str(ts))
-    return "\n".join(p.strip() for p in parts if p and str(p).strip())
+    return "\n".join(str(p).strip() for p in parts if p and str(p).strip())
 
 
-def _award_to_metadata(a: dict) -> dict:
+def _competition_meta(c: dict) -> dict:
     """Chroma metadata 只支持 str/int/float/bool，None 需剔除。"""
-    meta = {
-        "award_id": int(a["id"]),
-        "competition_id": int(a["competition_id"]) if a.get("competition_id") is not None else -1,
-        "year": int(a["year"]) if a.get("year") is not None else -1,
-        "review_status": a.get("review_status") or "pending",
-        "embedding_state": a.get("embedding_state") or "none",
-    }
-    for key in ("category", "level", "award_grade", "competition_raw", "title"):
-        val = a.get(key)
+    meta: Dict[str, Any] = {"competition_id": int(c["id"])}
+    for key in ("name", "category", "level", "short_name", "level_label"):
+        val = c.get(key)
         if val:
             meta[key] = str(val)
     return meta
 
 
-def upsert_awards(awards: Sequence[dict]) -> int:
-    """把 awards 行写入/更新到 Chroma。返回写入条数。"""
-    awards = [a for a in awards if a.get("id") is not None]
-    if not awards:
-        return 0
+# ============================================================
+# 三、索引同步（SQLite -> Chroma）
+# ============================================================
 
-    ids = [_doc_id(int(a["id"])) for a in awards]
-    docs = [_award_to_text(a) for a in awards]
-    metas = [_award_to_metadata(a) for a in awards]
-    embs = embedder.encode_docs(docs)
-
-    get_collection().upsert(ids=ids, documents=docs, metadatas=metas, embeddings=embs)
-    return len(ids)
-
-
-def delete_awards(award_ids: Iterable[int]) -> None:
-    ids = [_doc_id(int(i)) for i in award_ids]
-    if ids:
-        get_collection().delete(ids=ids)
+def _fingerprint() -> str:
+    """目录指纹：条数 + 最大 id + 最新更新时间。任何增删改都会变，用于判断是否需要重建。"""
+    row = _query(
+        "SELECT COUNT(*) AS n, COALESCE(MAX(id), 0) AS max_id, "
+        "COALESCE(MAX(last_checked_at), '') AS ts, "
+        "COALESCE(SUM(LENGTH(name) + LENGTH(COALESCE(summary, ''))), 0) AS txt FROM competitions"
+    )
+    if not row:
+        return "0:0::0"
+    r = row[0]
+    return f"{r['n']}:{r['max_id']}:{r['ts'] or ''}:{r['txt']}"
 
 
-def count_indexed() -> int:
-    """索引中的向量条数。"""
-    return int(get_collection().count())
-
-
-def reset_index() -> None:
-    """清空并重建集合（仅重建索引，不动 SQLite 真值）。"""
-    global _collection
+def _read_fingerprint() -> str:
     try:
-        get_client().delete_collection(COLLECTION_NAME)
+        meta = get_collection().metadata or {}
     except Exception:  # noqa: BLE001
-        pass
-    _collection = None
-    get_collection()
+        return ""
+    return str(meta.get("fingerprint") or "")
 
 
-# ============================================================
-# 二、索引同步（SQLite -> Chroma）
-# ============================================================
-
-def sync_awards_to_chroma(
-    *,
-    only_approved: bool = True,
-    rebuild: bool = False,
-    limit: Optional[int] = None,
-) -> dict:
-    """
-    从 SQLite 同步 awards 到 Chroma。
-
-    参数:
-        only_approved: 只索引 review_status='approved' 的记录（默认 True）
-        rebuild:       True 则先清空索引再全量重建
-        limit:         限制同步条数（调试用）
-    返回:
-        {"total": 总数, "synced": 写入条数, "indexed": 索引内条数}
-    """
+def sync_index(*, rebuild: bool = False) -> dict:
+    """把 competitions 全量写入 Chroma。目录很小（<200 条），全量重建最稳。"""
+    global _collection
     if rebuild:
-        reset_index()
+        try:
+            get_client().delete_collection(COLLECTION_NAME)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            get_client().delete_collection(LEGACY_COLLECTION)   # 旧奖项索引不再使用
+        except Exception:  # noqa: BLE001
+            pass
+        _collection = None
 
-    conds = ["1=1"]
-    params: List[Any] = []
-    if only_approved:
-        conds.append("review_status = ?")
-        params.append("approved")
+    rows = _query(
+        "SELECT id, name, short_name, category, level, level_label, summary "
+        "FROM competitions ORDER BY id"
+    )
+    rows = [r for r in rows if r.get("name")]
+    if not rows:
+        return {"total": 0, "synced": 0, "indexed": 0}
 
-    where = " AND ".join(conds)
-    sql = f"SELECT * FROM awards WHERE {where} ORDER BY id ASC"
-    if limit:
-        sql += " LIMIT ?"
-        params.append(int(limit))
-
-    rows = kb.query(sql, params)
+    ids = [_doc_id(int(r["id"])) for r in rows]
+    docs = [_competition_doc(r) for r in rows]
+    metas = [_competition_meta(r) for r in rows]
 
     synced = 0
-    for chunk_start in range(0, len(rows), 64):
-        chunk = rows[chunk_start:chunk_start + 64]
-        synced += upsert_awards(chunk)
+    for start in range(0, len(rows), 64):
+        chunk_ids = ids[start:start + 64]
+        chunk_docs = docs[start:start + 64]
+        chunk_metas = metas[start:start + 64]
+        embs = embedder.encode_docs(chunk_docs)
+        get_collection().upsert(
+            ids=chunk_ids, documents=chunk_docs, metadatas=chunk_metas, embeddings=embs
+        )
+        synced += len(chunk_ids)
 
-    # 标记 embedding_state = 'ok'
-    if rows:
-        ids = [int(r["id"]) for r in rows]
-        for i in range(0, len(ids), 200):
-            batch = ids[i:i + 200]
-            qs = ",".join("?" * len(batch))
-            with kb.conn_ctx() as conn:
-                conn.execute(
-                    f"UPDATE awards SET embedding_state='ok' WHERE id IN ({qs})",
-                    batch,
-                )
+    # 指纹写进集合 metadata，下次直接比对，避免无谓重建
+    try:
+        col = get_collection()
+        meta = dict(col.metadata or {})
+        meta.update({"hnsw:space": "cosine", "fingerprint": _fingerprint()})
+        col.modify(metadata=meta)
+    except Exception:  # noqa: BLE001
+        pass
 
     return {"total": len(rows), "synced": synced, "indexed": count_indexed()}
 
 
+def ensure_index() -> dict:
+    """索引缺失 / 条数不符 / 指纹变化时自动重建（搜索时调用，无定时任务依赖）。"""
+    with _lock:
+        if _embed_down():
+            return {"error": "embedding cooldown", "indexed": count_indexed()}
+        try:
+            want = _fingerprint()
+            if count_indexed() > 0 and _read_fingerprint() == want:
+                return {"total": -1, "synced": 0, "indexed": count_indexed()}
+            return sync_index(rebuild=True)
+        except Exception as exc:  # noqa: BLE001
+            try:
+                _mark_embed_down(exc)
+            except Exception:  # noqa: BLE001
+                pass
+            return {"error": repr(exc), "indexed": 0}
+
+
 # ============================================================
-# 三、两级检索
+# 四、检索
 # ============================================================
 
-def _l1_recall(query: str, recall_n: int, filters: Optional[dict] = None) -> List[dict]:
-    """
-    L1：Chroma 向量召回。
+_TOKEN_SPLIT = re.compile(r"[\s,，、;；/|+\-_:：()（）【】\[\]]+")
+_SIGNIFICANT = re.compile(r"[0-9A-Za-z\u4e00-\u9fff]")
 
-    返回 [{"award_id", "score", "document", "metadata"}, ...]（按 score 降序）
-    filters 会转成 Chroma where 条件做粗过滤，降低无效召回。
-    """
-    if count_indexed() == 0:
-        return []
 
-    where = None
-    if filters:
-        clauses = []
-        for key in ("category", "level", "award_grade"):
-            val = filters.get(key)
-            if val:
-                clauses.append({key: {"$eq": str(val)}})
-        # 注意：Chroma 的 where 要求每个表达式恰好一个算子，
-        # 因此 year 区间必须拆成两条独立子句，再用 $and 组合。
-        if filters.get("year_from") is not None:
-            clauses.append({"year": {"$gte": int(filters["year_from"])}})
-        if filters.get("year_to") is not None:
-            clauses.append({"year": {"$lte": int(filters["year_to"])}})
-        if len(clauses) == 1:
-            where = clauses[0]
-        elif len(clauses) > 1:
-            where = {"$and": clauses}
+def keyword_scores(query: str, rows: Optional[List[dict]] = None) -> Dict[int, float]:
+    """关键词打分（0~1）：名称全等 > 名称包含 > 简称/类别 > 摘要，多词命中叠加。"""
+    tokens = [t for t in _TOKEN_SPLIT.split(query or "") if t and _SIGNIFICANT.search(t)]
+    uniq: List[str] = []
+    for t in sorted({t for t in tokens}, key=len, reverse=True):
+        if not any(t in u for u in uniq):
+            uniq.append(t)
+    tokens = uniq[:8]
+    if not tokens:
+        return {}
 
-    qvec = embedder.encode_query(query)
-    res = get_collection().query(
-        query_embeddings=[qvec],
-        n_results=max(1, recall_n),
-        where=where,
-        include=["documents", "metadatas", "distances"],
-    )
+    if rows is None:
+        rows = _query("SELECT id, name, short_name, category, summary FROM competitions")
 
-    out: List[dict] = []
-    ids = (res.get("ids") or [[]])[0]
-    docs = (res.get("documents") or [[]])[0]
-    metas = (res.get("metadatas") or [[]])[0]
-    dists = (res.get("distances") or [[]])[0]
-
-    for i, doc_id in enumerate(ids):
-        aid = _parse_id(doc_id)
-        if aid is None:
+    out: Dict[int, float] = {}
+    for row in rows:
+        try:
+            cid = int(row["id"])
+        except (KeyError, TypeError, ValueError):
             continue
-        dist = float(dists[i]) if i < len(dists) else 1.0
-        # cosine distance ∈ [0, 2]（Chroma 未归一化时可 > 1），相似度可能为负。
-        # L1 只做召回，不做分数截断：截断/加权统一交给 L2，避免误杀低分但合规的候选。
-        score = 1.0 - dist
-        out.append({
-            "award_id": aid,
-            "score": score,
-            "document": docs[i] if i < len(docs) else "",
-            "metadata": metas[i] if i < len(metas) else {},
-        })
+        name = str(row.get("name") or "")
+        short = str(row.get("short_name") or "")
+        category = str(row.get("category") or "")
+        summary = str(row.get("summary") or "")
 
-    out.sort(key=lambda x: x["score"], reverse=True)
+        best = 0.0
+        multi = 0
+        for tok in tokens:
+            if tok == name:
+                base = 1.0
+            elif tok in name:
+                base = 0.80
+            elif tok in short:
+                base = 0.65
+            elif tok in category:
+                base = 0.55
+            elif tok in summary:
+                base = 0.35
+            else:
+                continue
+            multi += 1
+            best = max(best, base)
+        if best <= 0:
+            continue
+        out[cid] = round(min(1.0, best + 0.05 * (multi - 1)), 4)
     return out
 
 
-def _l2_rerank(
-    candidates: Sequence[dict],
-    *,
-    filters: Optional[dict] = None,
-    top_k: int = 8,
-) -> List[dict]:
-    """
-    L2：回 SQLite 取真值，硬过滤 + 软加权重排。
+_QUERY_CACHE: "OrderedDict[str, List[float]]" = OrderedDict()
+_QUERY_CACHE_MAX = 256
 
-    硬过滤：行不存在 / review_status 非 approved / embedding_state 非 ok -> 丢弃
-    软加权：category、level、award_grade 精确匹配各 +0.05；命中年份区间 +0.03
-    最终分 = L1 相似度 + 加成（上限 1.0），再截断 top_k
-    """
-    filters = filters or {}
-    if not candidates:
-        return []
 
-    cand_map = {c["award_id"]: c for c in candidates}
-    ids = list(cand_map.keys())
+def _query_vector(query: str) -> List[float]:
+    """查询向量缓存：同一个词反复搜索（联想输入）不重复调用 embedding 接口。"""
+    qvec = _QUERY_CACHE.get(query)
+    if qvec is not None:
+        _QUERY_CACHE.move_to_end(query)
+        return qvec
+    qvec = embedder.encode_query(query)
+    _QUERY_CACHE[query] = qvec
+    while len(_QUERY_CACHE) > _QUERY_CACHE_MAX:
+        _QUERY_CACHE.popitem(last=False)
+    return qvec
 
-    rows: List[dict] = []
-    for i in range(0, len(ids), 200):
-        batch = ids[i:i + 200]
-        qs = ",".join("?" * len(batch))
-        rows.extend(kb.query(f"SELECT * FROM awards WHERE id IN ({qs})", batch))
-    row_map = {int(r["id"]): r for r in rows}
 
-    results: List[dict] = []
-    for aid, cand in cand_map.items():
-        row = row_map.get(aid)
-        if not row:
-            continue                                   # 真值已被删除
-        if row.get("review_status") != "approved":
+def _vector_scores(query: str) -> Dict[int, float]:
+    """向量召回：目录小，全量召回后返回 {competition_id: 相似度}。"""
+    total = count_indexed()
+    if total == 0:
+        return {}
+    qvec = _query_vector(query)
+    res = get_collection().query(
+        query_embeddings=[qvec],
+        n_results=total,
+        include=["metadatas", "distances"],
+    )
+    ids = (res.get("ids") or [[]])[0]
+    metas = (res.get("metadatas") or [[]])[0]
+    dists = (res.get("distances") or [[]])[0]
+
+    out: Dict[int, float] = {}
+    for i, doc_id in enumerate(ids):
+        cid = _parse_id(doc_id)
+        if cid is None and i < len(metas) and metas[i]:
+            try:
+                cid = int(metas[i].get("competition_id"))
+            except (TypeError, ValueError):
+                cid = None
+        if cid is None:
             continue
-        if row.get("embedding_state") != "ok":
-            continue
-
-        bonus = 0.0
-        for key in ("category", "level", "award_grade"):
-            want = filters.get(key)
-            if want and str(row.get(key) or "") == str(want):
-                bonus += 0.05
-        yf, yt = filters.get("year_from"), filters.get("year_to")
-        if yf is not None or yt is not None:
-            y = row.get("year")
-            if y is not None:
-                if (yf is None or int(y) >= int(yf)) and (yt is None or int(y) <= int(yt)):
-                    bonus += 0.03
-
-        final = min(1.0, float(cand["score"]) + bonus)
-        results.append({
-            "award_id": aid,
-            "score": round(float(cand["score"]), 4),
-            "final_score": round(final, 4),
-            "bonus": round(bonus, 4),
-            "title": row.get("title"),
-            "year": row.get("year"),
-            "category": row.get("category"),
-            "level": row.get("level"),
-            "award_grade": row.get("award_grade"),
-            "competition_raw": row.get("competition_raw"),
-            "summary": row.get("summary"),
-            "highlights": row.get("highlights"),
-            "tech_stack": kb.json_loads(row.get("tech_stack"), []),
-            "source_url": row.get("source_url"),
-        })
-
-    results.sort(key=lambda x: x["final_score"], reverse=True)
-    return results[:top_k]
+        dist = float(dists[i]) if i < len(dists) else 2.0
+        out[cid] = 1.0 - dist          # cosine distance -> 相似度，可能为负
+    return out
 
 
 def retrieve(
     query: str,
     top_k: int = 8,
     *,
-    filters: Optional[dict] = None,
-    recall_multiplier: Optional[int] = None,
     with_debug: bool = False,
 ) -> List[dict]:
     """
-    两级检索主入口。
+    竞赛级语义检索主入口。
 
-    参数:
-        query:  自然语言查询
-        top_k:  最终返回条数
-        filters: {"category","level","award_grade","year_from","year_to"}
-        recall_multiplier: L1 召回倍数（默认 3）
-        with_debug: 返回额外诊断字段（l1_count）
-    返回:
-        [{"award_id","score","final_score", ...awards 字段}, ...]
+    :param query: 自然语言查询
+    :param top_k: 返回条数
+    :param with_debug: 额外返回 l1_score / kw_score 诊断字段
+    :return: [{"competition_id", "score", "name", "category", ...}, ...] 按相关性降序
     """
     query = (query or "").strip()
     if not query:
         return []
 
-    mult = recall_multiplier or RECALL_MULTIPLIER
-    recall_n = max(top_k * mult, top_k)
+    ensure_index()
 
-    l1 = _l1_recall(query, recall_n, filters)
-    l2 = _l2_rerank(l1, filters=filters, top_k=top_k)
+    try:
+        vec = _vector_scores(query) if not _embed_down() else {}
+    except Exception as exc:  # noqa: BLE001
+        _mark_embed_down(exc)
+        vec = {}                      # 向量不可用 → 纯关键词，由调用方决定是否降级
 
-    if with_debug:
-        for item in l2:
-            item["l1_count"] = len(l1)
-    return l2
+    rows = _query("SELECT id, name, short_name, category, level, level_label, summary FROM competitions")
+    row_map = {int(r["id"]): r for r in rows}
+    kw = keyword_scores(query, rows)
+    q_lower = query.lower()
+
+    scored: List[dict] = []
+    for cid, row in row_map.items():
+        v = max(0.0, float(vec.get(cid, 0.0)))
+        k = float(kw.get(cid, 0.0))
+        if v < MIN_SIM and k <= 0:
+            continue                                  # 既不相似也不沾关键词 → 丢弃
+
+        name = str(row.get("name") or "")
+        bonus = NAME_BONUS if (name and (name in query or query in name or q_lower in name.lower())) else 0.0
+        final = min(1.0, VEC_WEIGHT * v + KW_WEIGHT * k + bonus)
+
+        scored.append({
+            "competition_id": cid,
+            "score": round(final, 4),
+            "final_score": round(final, 4),
+            "name": name,
+            "category": row.get("category"),
+            "level": row.get("level"),
+            "level_label": row.get("level_label"),
+            "summary": row.get("summary"),
+            "short_name": row.get("short_name"),
+            **({"l1_score": round(v, 4), "kw_score": round(k, 4)} if with_debug else {}),
+        })
+
+    scored.sort(key=lambda x: (x["final_score"], x.get("l1_score", 0)), reverse=True)
+    return scored[:top_k]
 
 
 def stats() -> dict:
@@ -394,6 +425,7 @@ def stats() -> dict:
         "chroma_dir": CHROMA_DIR,
         "collection": COLLECTION_NAME,
         "indexed": count_indexed(),
+        "fingerprint": _read_fingerprint(),
         "embedder": embedder.self_test(),
     }
 

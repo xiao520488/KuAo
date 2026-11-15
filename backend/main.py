@@ -4,6 +4,8 @@
     uvicorn main:app --reload --port 8000
 """
 
+import threading
+
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -73,6 +75,23 @@ app.include_router(admin.router)
 def startup_init_db() -> None:
     """启动时执行幂等建表/补列，确保老库自动拥有 insights.competition_id。"""
     db.init_db()
+    _warm_search_index()
+
+
+def _warm_search_index() -> None:
+    """后台预热语义检索索引（目录只有百来条，1~2 秒）。
+
+    embedding 接口不可用时静默失败：搜索会自动降级为关键词检索，
+    不能让向量库的问题拖垮整个 Api 启动。
+    """
+    def _worker() -> None:
+        try:
+            import retriever
+            retriever.ensure_index()
+        except Exception as exc:  # noqa: BLE001
+            print(f"[startup] 语义检索索引预热跳过: {exc!r}")
+
+    threading.Thread(target=_worker, daemon=True, name="warm-search-index").start()
 
 
 # ---------------------------------------------------------------------------
