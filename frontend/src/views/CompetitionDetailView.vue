@@ -347,6 +347,10 @@ const contestTimeText = computed(() => {
   if (legacy) return legacy
   const data = detail.value || {}
   const hasDateTrack = Boolean(parseDate(data.contest_start_date) || parseDate(data.contest_end_date))
+  // 多赛段赛事（蓝桥杯这类）：统一比赛时间不存在，指下方「阶段时间表」
+  if (data.has_stages && !hasDateTrack) {
+    return '多赛段 · 详见下方赛程'
+  }
   // 只有月份轨时，阶段表里的「YYYY年M月」能补回年份（2025年11月 – 2026年3月）
   if (!hasDateTrack) {
     const stageSpan = formatStageSpan(data.stage_schedule)
@@ -366,6 +370,7 @@ const hasRegTime = computed(() =>
 )
 const hasContestTime = computed(() =>
   Boolean(
+    detail.value?.has_stages ||
     parseDate(detail.value?.contest_start_date) ||
     parseDate(detail.value?.contest_end_date) ||
     toMonth(detail.value?.contest_start_month) ||
