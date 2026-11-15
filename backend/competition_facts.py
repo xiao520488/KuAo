@@ -32,8 +32,10 @@ import argparse
 import json
 import logging
 import re
+import time
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
+from urllib.parse import urljoin, urlparse
 
 import requests
 
@@ -93,8 +95,8 @@ def html_to_text(html: str) -> str:
     return _RE_BLANK.sub("\n\n", text).strip()
 
 
-def fetch_page(url: str, *, timeout: int = 20) -> str:
-    """抓官网页面并转纯文本；失败抛 RuntimeError（调用方只记日志）。"""
+def fetch_html(url: str, *, timeout: int = 20) -> str:
+    """抓页面原始 HTML；失败抛 RuntimeError（调用方只记日志）。"""
     if not url or not str(url).startswith(("http://", "https://")):
         raise RuntimeError("官网地址无效：%r" % url)
     resp = requests.get(
@@ -105,15 +107,122 @@ def fetch_page(url: str, *, timeout: int = 20) -> str:
     )
     resp.raise_for_status()
     raw = resp.content[:_MAX_HTML_BYTES]
-    encoding = resp.encoding or resp.apparent_encoding or "utf-8"
-    try:
-        html = raw.decode(encoding, errors="replace")
-    except LookupError:
-        html = raw.decode("utf-8", errors="replace")
-    text = html_to_text(html)
+    return _decode_html(raw, resp)
+
+
+_RE_CHARSET = re.compile(rb"(?i)charset\s*=\s*[\"']?\s*([a-z0-9_\-]+)")
+
+
+def _decode_html(raw: bytes, resp: requests.Response) -> str:
+    """按 meta charset / 响应头猜编码解码；中文站多为 gb2312/gbk，别当 utf-8 硬解。"""
+    candidates: List[str] = []
+    header = (resp.encoding or "").strip().lower()
+    if header and header not in ("iso-8859-1", "ascii"):
+        candidates.append(header)
+    match = _RE_CHARSET.search(raw[:4096])
+    if match:
+        sniffed = match.group(1).decode("ascii", "ignore").lower()
+        if sniffed in ("gb2312", "gbk", "gb_2312-80"):
+            sniffed = "gb18030"
+        if sniffed:
+            candidates.append(sniffed)
+    candidates += ["utf-8", "gb18030"]
+    for enc in candidates:
+        try:
+            text = raw.decode(enc, errors="replace")
+        except LookupError:
+            continue
+        # 替换符过多说明猜错了，换下一个
+        if text.count("\ufffd") <= max(2, len(text) // 500):
+            return text
+    return raw.decode("utf-8", errors="replace")
+
+
+def fetch_page(url: str, *, timeout: int = 20) -> str:
+    """抓官网页面并转纯文本；失败抛 RuntimeError（调用方只记日志）。"""
+    text = html_to_text(fetch_html(url, timeout=timeout))
     if len(text) < 80:
         raise RuntimeError("页面正文过短（%d 字），可能是 JS 渲染页" % len(text))
     return text[:_MAX_TEXT_CHARS]
+
+
+# ---------------------------------------------------------------------------
+# 首页没日期 → 顺着「通知/公告/赛程」链接再抓一级
+# ---------------------------------------------------------------------------
+_RE_A = re.compile(r"(?is)<a\b[^>]*href=[\"']([^\"']+)[\"'][^>]*>(.*?)</a>")
+_LINK_HINTS = (
+    "通知", "公告", "赛程", "日程", "时间安排", "安排", "简章", "规程",
+    "新闻", "动态", "notice", "news", "announce", "schedule", "contest",
+)
+_SKIP_EXT = (
+    ".pdf", ".zip", ".rar", ".doc", ".docx", ".xls", ".xlsx",
+    ".jpg", ".jpeg", ".png", ".gif", ".mp4", ".mp3",
+)
+_SCORE_WORDS = ("报名", "决赛", "初赛", "复赛", "参赛", "赛程", "日程", "省赛", "国赛")
+
+
+def discover_notice_links(html: str, base_url: str, *, limit: int = 6) -> List[str]:
+    """从首页挑出「看起来是通知/赛程」的同域链接。"""
+    base = urlparse(base_url)
+    seen = {base_url.rstrip("/")}
+    out: List[str] = []
+    for href, frag in _RE_A.findall(html or ""):
+        href = (href or "").strip()
+        if not href or href.startswith(("#", "javascript:", "mailto:", "tel:")):
+            continue
+        link = urljoin(base_url, href).split("#")[0]
+        parsed = urlparse(link)
+        if parsed.scheme not in ("http", "https") or parsed.netloc != base.netloc:
+            continue
+        if parsed.path.lower().endswith(_SKIP_EXT):
+            continue
+        label = html_to_text(frag)[:60].strip()
+        if not label:
+            continue
+        low = label.lower()
+        if not any(hint in low for hint in _LINK_HINTS):
+            continue
+        key = link.rstrip("/")
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(link)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _page_score(text: str, year: int) -> int:
+    score = len(date_tokens(text)) * 2
+    score += sum(2 for word in _SCORE_WORDS if word in text)
+    if str(year) in text:
+        score += 4
+    if len(text) > 3000:
+        score += 1
+    return score
+
+
+def fetch_notice_text(url: str, *, year: Optional[int] = None,
+                      max_pages: int = 6, timeout: int = 12) -> Optional[Dict[str, Any]]:
+    """首页抓不到日期时，顺着通知链接再抓一级，返回得分最高的那页。"""
+    year = year or datetime.now(SHANGHAI).year
+    try:
+        home_html = fetch_html(url, timeout=timeout)
+    except Exception as exc:  # noqa: BLE001 - 抓不到就当没有
+        log.info("[探索] %s 首页抓取失败：%s", url, exc)
+        return None
+    best: Optional[Dict[str, Any]] = None
+    for link in discover_notice_links(home_html, url, limit=max_pages):
+        try:
+            text = fetch_page(link, timeout=timeout)
+        except Exception:  # noqa: BLE001
+            continue
+        if not date_tokens(text):
+            continue
+        score = _page_score(text, year)
+        if best is None or score > best["score"]:
+            best = {"url": link, "text": text, "score": score}
+    return best
 
 
 # ---------------------------------------------------------------------------
@@ -374,12 +483,29 @@ def stage_one(competition_id: int, *, today: Optional[date] = None,
     if not url:
         return {"ok": False, "competition_id": competition_id, "name": row["name"],
                 "error": "缺少官网地址"}
+    used_url = url
+    text = ""
+    first_error = ""
     try:
         text = fetch_page(url)
         if not date_tokens(text):
+            text, first_error = "", "页面里没有「几月几日」这类日期"
+    except Exception as exc:  # noqa: BLE001 - 单条失败不影响批量
+        first_error = str(exc)[:200]
+        log.info("[事实] %s 首页不可用：%s", row["name"], exc)
+
+    if not text:
+        # 首页是导航/JS 渲染/无日期：顺着「通知/公告/赛程」链接再抓一级
+        found = fetch_notice_text(url, year=today.year)
+        if found:
+            text, used_url = found["text"], found["url"]
+        else:
+            log.warning("[事实] %s 抽取失败：%s", row["name"], first_error)
             return {"ok": False, "competition_id": competition_id, "name": row["name"],
-                    "error": "页面里没有「几月几日」这类日期，可能抓到了首页导航；"
-                             "请填写包含通知/赛程的具体页面链接"}
+                    "error": (first_error or "官网没有可确认的日期") +
+                             "；也没在首页找到含日期的通知页，请手动填通知链接"}
+
+    try:
         result = extract_facts(row["name"], text, today=today)
     except Exception as exc:  # noqa: BLE001 - 单条失败不影响批量
         log.warning("[事实] %s 抽取失败：%s", row["name"], exc)
@@ -394,7 +520,7 @@ def stage_one(competition_id: int, *, today: Optional[date] = None,
         # 但直接标记 rejected，不往人工核对队列里灌空行。
         sid = db.add_fact_staging(
             competition_id=int(competition_id),
-            source_url=url,
+            source_url=used_url,
             payload={"facts": {}, "evidence": result["evidence"], "diffs": []},
             current_snapshot=snapshot,
         )
@@ -404,7 +530,7 @@ def stage_one(competition_id: int, *, today: Optional[date] = None,
                 "error": "官网页面里没找到可确认的日期"}
     sid = db.add_fact_staging(
         competition_id=int(competition_id),
-        source_url=url,
+        source_url=used_url,
         payload={"facts": facts, "evidence": result["evidence"], "diffs": diffs},
         current_snapshot=snapshot,
     )
@@ -420,13 +546,25 @@ def stage_one(competition_id: int, *, today: Optional[date] = None,
 
 
 def stage_batch(ids: Optional[List[int]] = None, *, limit: int = 5,
-                source_url: Optional[str] = None) -> Dict[str, Any]:
-    """批量入队。默认挑「有官网 + 从未核对过」的赛事。"""
+                source_url: Optional[str] = None,
+                deadline_seconds: int = 90) -> Dict[str, Any]:
+    """批量入队。默认挑「有官网 + 从未核对过」的赛事。
+
+    下钻抓通知页时单条最慢能到 40 秒以上，所以整体有 deadline：
+    超时的剩余条目不处理（下次轮次再来），保证 HTTP 请求和定时任务都跑得完。
+    """
     if ids:
         targets = [int(i) for i in ids][:max(1, limit)]
     else:
         targets = db.list_competitions_for_fact_check(limit=max(1, limit))
-    results = [stage_one(cid, source_url=source_url) for cid in targets]
+    started = time.monotonic()
+    results: List[Dict[str, Any]] = []
+    for cid in targets:
+        if results and time.monotonic() - started > deadline_seconds:
+            results.append({"ok": False, "competition_id": cid,
+                            "error": "本轮时间预算用尽，留到下次"})
+            continue
+        results.append(stage_one(cid, source_url=source_url))
     return {
         "total": len(results),
         "queued": sum(1 for r in results if r.get("ok")),
