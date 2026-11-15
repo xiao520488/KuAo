@@ -734,4 +734,37 @@ export function createAdminChangelog(payload = {}) {
     content_markdown: content
   })
 }
+/**
+ * 管理后台：修改一条更新日志
+ * PUT /api/admin/changelogs/:id
+ *
+ * @param {number} changelogId
+ * @param {{ version: string, release_date: string, content_markdown: string }} payload
+ * @returns {Promise<{ id: number, message: string }>}
+ */
+export function updateAdminChangelog(changelogId, payload = {}) {
+  const id = Number(changelogId)
+  if (!Number.isInteger(id) || id <= 0) return Promise.reject(new Error('日志 ID 无效'))
+
+  const version = String(payload.version || '').trim()
+  const releaseDate = String(payload.release_date || '').trim()
+  const content = String(payload.content_markdown || '').trim()
+
+  if (!version) return Promise.reject(new Error('版本号不能为空'))
+  if (!releaseDate) return Promise.reject(new Error('发布日期不能为空'))
+  if (!content) return Promise.reject(new Error('更新内容不能为空'))
+
+  return api.put(`/admin/changelogs/${id}`, {
+    version,
+    release_date: releaseDate,
+    content_markdown: content
+  })
+}
+
+/** 管理后台：删除一条更新日志 DELETE /api/admin/changelogs/:id */
+export function deleteAdminChangelog(changelogId) {
+  const id = Number(changelogId)
+  if (!Number.isInteger(id) || id <= 0) return Promise.reject(new Error('日志 ID 无效'))
+  return api.delete(`/admin/changelogs/${id}`)
+}
 export default api

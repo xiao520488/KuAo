@@ -8,6 +8,8 @@ import {
   getAdminCompetitions,
   getChangelogs,
   createAdminChangelog,
+  updateAdminChangelog,
+  deleteAdminChangelog,
   approveAdminCandidate,
   rejectAdminCandidate,
   markAdminFeedbackRead,
@@ -75,6 +77,12 @@ const publishForm = ref({
 })
 const publishing = ref(false)
 const publishError = ref('')
+
+// 编辑态：非空表示正在改某条已有日志（表单切换为「保存修改」）
+const editingId = ref(null)
+const deletingId = ref(null)
+const clDeleteOpen = ref(false)
+const clDeleteItem = ref(null)
 
 // 删除赛事二次确认：不可恢复，必须显式确认
 const deleteOpen = ref(false)
@@ -213,7 +221,7 @@ async function loadChangelogs() {
   }
 }
 
-/** 发布：校验三项必填后落库，成功后清空表单并刷新右侧列表 */
+/** 发布 / 保存：校验三项必填后落库，成功后清空表单并刷新右侧列表 */
 async function onPublish() {
   if (publishing.value) return
 
@@ -237,22 +245,84 @@ async function onPublish() {
   publishing.value = true
   publishError.value = ''
   try {
-    await createAdminChangelog({
+    const payload = {
       version,
       release_date: releaseDate,
       content_markdown: content
-    })
-    publishForm.value = {
-      version: '',
-      release_date: todayISO(),
-      content_markdown: ''
     }
-    showToast('已发布')
+    if (editingId.value) {
+      await updateAdminChangelog(editingId.value, payload)
+      showToast('已保存')
+    } else {
+      await createAdminChangelog(payload)
+      showToast('已发布')
+    }
+    resetForm()
     await loadChangelogs()
   } catch (err) {
-    publishError.value = errorText(err, '发布失败，请重试')
+    publishError.value = errorText(err, editingId.value ? '保存失败，请重试' : '发布失败，请重试')
   } finally {
     publishing.value = false
+  }
+}
+
+/** 清空表单并退出编辑态 */
+function resetForm() {
+  editingId.value = null
+  publishForm.value = {
+    version: '',
+    release_date: todayISO(),
+    content_markdown: ''
+  }
+  publishError.value = ''
+}
+
+/** 进入编辑态：把该条内容回填到表单 */
+function startEdit(item) {
+  if (publishing.value) return
+  editingId.value = item.id
+  publishError.value = ''
+  publishForm.value = {
+    version: item.version || '',
+    release_date: item.release_date || todayISO(),
+    content_markdown: item.content_markdown || ''
+  }
+}
+
+function cancelEdit() {
+  if (publishing.value) return
+  resetForm()
+}
+
+/** 打开删除确认（删除不可恢复，先确认） */
+function askDeleteChangelog(item) {
+  if (deletingId.value) return
+  clDeleteItem.value = item
+  clDeleteOpen.value = true
+}
+
+function cancelDeleteChangelog() {
+  if (deletingId.value) return
+  clDeleteOpen.value = false
+  clDeleteItem.value = null
+}
+
+async function confirmDeleteChangelog() {
+  const item = clDeleteItem.value
+  if (!item || deletingId.value) return
+
+  deletingId.value = item.id
+  try {
+    await deleteAdminChangelog(item.id)
+    showToast('已删除')
+    if (editingId.value === item.id) resetForm()
+    clDeleteOpen.value = false
+    clDeleteItem.value = null
+    await loadChangelogs()
+  } catch (err) {
+    showToast(errorText(err, '删除失败，请重试'))
+  } finally {
+    deletingId.value = null
   }
 }
 
@@ -852,6 +922,22 @@ onMounted(() => {
                      bg-slate-50/60 dark:bg-slate-900/40 p-4"
               @submit.prevent="onPublish"
             >
+              <div class="mb-3 flex items-center justify-between gap-2">
+                <p class="text-xs font-bold text-slate-600 dark:text-slate-300">
+                  {{ editingId ? '正在编辑这条日志' : '发布新日志' }}
+                </p>
+                <button
+                  v-if="editingId"
+                  type="button"
+                  class="rounded-full border border-slate-200 dark:border-slate-600 px-3 py-1
+                         text-xs font-bold text-slate-600 dark:text-slate-300
+                         transition-colors hover:bg-slate-50 dark:hover:bg-slate-700/60"
+                  :disabled="publishing"
+                  @click="cancelEdit"
+                >
+                  取消编辑
+                </button>
+              </div>
               <div class="grid gap-3 sm:grid-cols-[160px_minmax(0,1fr)]">
                 <label class="block">
                   <span class="text-xs font-bold text-slate-600 dark:text-slate-300">版本号</span>
@@ -910,7 +996,19 @@ onMounted(() => {
                 {{ publishError }}
               </p>
 
-              <div class="mt-3 flex justify-end">
+              <div class="mt-3 flex justify-end gap-2">
+                <button
+                  v-if="editingId"
+                  type="button"
+                  class="rounded-full border border-slate-200 dark:border-slate-600 px-5 py-2
+                         text-sm font-bold text-slate-600 dark:text-slate-300
+                         transition-colors hover:bg-slate-50 dark:hover:bg-slate-700/60
+                         disabled:opacity-50"
+                  :disabled="publishing"
+                  @click="cancelEdit"
+                >
+                  取消
+                </button>
                 <button
                   type="submit"
                   class="rounded-full bg-blue-600 px-6 py-2 text-sm font-bold text-white
@@ -918,7 +1016,7 @@ onMounted(() => {
                          disabled:cursor-not-allowed disabled:opacity-60"
                   :disabled="publishing"
                 >
-                  {{ publishing ? '发布中…' : '发布' }}
+                  {{ publishing ? (editingId ? '保存中…' : '发布中…') : (editingId ? '保存修改' : '发布') }}
                 </button>
               </div>
             </form>
@@ -969,6 +1067,30 @@ onMounted(() => {
                           text-slate-600 dark:text-slate-300">
                   {{ item.content_markdown }}
                 </p>
+                <div class="mt-2 flex justify-end gap-2">
+                  <button
+                    type="button"
+                    class="rounded-full border border-slate-200 dark:border-slate-600 px-3 py-1
+                           text-xs font-bold text-slate-600 dark:text-slate-300
+                           transition-colors hover:bg-slate-50 dark:hover:bg-slate-700/60
+                           disabled:opacity-50"
+                    :disabled="publishing || deletingId === item.id"
+                    @click="startEdit(item)"
+                  >
+                    编辑
+                  </button>
+                  <button
+                    type="button"
+                    class="rounded-full border border-slate-200 dark:border-slate-600 px-3 py-1
+                           text-xs font-bold text-rose-600 dark:text-rose-400
+                           transition-colors hover:border-rose-200 hover:bg-rose-50
+                           dark:hover:bg-rose-500/15 disabled:opacity-50"
+                    :disabled="publishing || deletingId === item.id"
+                    @click="askDeleteChangelog(item)"
+                  >
+                    {{ deletingId === item.id ? '删除中…' : '删除' }}
+                  </button>
+                </div>
               </li>
             </ul>
 
@@ -1112,6 +1234,67 @@ onMounted(() => {
                 @click="confirmDelete"
               >
                 {{ deleteBusy ? '删除中…' : '永久删除' }}
+              </button>
+            </div>
+          </div>
+        </div>
+      </Transition>
+    </Teleport>
+
+    <!-- ============ 更新日志删除确认 ============ -->
+    <Teleport to="body">
+      <Transition
+        enter-active-class="transition duration-150 ease-out"
+        enter-from-class="opacity-0"
+        enter-to-class="opacity-100"
+        leave-active-class="transition duration-100 ease-in"
+        leave-from-class="opacity-100"
+        leave-to-class="opacity-0"
+      >
+        <div
+          v-if="clDeleteOpen"
+          class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 px-4 backdrop-blur-sm"
+          @click.self="cancelDeleteChangelog"
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            class="w-full max-w-[420px] rounded-2xl border border-slate-200 bg-white p-6
+                   shadow-xl dark:border-slate-700 dark:bg-slate-800"
+          >
+            <h2 class="text-lg font-bold text-slate-900 dark:text-slate-100">
+              确认删除这条更新日志？
+            </h2>
+
+            <p class="mt-2 break-words rounded-xl bg-slate-50 px-3 py-2 text-sm font-semibold
+                      text-slate-700 dark:bg-slate-700/50 dark:text-slate-200">
+              {{ clDeleteItem?.version }} · {{ clDeleteItem?.release_date }}
+            </p>
+
+            <p class="mt-3 text-sm leading-relaxed text-slate-500 dark:text-slate-400">
+              删除后前台「更新日志」弹窗里立即不再展示，且不可恢复。
+            </p>
+
+            <div class="mt-6 flex justify-end gap-2">
+              <button
+                type="button"
+                class="rounded-full border border-slate-200 px-4 py-2 text-sm font-bold
+                       text-slate-600 transition-colors hover:bg-slate-50
+                       disabled:opacity-50 dark:border-slate-600 dark:text-slate-300
+                       dark:hover:bg-slate-700/60"
+                :disabled="deletingId !== null"
+                @click="cancelDeleteChangelog"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                class="rounded-full bg-red-600 px-4 py-2 text-sm font-bold text-white
+                       transition-colors hover:bg-red-700 disabled:opacity-50"
+                :disabled="deletingId !== null"
+                @click="confirmDeleteChangelog"
+              >
+                {{ deletingId !== null ? '删除中…' : '确认删除' }}
               </button>
             </div>
           </div>

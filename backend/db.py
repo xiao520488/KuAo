@@ -3409,3 +3409,49 @@ def create_changelog(version: str, release_date: str,
         except sqlite3.IntegrityError as exc:
             raise ValueError("版本号 %s 已存在" % ver) from exc
         return int(cur.lastrowid)
+
+
+def update_changelog(changelog_id: int, version: str, release_date: str,
+                     content_markdown: str) -> None:
+    """按 id 修改一条更新日志。
+
+    参数:
+        changelog_id: 日志 id。
+        version / release_date / content_markdown: 新值，均不得为空。
+
+    异常:
+        ValueError: 参数为空 / 版本号与其他日志重复 / id 不存在（由路由转 4xx）。
+    """
+    ver = (version or "").strip()
+    date = (release_date or "").strip()
+    body = (content_markdown or "").strip()
+    if not ver:
+        raise ValueError("版本号不能为空")
+    if not date:
+        raise ValueError("发布日期不能为空")
+    if not body:
+        raise ValueError("更新内容不能为空")
+
+    sql = ("UPDATE changelogs SET version = ?, release_date = ?, "
+           "content_markdown = ? WHERE id = ?")
+
+    with get_conn() as conn:
+        try:
+            cur = conn.execute(sql, (ver, date, body, int(changelog_id)))
+        except sqlite3.IntegrityError as exc:
+            raise ValueError("版本号 %s 已存在" % ver) from exc
+        if cur.rowcount == 0:
+            raise ValueError("更新日志不存在")
+
+
+def delete_changelog(changelog_id: int) -> None:
+    """按 id 删除一条更新日志。
+
+    异常:
+        ValueError: id 不存在（由路由转 404）。
+    """
+    with get_conn() as conn:
+        cur = conn.execute("DELETE FROM changelogs WHERE id = ?",
+                           (int(changelog_id),))
+        if cur.rowcount == 0:
+            raise ValueError("更新日志不存在")
