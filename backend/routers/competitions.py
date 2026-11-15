@@ -122,15 +122,19 @@ def _row_to_detail(row: Dict[str, Any]) -> CompetitionDetail:
     """
     base = _row_to_competition(row)
     state = db_get_guide_state(row["id"]) or {}
+    stages = stage_schedule.loads(row.get("stage_schedule"))
+    payload = base.model_dump()
+    # 详情走 SELECT *，没有列表那层 has_stages 计算列，这里按阶段表回填
+    payload["has_stages"] = bool(stages) or bool(base.has_stages)
     return CompetitionDetail(
-        **base.model_dump(),
+        **payload,
         full_process_guide=row.get("full_process_guide") or "",
         guide_status=state.get("status", "idle"),
         guide_generated_at=row.get("guide_generated_at"),
         participants=row.get("participants") or "",
         content_scope=row.get("content_scope") or "",
         exam_schedule=row.get("exam_schedule") or "",
-        stage_schedule=stage_schedule.loads(row.get("stage_schedule")),
+        stage_schedule=stages,
     )
 
 
