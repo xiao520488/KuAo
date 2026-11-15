@@ -691,4 +691,47 @@ export function deleteAdminCompetition(competitionId) {
   return api.delete(`/admin/competitions/${id}`)
 }
 
+/* ------------------------------------------------------------------ */
+/* 更新日志（前台弹窗只读 + 后台发布）                                  */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 获取全部更新日志（按发布日期倒序）
+ * GET /api/changelogs?limit=
+ *
+ * @param {{ limit?: number }} [params]
+ * @returns {Promise<{ items: Array, total: number }>}
+ */
+export function getChangelogs(params = {}) {
+  const query = {}
+  if (Number.isInteger(params.limit)) query.limit = params.limit
+
+  return api.get('/changelogs', { params: query }).then((data) => ({
+    items: Array.isArray(data?.items) ? data.items : [],
+    total: Number.isFinite(data?.total) ? data.total : 0
+  }))
+}
+
+/**
+ * 管理后台：发布一条更新日志
+ * POST /api/admin/changelogs
+ *
+ * @param {{ version: string, release_date: string, content_markdown: string }} payload
+ * @returns {Promise<{ id: number, message: string }>}
+ */
+export function createAdminChangelog(payload = {}) {
+  const version = String(payload.version || '').trim()
+  const releaseDate = String(payload.release_date || '').trim()
+  const content = String(payload.content_markdown || '').trim()
+
+  if (!version) return Promise.reject(new Error('版本号不能为空'))
+  if (!releaseDate) return Promise.reject(new Error('发布日期不能为空'))
+  if (!content) return Promise.reject(new Error('更新内容不能为空'))
+
+  return api.post('/admin/changelogs', {
+    version,
+    release_date: releaseDate,
+    content_markdown: content
+  })
+}
 export default api

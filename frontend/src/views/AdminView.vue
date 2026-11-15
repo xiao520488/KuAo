@@ -6,6 +6,8 @@ import {
   getAdminCandidates,
   getAdminFeedback,
   getAdminCompetitions,
+  getChangelogs,
+  createAdminChangelog,
   approveAdminCandidate,
   rejectAdminCandidate,
   markAdminFeedbackRead,
@@ -16,8 +18,8 @@ import { showToast } from '@/composables/useToast'
 /**
  * 管理后台
  * ------------------------------------------------------------------
- * 布局：左侧侧边栏（候选赛事 / 用户反馈）+ 右侧内容区，沿用全站的
- *      Tailwind 暗色 / 极简风，不引入任何 UI 组件库。
+ * 布局：左侧侧边栏（候选赛事 / 用户反馈 / 赛事管理 / 更新日志）+ 右侧内容区，
+ *      沿用全站的 Tailwind 暗色 / 极简风，不引入任何 UI 组件库。
  *
  * 权限：路由 meta.requiresAdmin 已在 router/index.js 拦截；
  *      后端每个接口还各自挂了 get_current_admin，前端守卫只是体验层，
@@ -31,7 +33,7 @@ const router = useRouter()
 
 // 当前面板支持 ?tab=feedback 深链，刷新 / 前进后退后停在原面板
 const activeTab = ref(
-  ['candidates', 'feedback', 'competitions'].includes(route.query.tab)
+  ['candidates', 'feedback', 'competitions', 'changelogs'].includes(route.query.tab)
     ? route.query.tab
     : 'candidates'
 )
@@ -53,6 +55,26 @@ const competitionsLoading = ref(false)
 const competitionsError = ref('')
 const competitionsPage = ref(0)
 const COMPETITIONS_PAGE_SIZE = 10
+
+// 更新日志：发布表单 + 已发布列表
+const changelogs = ref([])
+const changelogsLoading = ref(false)
+const changelogsError = ref('')
+
+/** 今天（本地时区）的 YYYY-MM-DD，作为发布日期默认值 */
+function todayISO() {
+  const d = new Date()
+  const pad = (n) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+}
+
+const publishForm = ref({
+  version: '',
+  release_date: todayISO(),
+  content_markdown: ''
+})
+const publishing = ref(false)
+const publishError = ref('')
 
 // 删除赛事二次确认：不可恢复，必须显式确认
 const deleteOpen = ref(false)
@@ -176,6 +198,64 @@ const competitionsPages = computed(() =>
   Math.max(1, Math.ceil(competitionsTotal.value / COMPETITIONS_PAGE_SIZE))
 )
 
+/* ---------------------------- 更新日志 ---------------------------- */
+
+async function loadChangelogs() {
+  changelogsLoading.value = true
+  changelogsError.value = ''
+  try {
+    const data = await getChangelogs({ limit: 50 })
+    changelogs.value = data.items
+  } catch (err) {
+    changelogsError.value = errorText(err, '更新日志加载失败')
+  } finally {
+    changelogsLoading.value = false
+  }
+}
+
+/** 发布：校验三项必填后落库，成功后清空表单并刷新右侧列表 */
+async function onPublish() {
+  if (publishing.value) return
+
+  const version = publishForm.value.version.trim()
+  const releaseDate = publishForm.value.release_date.trim()
+  const content = publishForm.value.content_markdown.trim()
+
+  if (!version) {
+    publishError.value = '请填写版本号'
+    return
+  }
+  if (!releaseDate) {
+    publishError.value = '请选择发布日期'
+    return
+  }
+  if (!content) {
+    publishError.value = '请填写更新内容'
+    return
+  }
+
+  publishing.value = true
+  publishError.value = ''
+  try {
+    await createAdminChangelog({
+      version,
+      release_date: releaseDate,
+      content_markdown: content
+    })
+    publishForm.value = {
+      version: '',
+      release_date: todayISO(),
+      content_markdown: ''
+    }
+    showToast('已发布')
+    await loadChangelogs()
+  } catch (err) {
+    publishError.value = errorText(err, '发布失败，请重试')
+  } finally {
+    publishing.value = false
+  }
+}
+
 function goCompetitionsPage(next) {
   const target = Math.min(Math.max(0, next), competitionsPages.value - 1)
   if (target === competitionsPage.value) return
@@ -190,11 +270,13 @@ function switchTab(tab) {
   if (tab === 'candidates' && !candidates.value.length) loadCandidates()
   if (tab === 'feedback' && !feedbacks.value.length) loadFeedback()
   if (tab === 'competitions' && !competitions.value.length) loadCompetitions()
+  if (tab === 'changelogs' && !changelogs.value.length) loadChangelogs()
 }
 
 function refresh() {
   if (activeTab.value === 'candidates') loadCandidates()
   else if (activeTab.value === 'feedback') loadFeedback()
+  else if (activeTab.value === 'changelogs') loadChangelogs()
   else loadCompetitions()
 }
 
@@ -329,12 +411,19 @@ const navItems = computed(() => [
     label: '赛事管理',
     hint: '主库',
     count: competitionsTotal.value
+  },
+  {
+    id: 'changelogs',
+    label: '更新日志管理',
+    hint: '发布',
+    count: changelogs.value.length
   }
 ])
 
 const currentTitle = computed(() => {
   if (activeTab.value === 'candidates') return '候选赛事审核'
   if (activeTab.value === 'feedback') return '用户反馈'
+  if (activeTab.value === 'changelogs') return '更新日志管理'
   return '赛事管理'
 })
 
@@ -345,20 +434,25 @@ const currentDesc = computed(() => {
   if (activeTab.value === 'feedback') {
     return '用户在「个人中心」提交的反馈，标为已读后不再计入未读角标。'
   }
+  if (activeTab.value === 'changelogs') {
+    return '发布后立即出现在前台「更新日志」弹窗里；正文支持 Markdown，版本号不可重复。'
+  }
   return '正式赛事库里的全部比赛，可在这里永久删除（连带获奖作品、备赛灵感与 AI 洞察，不可恢复）。'
 })
 
 const currentLoading = computed(() => {
   if (activeTab.value === 'candidates') return candidatesLoading.value
   if (activeTab.value === 'feedback') return feedbackLoading.value
+  if (activeTab.value === 'changelogs') return changelogsLoading.value
   return competitionsLoading.value
 })
 
 onMounted(() => {
-  // 三个面板都先拉一次：侧边栏的待审 / 未读 / 赛事总数角标需要这些数字
+  // 四个面板都先拉一次：侧边栏的待审 / 未读 / 赛事总数 / 日志数角标需要这些数字
   loadCandidates()
   loadFeedback()
   loadCompetitions()
+  loadChangelogs()
 })
 </script>
 
@@ -374,7 +468,7 @@ onMounted(() => {
             管理后台
           </h1>
           <p class="mt-2 text-sm text-slate-500 dark:text-slate-400">
-            赛事候选审核 · 用户反馈处理
+            赛事候选审核 · 用户反馈处理 · 更新日志发布
           </p>
         </div>
         <button
@@ -747,6 +841,139 @@ onMounted(() => {
 
             <p v-if="feedbacks.length" class="mt-3 text-xs text-slate-500 dark:text-slate-400">
               共 {{ feedbacks.length }} 条，未读 {{ feedbackUnread }} 条
+            </p>
+          </template>
+
+          <!-- ============ 更新日志管理 ============ -->
+          <template v-else-if="activeTab === 'changelogs'">
+            <!-- 发布表单 -->
+            <form
+              class="rounded-xl border border-slate-200 dark:border-slate-700
+                     bg-slate-50/60 dark:bg-slate-900/40 p-4"
+              @submit.prevent="onPublish"
+            >
+              <div class="grid gap-3 sm:grid-cols-[160px_minmax(0,1fr)]">
+                <label class="block">
+                  <span class="text-xs font-bold text-slate-600 dark:text-slate-300">版本号</span>
+                  <input
+                    v-model="publishForm.version"
+                    type="text"
+                    maxlength="40"
+                    placeholder="v1.0.0"
+                    class="mt-1.5 w-full rounded-xl border border-slate-200 dark:border-slate-600
+                           bg-white dark:bg-slate-800 px-3 py-2 text-sm font-semibold
+                           text-slate-800 dark:text-slate-100 outline-none
+                           placeholder:text-slate-400 focus:border-blue-400
+                           focus:ring-2 focus:ring-blue-500/20"
+                  />
+                </label>
+                <label class="block">
+                  <span class="text-xs font-bold text-slate-600 dark:text-slate-300">发布日期</span>
+                  <input
+                    v-model="publishForm.release_date"
+                    type="date"
+                    class="mt-1.5 w-full rounded-xl border border-slate-200 dark:border-slate-600
+                           bg-white dark:bg-slate-800 px-3 py-2 text-sm font-semibold
+                           text-slate-800 dark:text-slate-100 outline-none
+                           focus:border-blue-400 focus:ring-2 focus:ring-blue-500/20"
+                  />
+                </label>
+              </div>
+
+              <label class="mt-3 block">
+                <span class="flex items-center justify-between gap-2">
+                  <span class="text-xs font-bold text-slate-600 dark:text-slate-300">
+                    更新内容（Markdown）
+                  </span>
+                  <span class="text-[11px] font-medium text-slate-400 dark:text-slate-500">
+                    {{ publishForm.content_markdown.length }} / 20000
+                  </span>
+                </span>
+                <textarea
+                  v-model="publishForm.content_markdown"
+                  rows="6"
+                  maxlength="20000"
+                  placeholder="## 新增&#10;- 语义检索支持自然语言提问&#10;&#10;## 修复&#10;- 列表页返回丢失筛选条件"
+                  class="mt-1.5 w-full resize-y rounded-xl border border-slate-200 dark:border-slate-600
+                         bg-white dark:bg-slate-800 px-3 py-2 font-mono text-[13px] leading-6
+                         text-slate-800 dark:text-slate-100 outline-none
+                         placeholder:text-slate-400 focus:border-blue-400
+                         focus:ring-2 focus:ring-blue-500/20"
+                ></textarea>
+              </label>
+
+              <p
+                v-if="publishError"
+                class="mt-2 text-sm font-semibold text-rose-600 dark:text-rose-400"
+                role="alert"
+              >
+                {{ publishError }}
+              </p>
+
+              <div class="mt-3 flex justify-end">
+                <button
+                  type="submit"
+                  class="rounded-full bg-blue-600 px-6 py-2 text-sm font-bold text-white
+                         shadow-sm shadow-blue-600/25 transition-colors hover:bg-blue-700
+                         disabled:cursor-not-allowed disabled:opacity-60"
+                  :disabled="publishing"
+                >
+                  {{ publishing ? '发布中…' : '发布' }}
+                </button>
+              </div>
+            </form>
+
+            <!-- 已发布列表 -->
+            <div
+              v-if="changelogsError"
+              class="mt-4 rounded-xl border border-red-100 dark:border-red-500/30 bg-red-50 dark:bg-red-500/15
+                     px-4 py-3 text-sm font-semibold text-red-600 dark:text-red-400"
+            >
+              {{ changelogsError }}
+            </div>
+
+            <div v-if="changelogsLoading" class="mt-4 space-y-2">
+              <div
+                v-for="n in 3"
+                :key="n"
+                class="h-14 animate-pulse rounded-xl bg-slate-100 dark:bg-slate-700/60"
+              ></div>
+            </div>
+
+            <div
+              v-else-if="!changelogs.length"
+              class="mt-4 rounded-xl border border-dashed border-slate-200 dark:border-slate-700
+                     px-4 py-12 text-center text-sm text-slate-500 dark:text-slate-400"
+            >
+              还没有发布过更新日志
+            </div>
+
+            <ul v-else class="mt-4 space-y-2">
+              <li
+                v-for="item in changelogs"
+                :key="item.id"
+                class="rounded-xl border border-slate-200 dark:border-slate-700 px-4 py-3"
+              >
+                <div class="flex flex-wrap items-center gap-2">
+                  <span class="rounded-full bg-blue-600 px-2 py-0.5 text-xs font-bold text-white">
+                    {{ item.version }}
+                  </span>
+                  <span class="text-xs font-semibold text-slate-500 dark:text-slate-400">
+                    {{ item.release_date }}
+                  </span>
+                  <span class="ml-auto text-[11px] text-slate-400 dark:text-slate-500">
+                    创建于 {{ formatTime(item.created_at) }}
+                  </span>
+                </div>
+                <p class="mt-2 line-clamp-2 whitespace-pre-wrap break-words text-xs leading-6
+                          text-slate-600 dark:text-slate-300">
+                  {{ item.content_markdown }}
+                </p>
+              </li>
+            </ul>
+
+            <p v-if="changelogs.length" class="mt-3 text-xs text-slate-500 dark:text-slate-400">
+              共 {{ changelogs.length }} 条，前台按发布日期倒序展示
             </p>
           </template>
         </section>

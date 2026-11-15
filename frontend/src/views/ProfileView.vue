@@ -3,7 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import Header from '@/components/Header.vue'
 import { authState, fetchMe, logout, restoreSession } from '@/services/auth'
-import { getAiQuota, getMyPreparations } from '@/services/api'
+import { getAiQuota, getMyPreparations, submitFeedback } from '@/services/api'
 
 const router = useRouter()
 
@@ -95,6 +95,51 @@ async function loadProfile() {
 }
 
 onMounted(loadProfile)
+
+/* ------------------------------------------------------------------ */
+/* 意见反馈（原「关于我们」弹窗里的表单，迁移到个人中心）              */
+/* ------------------------------------------------------------------ */
+
+const MAX_FEEDBACK_LENGTH = 1000
+
+const feedbackText = ref('')
+const submitting = ref(false)
+const feedbackError = ref('')
+const feedbackDone = ref(false)
+
+const canSubmitFeedback = computed(
+  () => !submitting.value && feedbackText.value.trim().length > 0
+)
+
+/** 用户重新输入时，撤掉上一次的成功 / 错误提示 */
+function onFeedbackInput() {
+  feedbackDone.value = false
+  feedbackError.value = ''
+}
+
+async function onSubmitFeedback() {
+  if (submitting.value) return
+
+  const text = feedbackText.value.trim()
+  if (!text) {
+    feedbackError.value = '请输入反馈内容'
+    return
+  }
+
+  submitting.value = true
+  feedbackError.value = ''
+  feedbackDone.value = false
+
+  try {
+    await submitFeedback(text)
+    feedbackDone.value = true
+    feedbackText.value = ''
+  } catch (err) {
+    feedbackError.value = err?.message || '提交失败，请稍后重试'
+  } finally {
+    submitting.value = false
+  }
+}
 
 /* ------------------------------------------------------------------ */
 /* 操作                                                                */
@@ -220,6 +265,78 @@ function onLogout() {
             正常
           </p>
           <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">已登录，可正常使用全部功能</p>
+        </div>
+      </section>
+
+      <!-- 反馈提交（从「关于我们」弹窗迁移过来，反馈归个人中心） -->
+      <section class="mt-6 rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 p-6 shadow-sm sm:p-8">
+        <div class="flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <h2 class="text-base font-bold text-slate-900 dark:text-slate-100">意见反馈</h2>
+            <p class="mt-1 text-xs leading-relaxed text-slate-500 dark:text-slate-400">
+              任何建议、Bug 或想做的新功能都可以告诉我们，感谢你的帮助。
+            </p>
+          </div>
+          <span class="text-[11px] font-medium text-slate-400 dark:text-slate-500">
+            {{ feedbackText.length }}/{{ MAX_FEEDBACK_LENGTH }}
+          </span>
+        </div>
+
+        <textarea
+          v-model="feedbackText"
+          rows="4"
+          :maxlength="MAX_FEEDBACK_LENGTH"
+          :disabled="submitting"
+          placeholder="说说你的建议或遇到的问题…"
+          class="mt-3 w-full resize-none rounded-xl border border-slate-200 bg-slate-50/60 px-4 py-3
+                 text-sm font-medium text-slate-800 outline-none transition-all placeholder:text-slate-400
+                 focus:border-blue-400 focus:bg-white focus:ring-2 focus:ring-blue-500/20
+                 disabled:cursor-not-allowed disabled:opacity-60
+                 dark:border-slate-700 dark:bg-slate-800/60 dark:text-slate-100
+                 dark:placeholder:text-slate-500 dark:focus:border-blue-500 dark:focus:bg-slate-800
+                 dark:focus:ring-blue-400/30"
+          @input="onFeedbackInput"
+          @keydown.ctrl.enter.prevent="onSubmitFeedback"
+        ></textarea>
+
+        <p
+          v-if="feedbackDone"
+          class="mt-2.5 flex items-center gap-1.5 text-sm font-bold text-emerald-600 dark:text-emerald-400"
+          role="status"
+        >
+          <svg class="h-4 w-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M20 6L9 17l-5-5" />
+          </svg>
+          感谢你的反馈
+        </p>
+
+        <p
+          v-if="feedbackError"
+          class="mt-2.5 flex items-start gap-1.5 text-sm font-medium text-rose-600 dark:text-rose-400"
+          role="alert"
+        >
+          <svg class="mt-0.5 h-4 w-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round"
+                  d="M12 9v4m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+          </svg>
+          <span>{{ feedbackError }}</span>
+        </p>
+
+        <div class="mt-3 flex justify-end">
+          <button
+            type="button"
+            class="inline-flex h-10 items-center gap-2 rounded-full bg-blue-600 px-6 text-sm font-bold
+                   text-white shadow-sm shadow-blue-600/25 transition-colors hover:bg-blue-700
+                   disabled:cursor-not-allowed disabled:opacity-60 dark:hover:bg-blue-600"
+            :disabled="!canSubmitFeedback"
+            @click="onSubmitFeedback"
+          >
+            <svg v-if="submitting" class="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
+              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+            </svg>
+            {{ submitting ? '提交中…' : '提交反馈' }}
+          </button>
         </div>
       </section>
 

@@ -3313,3 +3313,99 @@ def select_inspiration_candidates(limit: int = 2, *, min_awards: int = 3,
         if len(out) >= limit:
             break
     return out
+
+
+# ============================================================
+# 十三、changelogs：更新日志（后台发布，前台「更新日志」弹窗展示）
+# ============================================================
+# 表见 schema_v2.sql 第 12 节。这里再做一次幂等建表兜底：
+# 进程未重启时老库可能还没跑到 schema 建表，首次读写会 "no such table"。
+
+_CHANGELOGS_DDL = """
+CREATE TABLE IF NOT EXISTS changelogs (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    version          TEXT    NOT NULL,
+    release_date     TEXT    NOT NULL,
+    content_markdown TEXT    NOT NULL,
+    created_at       TEXT    NOT NULL DEFAULT (datetime('now', 'localtime'))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_changelogs_version
+    ON changelogs (version);
+CREATE INDEX IF NOT EXISTS idx_changelogs_release
+    ON changelogs (release_date DESC, id DESC);
+"""
+
+
+def _ensure_changelogs(conn: sqlite3.Connection) -> None:
+    """幂等建表：创建 changelogs 表及其索引。"""
+    conn.executescript(_CHANGELOGS_DDL)
+
+
+def list_changelogs(limit: int = 50) -> list:
+    """按发布时间倒序返回更新日志。
+
+    参数:
+        limit: 返回条数上限（1-200），默认 50。
+
+    返回:
+        [{'id', 'version', 'release_date', 'content_markdown', 'created_at'}]
+    """
+    try:
+        limit = int(limit)
+    except (TypeError, ValueError):
+        limit = 50
+    limit = max(1, min(limit, 200))
+
+    sql = (
+        "SELECT id, version, release_date, content_markdown, created_at "
+        "FROM changelogs ORDER BY release_date DESC, id DESC LIMIT ?"
+    )
+    with get_conn() as conn:
+        try:
+            rows = conn.execute(sql, (limit,)).fetchall()
+        except sqlite3.OperationalError as exc:
+            if "no such table" not in str(exc).lower():
+                raise
+            _ensure_changelogs(conn)
+            rows = conn.execute(sql, (limit,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def create_changelog(version: str, release_date: str,
+                     content_markdown: str) -> int:
+    """写入一条更新日志，返回新记录 id。
+
+    参数:
+        version: 版本号（如 v1.0.0），唯一。
+        release_date: 发布日期，YYYY-MM-DD。
+        content_markdown: Markdown 正文。
+
+    异常:
+        ValueError: 参数为空 / 版本号已存在（由路由转 4xx）。
+        sqlite3.Error: 写库失败（由路由转 500）。
+    """
+    ver = (version or "").strip()
+    date = (release_date or "").strip()
+    body = (content_markdown or "").strip()
+    if not ver:
+        raise ValueError("版本号不能为空")
+    if not date:
+        raise ValueError("发布日期不能为空")
+    if not body:
+        raise ValueError("更新内容不能为空")
+
+    sql = ("INSERT INTO changelogs (version, release_date, content_markdown) "
+           "VALUES (?, ?, ?)")
+    params = (ver, date, body)
+
+    with get_conn() as conn:
+        try:
+            cur = conn.execute(sql, params)
+        except sqlite3.OperationalError as exc:
+            if "no such table" not in str(exc).lower():
+                raise
+            _ensure_changelogs(conn)
+            cur = conn.execute(sql, params)
+        except sqlite3.IntegrityError as exc:
+            raise ValueError("版本号 %s 已存在" % ver) from exc
+        return int(cur.lastrowid)

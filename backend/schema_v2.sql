@@ -327,3 +327,22 @@ CREATE INDEX IF NOT EXISTS idx_feedbacks_created
     ON feedbacks (created_at);
 CREATE INDEX IF NOT EXISTS idx_feedbacks_user
     ON feedbacks (user_id);
+
+-- -----------------------------------------------------------------------------
+-- 12. changelogs -- 更新日志（前台「更新日志」弹窗，后台动态发布）
+--    version 唯一，便于「同一版本号只发布一次」；
+--    release_date 存 YYYY-MM-DD 文本，按文本排序即等价于按日期排序；
+--    content_markdown 存原始 Markdown，前端用 marked + DOMPurify 渲染。
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS changelogs (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    version          TEXT    NOT NULL,
+    release_date     TEXT    NOT NULL,
+    content_markdown TEXT    NOT NULL,
+    created_at       TEXT    NOT NULL DEFAULT (datetime('now', 'localtime'))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS ux_changelogs_version
+    ON changelogs (version);
+CREATE INDEX IF NOT EXISTS idx_changelogs_release
+    ON changelogs (release_date DESC, id DESC);
