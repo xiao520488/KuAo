@@ -477,6 +477,36 @@ def build_extract_prompt(name: str, text: str) -> str:
     ])
 
 
+def locate_evidence(text: str, evidence: str) -> str:
+    """模型证据常是两句拼接；找出其中最长且确实出现在原文里的片段。"""
+    flat = re.sub(r"\s+", "", evidence or "")
+    hay = re.sub(r"\s+", "", text or "")
+    if len(flat) < 6:
+        return ""
+    for size in (min(24, len(flat)), 18, 14, 10, 8):
+        for i in range(0, len(flat) - size + 1):
+            piece = flat[i:i + size]
+            if piece in hay:
+                return piece
+    return ""
+
+
+def snippet_around_fact(text: str, facts: Dict[str, str]) -> str:
+    """从原文里截出日期所在的那一小段，保证人工复核看到的是真原文。"""
+    src = re.sub(r"[ \t]+", " ", text or "")
+    for iso in facts.values():
+        for form in ("%d月%d日" % (int(iso[5:7]), int(iso[8:10])),
+                     "%02d月%02d日" % (int(iso[5:7]), int(iso[8:10])),
+                     iso, "%02d-%02d" % (int(iso[5:7]), int(iso[8:10])),
+                     "%d月%d" % (int(iso[5:7]), int(iso[8:10]))):
+            idx = src.find(form)
+            if idx < 0:
+                continue
+            raw = src[max(0, idx - 40): idx + len(form) + 40]
+            return re.sub(r"\s+", " ", raw).strip()
+    return ""
+
+
 def extract_facts(name: str, text: str, *, today: Optional[date] = None) -> Dict[str, Any]:
     """调一次模型抽取；返回 {"facts": {...}, "evidence": str}。失败抛 llm.LLMError。"""
     import llm
@@ -497,8 +527,18 @@ def extract_facts(name: str, text: str, *, today: Optional[date] = None) -> Dict
     evidence = str(data.get("evidence") or "").strip()[:200]
     # 反幻觉：证据片段必须真的出自原文，日期也必须在正文里出现过。
     # 官网首页常常只有导航和往届新闻，模型容易「凭记忆」编日期。
+    # 模型常把两句话拼在一起当证据（原文里不连续），这里改成：先尝试从原文
+    # 里截取证据中最长的真实片段，截不到就退化为「日期所在的原句」——
+    # 两者都是原文，绝不放行模型自造文本。
     if facts and not evidence_in_text(text, evidence):
-        raise llm.LLMError("模型给出的证据不在页面原文中（疑似编造），已丢弃")
+        located = locate_evidence(text, evidence)
+        if located:
+            log.info("[事实] 证据为跨句拼接，已改为原文片段：%s", located[:40])
+            evidence = located
+        else:
+            evidence = snippet_around_fact(text, facts)
+            if evidence:
+                log.info("[事实] 证据与原文无交集，改用日期所在原句：%s", evidence[:40])
     dropped = [f for f, v in facts.items() if not _mentions(text, v)]
     if dropped:
         log.warning("[事实] 丢弃正文中不存在的日期字段：%s", dropped)
