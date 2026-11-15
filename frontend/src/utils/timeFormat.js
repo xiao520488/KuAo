@@ -217,7 +217,7 @@ export function formatSignUp(item = {}) {
   }
   if (start) return `${start} 月起`
   if (end) return `截止 ${end} 月`
-  return '待公布'
+  return '以官网通知为准'
 }
 
 // 比赛时间：有日期用日期（"2026-11-27 ~ 2026-11-29"），否则降级到月份
@@ -225,6 +225,11 @@ export function formatSignUp(item = {}) {
 export function formatContest(item = {}) {
   const startDate = parseDate(item.contest_start_date)
   const endDate = parseDate(item.contest_end_date)
+  // 多赛段赛事（如蓝桥杯：软件赛/视觉艺术赛/专项赛报名与比赛时间各不相同）：
+  // 没有统一的比赛起止日，不显示「待定」，直接指向详情页的分赛段赛程。
+  if (item.has_stages && !startDate && !endDate) {
+    return '多赛段 · 详见赛程'
+  }
   if (startDate || endDate) {
     if (startDate && endDate) {
       return startDate.text === endDate.text
@@ -244,5 +249,5 @@ export function formatContest(item = {}) {
   }
   if (start) return `${start} 月`
   if (end) return `${end} 月`
-  return '待定'
+  return '以官网通知为准'
 }

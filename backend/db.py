@@ -181,6 +181,12 @@ _PREC_EXPR = f"""
     END
 """
 
+# 是否存在分赛段赛程（蓝桥杯这类「一站多赛项、各赛项时间不同」的赛事）。
+# 列表要据此把「比赛时间」显示成「多赛段 · 详见赛程」，而不是「待定」。
+_HAS_STAGES_EXPR = (
+    "CASE WHEN COALESCE(stage_schedule, '') IN ('', '[]', 'null') THEN 0 ELSE 1 END"
+)
+
 # 排序：阶段优先 → 组内精度（有日期 > 仅月份）→ 组内紧迫度 → id 兜底
 #   * 报名中：reg_end_date 升序（越早截止越靠前）；缺截止日的排在组尾（9999-12-31）
 #   * 仅月份兜底：按「还有几个月截止」升序，用 (end_month - 当前月 + 12) % 12 计算，
@@ -994,7 +1000,8 @@ def list_competitions(category: Optional[str] = None,
         params.append(f"%{keyword}%")
 
     sql = (f"SELECT * FROM (SELECT *, {_PHASE_EXPR} AS _phase, "
-           f"{_PREC_EXPR} AS _prec FROM competitions {where}) "
+           f"{_PREC_EXPR} AS _prec, {_HAS_STAGES_EXPR} AS has_stages "
+           f"FROM competitions {where}) "
            f"{_ORDER_BY_SMART}")
     with get_conn() as conn:
         rows = conn.execute(sql, params).fetchall()
@@ -1038,7 +1045,7 @@ def list_hot_competitions(limit: int = 8) -> list:
     n = max(1, min(50, n))
 
     sql = (f"SELECT * FROM (SELECT *, {_PHASE_EXPR} AS _phase, "
-           f"{_PREC_EXPR} AS _prec FROM competitions "
+           f"{_PREC_EXPR} AS _prec, {_HAS_STAGES_EXPR} AS has_stages FROM competitions "
            "WHERE COALESCE(is_active, 1) = 1 "
            "AND COALESCE(NULLIF(TRIM(level), ''), 'national') = 'national') "
            f"WHERE _phase IN (0, 1) {_ORDER_BY_SMART} LIMIT ?")

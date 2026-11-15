@@ -108,6 +108,7 @@ def _row_to_competition(row: Dict[str, Any]) -> Competition:
         status_label=status_info["status_label"],
         days_left=status_info["days_left"],
         facts_checked_at=row.get("facts_checked_at"),
+        has_stages=bool(row.get("has_stages")),
     )
 
 

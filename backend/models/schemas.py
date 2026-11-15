@@ -112,6 +112,13 @@ class Competition(BaseModel):
     facts_checked_at: Optional[str] = Field(
         None, description="该赛事日期最近一次人工核对时间；为空表示从未核对过"
     )
+    has_stages: bool = Field(
+        False,
+        description=(
+            "是否存在分赛段赛程（多赛段赛事如蓝桥杯：不同赛项报名/比赛时间各不相同）。"
+            "为真时列表卡片不再显示单一比赛时间，改为「多赛段 · 详见赛程」"
+        ),
+    )
 
     model_config = {
         "json_schema_extra": {
