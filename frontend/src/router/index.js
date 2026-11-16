@@ -23,6 +23,13 @@ const router = createRouter({
       component: () => import('@/views/CompetitionsView.vue')
     },
     {
+      // 独立搜索页：状态完全由 URL 的 ?q= 驱动，
+      // 从结果进详情/备赛后按浏览器「后退」能原样回到这次的搜索结果。
+      path: '/search',
+      name: 'search',
+      component: () => import('@/views/SearchView.vue')
+    },
+    {
       path: '/competition/:id',
       name: 'competition-detail',
       component: () => import('@/views/CompetitionDetailView.vue')

@@ -1,16 +1,17 @@
 <script setup>
 import { ref, onMounted, onUnmounted, watch, computed } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import Header from '@/components/Header.vue'
-import { getCompetitionDetail, requestGuide, getGuideStatus } from '@/services/api'
+import { getCompetitionDetail, requestGuide, getGuideStatus, checkPrepared, addPreparation } from '@/services/api'
 import { isLoggedIn } from '@/services/auth'
 import { openAuthModal } from '@/composables/useAuthModal'
 import { COVER_USE_REMOTE } from '@/utils/coverFallback'
 import CoverArt from '@/components/CoverArt.vue'
 
 const route = useRoute()
+const router = useRouter()
 
 const detail = ref(null)
 const loading = ref(true)
@@ -43,6 +44,53 @@ function resolveImage(item) {
   return /^https?:\/\//i.test(url) ? url : ''
 }
 
+/* ---------------- 备赛入口（加入备赛 / 进入工作台） ----------------
+ * 与列表卡片同一套语义：没加入时是「加入备赛」，加入后变成「进入工作台」并可直接跳转，
+ * 不再是点了没反应的死按钮。
+ */
+const isPrepared = ref(false)
+const prepPending = ref(false)
+
+async function loadPreparedState(item) {
+  const cid = item?.id
+  if (!cid || !isLoggedIn()) {
+    isPrepared.value = false
+    return
+  }
+  try {
+    isPrepared.value = await checkPrepared(cid)
+  } catch (err) {
+    console.warn('[Detail] check prepared failed:', err?.message || err)
+    isPrepared.value = false
+  }
+}
+
+async function onPrepClick() {
+  const cid = detail.value?.id
+  if (!cid) return
+
+  if (isPrepared.value) {
+    router.push({ name: 'preparation-workspace', params: { id: cid } })
+    return
+  }
+  if (!isLoggedIn()) {
+    openAuthModal('login')
+    return
+  }
+  if (prepPending.value) return
+
+  prepPending.value = true
+  try {
+    await addPreparation(cid)
+    isPrepared.value = true
+    router.push({ name: 'preparation-workspace', params: { id: cid } })
+  } catch (err) {
+    console.error('[Detail] add preparation failed:', err)
+  } finally {
+    prepPending.value = false
+  }
+}
+
 // 从后端详情接口获取数据
 async function loadDetail(id) {
   loading.value = true
@@ -60,6 +108,7 @@ async function loadDetail(id) {
       image: resolveImage(data)
     }
     syncGuideStateFromDetail(detail.value)
+    loadPreparedState(detail.value)   // 详情页备赛按钮：加入备赛 / 进入工作台
   } catch (err) {
     errorMsg.value = err?.message || '加载竞赛详情失败'
   } finally {
@@ -559,6 +608,30 @@ const guideReady = computed(() => Boolean(detail.value?.full_process_guide))
               {{ detail.category || '暂未收录' }}
             </p>
           </div>
+        </section>
+
+        <!-- 3.2 备赛入口：未加入 → 加入备赛；已加入 → 进入工作台（可直接跳转） -->
+        <section v-if="detail.id" class="mt-6 flex flex-wrap items-center gap-3">
+          <button
+            type="button"
+            :disabled="prepPending"
+            class="inline-flex items-center gap-2 rounded-full px-7 py-3 text-[15px] font-bold
+                   transition-colors disabled:cursor-not-allowed disabled:opacity-60"
+            :class="isPrepared
+              ? 'bg-emerald-600 text-white shadow-md shadow-emerald-600/25 hover:bg-emerald-700'
+              : 'bg-blue-600 text-white shadow-md shadow-blue-600/25 hover:bg-blue-700'"
+            @click="onPrepClick"
+          >
+            <span v-if="prepPending">处理中…</span>
+            <span v-else-if="isPrepared">进入工作台</span>
+            <span v-else>加入备赛</span>
+            <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.2" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M13.5 4.5L21 12l-7.5 7.5M21 12H3" />
+            </svg>
+          </button>
+          <span class="text-xs font-medium text-slate-500 dark:text-slate-400">
+            {{ isPrepared ? '已在备赛中，点击进入工作台继续推进' : '加入备赛后可用 AI 生成报名、备赛、提交与答辩全流程' }}
+          </span>
         </section>
 
         <!-- 3.5 阶段与核对信息：状态由服务端按日期实时推导，核对时间来自管理员台账 -->

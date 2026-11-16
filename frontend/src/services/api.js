@@ -223,6 +223,30 @@ export function searchCompetitions(query) {
 }
 
 /**
+ * 关键词检索竞赛（独立搜索页专用，公开接口，不扣 AI 配额）
+ *
+ * GET /api/competitions/search?q=机器人&limit=60
+ *
+ * 返回完整竞赛对象数组，卡片可直接渲染。
+ *
+ * @param {string} query 搜索词（可多词，空格分隔）
+ * @param {number} [limit=60] 最多返回条数
+ * @returns {Promise<Array>} 竞赛数组
+ */
+export function searchCompetitionList(query, limit = 60) {
+  const q = typeof query === 'string' ? query.trim() : ''
+  if (!q) return Promise.resolve([])
+  return api
+    .get('/competitions/search', { params: { q, limit } })
+    .then((data) => {
+      if (Array.isArray(data)) return data
+      if (Array.isArray(data?.data)) return data.data
+      if (Array.isArray(data?.items)) return data.items
+      return []
+    })
+}
+
+/**
  * 获取竞赛详情
  * @param {string|number} id 竞赛 ID
  * @returns {Promise<Object>} 竞赛详情对象

@@ -1021,6 +1021,64 @@ def list_competitions(category: Optional[str] = None,
     return result
 
 
+def search_competitions(query: str, limit: int = 60) -> list:
+    """按关键词检索竞赛（名称 > 类别 > 摘要 逐级命中，支持多词叠加）。
+
+    /search 页面专用：与「AI 语义检索」（需登录、扣配额）解耦，
+    游客也能搜索；命中顺序稳定，返回的是完整竞赛对象，卡片字段不用二次补全。
+
+    打分口径（0~1）：
+      * 名称包含词元 0.75 / 名称全等 0.95
+      * 类别包含 0.55
+      * 摘要包含 0.35
+      * 每多命中一个词元 +0.05，上限 1.0
+
+    :param query: 用户输入（自然语言也可，按空白/标点拆词）
+    :param limit: 最多返回条数
+    :return: 竞赛列表（按得分倒序，同分按名称排序）
+    """
+    raw = (query or "").strip()
+    if not raw:
+        return []
+
+    tokens = [t for t in re.split(r"[\s,，、;；/|\+\-_:：()（）【】\[\]]+", raw)
+              if re.search(r"[0-9A-Za-z\u4e00-\u9fff]", t)]
+    # 短词被长词包含时丢弃（"数学建模" 已含 "建模"），避免重复加分
+    uniq: list = []
+    for t in sorted(set(tokens), key=len, reverse=True):
+        if not any(t in u for u in uniq):
+            uniq.append(t)
+    tokens = uniq[:8] or [raw]
+
+    rows = list_competitions()
+    scored = []
+    for row in rows:
+        name = str(row.get("name") or "")
+        category = str(row.get("category") or "")
+        summary = str(row.get("summary") or "")
+        best = 0.0
+        multi = 0
+        for tok in tokens:
+            if tok == name:
+                base = 0.95
+            elif tok in name:
+                base = 0.75
+            elif tok in category:
+                base = 0.55
+            elif tok in summary:
+                base = 0.35
+            else:
+                continue
+            multi += 1
+            best = max(best, base)
+        if best <= 0:
+            continue
+        scored.append((round(min(1.0, best + 0.05 * (multi - 1)), 4), name, row))
+
+    scored.sort(key=lambda item: (-item[0], item[1]))
+    return [row for _, _, row in scored[:int(limit)]]
+
+
 def list_hot_competitions(limit: int = 8) -> list:
     """首页「热门竞赛」（冷启动口径：没有用户浏览数据时使用）。
 

@@ -5,9 +5,10 @@ import CompetitionCard from '@/components/CompetitionCard.vue'
 import CoverArt from '@/components/CoverArt.vue'
 import BackToTop from '@/components/BackToTop.vue'
 import { useRoute, useRouter } from 'vue-router'
-import { getCompetitions, getHotCompetitions, searchCompetitions, checkPrepared } from '@/services/api'
+import { getCompetitions, getHotCompetitions, checkPrepared } from '@/services/api'
 import { authState } from '@/services/auth'
 import { theme } from '@/composables/useTheme'
+// 卡片字段映射统一走 utils/competitionCard（首页 / 搜索页 / 备赛页共用一套口径）
 
 // 当前路由：监听 ?q= 变化，承接顶部/大搜索框的跳转
 const route = useRoute()
@@ -37,31 +38,9 @@ let lastSignature = ''
 // 时间展示统一走 utils/timeFormat（双轨制：精确日期优先，缺失降级到月份）
 import { formatSignUp, formatContest, countdownState } from '../utils/timeFormat'
 
-// 封面图：后端 API 的 image（由 DB 的 image_url 映射而来）
-// 只接受 http(s) 绝对地址，避免相对路径 / 协议相对地址 / 空串打坏卡片占位图
-function resolveImage(item) {
-  const raw = item.image ?? item.cover ?? item.image_url ?? ''
-  const url = typeof raw === 'string' ? raw.trim() : ''
-  return /^https?:\/\//i.test(url) ? url : ''
-}
-
-// 后端字段 -> 卡片 props（以后端真实字段为准）
-// 平台只收录教育部 84 项核心国赛，不再有「赛事级别」维度
-function mapToCard(item, index) {
-  return {
-    id: item.id ?? index,
-    title: item.name || '未命名竞赛',
-    category: item.category || item.subject || '',
-    image: resolveImage(item),
-    shortName: item.short_name || '',
-    signUpTime: formatSignUp(item),
-    contestTime: formatContest(item),
-    // 日期轨原始值：只喂给倒计时徽章
-    regStartDate: item.reg_start_date || '',
-    regEndDate: item.reg_end_date || '',
-    contestStartDate: item.contest_start_date || ''
-  }
-}
+// 首页只负责「热门竞赛」：搜索统一交给独立页面 /search?q=
+// 卡片字段映射来自 utils/competitionCard，避免各页面各写一份
+import { mapCompetitionToCard as mapToCard } from '@/utils/competitionCard'
 // ---------- 官方风右侧「情报速览」 ----------
 // 示例提问：点一下填进搜索框并检索，顺手把 AI 语义检索的能力讲明白
 const QUICK_QUERIES = [
@@ -191,146 +170,29 @@ onMounted(() => {
   })
 })
 
-/* ---------------- AI 语义检索 ---------------- */
-const keyword = ref('')        // 搜索框绑定值
-// 检索中标志：每次组件挂载都是全新实例，初始值绝对为 false
-// 只由 runSearch 的 finally 复位，避免跨组件实例状态污染
-const searching = ref(false)
-const searchError = ref('')    // 检索错误
-const searched = ref(false)    // 是否已执行过检索（决定列表标题/空态文案）
-
-
-function resetToDefault() {
-  keyword.value = ''
-  searched.value = false
-  searchError.value = ''
-  loadCompetitions()
-}
-
-/**
- * 大搜索框唯一入口：只负责改地址栏，不直接发起请求
- *
- * 设计意图：
- *   让 ?q= 成为唯一状态源（Single Source of Truth）。
- *   无论顶部小搜索框还是首页大搜索框，都只 push 路由，
- *   真正的检索统一交给下面的 watch(() => route.query.q) 执行。
- *
- * 好处：
- *   - 两个入口行为完全一致，不会出现"一套状态两套逻辑"
- *   - 浏览器前进/后退、刷新、分享链接都能正确复现检索结果
- *
- * 边界处理：
- *   若当前 URL 的 q 已经等于目标值，router.push 不会产生变化，
- *   watch 也就不会触发 → 此时需要主动 forceReload 一次。
+/* ---------------- 搜索入口 ----------------
+ * 首页不再承载检索结果：大搜索框只负责把关键词交给独立搜索页 /search?q=，
+ * 检索、空态、URL 回放在 SearchView 里统一处理。
+ * 这样首页永远是「热门竞赛」的稳定形态，也不会再出现搜索后跳回首页的割裂感。
  */
+const keyword = ref('')   // 搜索框绑定值（仅本页输入用，不参与检索状态）
+
+/** 提交搜索：交给独立搜索页；空输入直接聚焦回来，不做无意义跳转 */
 function submitSearch() {
   const q = keyword.value.trim()
-
-  // 空输入：清空 q 回到默认列表（同样通过 URL 驱动）
   if (!q) {
-    submitReset()
+    keyword.value = ''
     return
   }
-
-  const currentQ = typeof route.query.q === 'string' ? route.query.q.trim() : ''
-
-  if (currentQ === q) {
-    // URL 未变（重复搜同一关键词）→ watch 不触发，手动放行一次
-    runSearch(q)
-    return
-  }
-
-  // 统一走路由：状态变化完全由 URL 驱动
-  router.push({ path: '/', query: { q } })
+  router.push({ path: '/search', query: { q } })
 }
 
-/**
- * 清空搜索：同样通过 URL 驱动，保证与 submitSearch 一致
- */
+/** 清空输入框（仅清本地输入，不影响页面内容） */
 function submitReset() {
   keyword.value = ''
-
-  // 有 q 时才需要改 URL，否则 watch 不会触发，手动恢复列表
-  if (route.query.q !== undefined) {
-    router.push({ path: '/', query: {} })
-    return
-  }
-
-  resetToDefault()
 }
 
-/**
- * 请求序号：用于竞态隔离
- * 每次发起检索自增，只有"最后一次"请求的回调才允许改写 UI 状态，
- * 避免快速切换页面/重复触发时旧请求覆盖新结果。
- */
-let requestId = 0
-
-// 组件卸载标记：卸载后不再写响应式状态，防止幽灵更新
-// 注意：requestId / unmounted 都是每次 setup 新建的闭包变量，
-//      旧实例自增自己的 requestId 不会影响新实例的计数器，
-//      因此不会出现"旧组件卸载把新组件状态搞乱"的问题。
-let unmounted = false
-
-onBeforeUnmount(() => {
-  unmounted = true
-  // 只作废【本实例】的在途请求（闭包内独立计数器，不跨实例）。
-  // 自增后正在跑的请求 currentId !== requestId，会走 finally 但不再写状态。
-  requestId++
-})
-
-/**
- * 执行 AI 检索
- * 注意：本函数不再做 searching 死锁拦截，重复调用由 watch 单一入口保证，
- *      竞态由 requestId 兜底，finally 无条件复位 searching。
- * @param {string} [rawQuery] 传入检索词；不传则取输入框当前值
- */
-async function runSearch(rawQuery) {
-  const q = String(rawQuery ?? keyword.value ?? '').trim()
-
-  // 空输入：不请求，直接回到默认列表
-  if (!q) {
-    resetToDefault()
-    return
-  }
-
-  const currentId = ++requestId
-
-  searching.value = true
-  // 关键：检索本身就是一次"首屏加载"。
-  // 跨页搜索时组件是全新挂载的，loading 还是初始值 true，
-  // 若不在这里接管，检索结束 searching 复位后，
-  // 模板里的 v-if="loading && !searching" 会重新命中，骨架屏永久卡住。
-  loading.value = true
-  searchError.value = ''
-
-  try {
-    const res = await searchCompetitions(q)
-
-    // 已被更新的请求取代（含组件卸载时自增的那次）→ 放弃结果
-    if (currentId !== requestId) return
-
-    competitions.value = (res.items || []).map(mapToCard)
-    bumpListAnimation()
-    searched.value = true
-    // 检索后滚动到列表区，让用户立刻看到结果
-    scrollToList()
-  } catch (err) {
-    if (currentId !== requestId) return
-    searchError.value = err?.message || 'AI 检索失败，请稍后重试'
-    competitions.value = []
-    searched.value = true
-  } finally {
-    // 无条件复位：只要仍是"最后一次"请求，就把两个加载态一起收掉。
-    // 成功 / 失败 / 早退 / 竞态被取代，任何路径都不会留下卡住的骨架屏。
-    if (currentId === requestId) {
-      searching.value = false
-      loading.value = false
-    }
-  }
-}
-
-// 平滑滚动到竞赛列表区：搜索成功后、「向下探索」按钮共用
+// 平滑滚动到竞赛列表区：「向下探索」按钮使用
 function scrollToList() {
   if (typeof document === 'undefined') return
   const el = document.getElementById('competition-list')
@@ -348,56 +210,13 @@ function scrollToList() {
   }
 }
 
-/**
- * 唯一的数据入口：监听地址栏 ?q=
- * - immediate: true  → 组件挂载时立即执行一次，天然取代 onMounted 的判断逻辑
- * - 单一入口        → 避免"onMounted + watch"双触发导致的并发冲突
- *
- * 语义：
- *   q 有值  → 回填输入框并检索
- *   q 为空  → 加载默认热门列表（仅首次挂载时需要，之后由 resetToDefault 负责）
- */
-/**
- * 是否展示「查看更多」引导按钮
- * 仅在默认「热门竞赛」态下出现：
- *   - !searched   → 非 AI 检索结果态
- *   - !loading    → 骨架屏已结束
- *   - !searching  → 不在检索进行中
- *   - 列表非空    → 避免空态下引导到列表页显得突兀
- */
-const showViewMore = computed(
-  () => !searched.value && !loading.value && !searching.value && competitions.value.length > 0
-)
+/** 「查看更多」引导按钮：热门列表加载完且非空时才出现 */
+const showViewMore = computed(() => !loading.value && competitions.value.length > 0)
 
 /** 点击「查看更多」→ 前往竞赛列表页 */
 function goCompetitions() {
   router.push('/competitions')
 }
-
-watch(
-  () => route.query.q,
-  (q, oldQ) => {
-    if (unmounted) return
-
-    const val = typeof q === 'string' ? q.trim() : ''
-
-    if (val) {
-      keyword.value = val
-      runSearch(val)
-      return
-    }
-
-    // 无 q：首次挂载直接加载热门列表
-    if (oldQ === undefined) {
-      loadCompetitions()
-      return
-    }
-
-    // 原本有 q、现在被清掉（如点 Logo 返回首页）→ 恢复正常列表
-    resetToDefault()
-  },
-  { immediate: true }
-)
 </script>
 
 <template>
@@ -565,7 +384,6 @@ watch(
               : '输入比赛名称，或像聊天一样描述需求（如：我想找寒假能准备的算法赛）...'"
             class="w-full bg-transparent text-[17px] text-slate-800 dark:text-slate-100 placeholder:text-slate-500 dark:placeholder:text-slate-500
                    font-medium focus:outline-none disabled:opacity-60"
-            :disabled="searching"
             @keyup.enter="submitSearch"
           />
 
@@ -577,7 +395,6 @@ watch(
             class="mr-1 shrink-0 rounded-full p-1.5 text-slate-500 dark:text-slate-400
                    hover:bg-slate-100 dark:hover:bg-slate-700/60 hover:text-slate-600 dark:hover:text-slate-300 transition-colors
                    disabled:cursor-not-allowed disabled:opacity-50"
-            :disabled="searching"
             @click="submitReset"
           >
             <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24"
@@ -590,10 +407,9 @@ watch(
             class="shrink-0 rounded-full bg-blue-600 px-7 py-3 text-[15px] font-bold text-white
                    shadow-md shadow-blue-600/30 hover:bg-blue-700 dark:hover:bg-blue-600 transition-colors
                    disabled:cursor-not-allowed disabled:opacity-60"
-            :disabled="searching"
             @click="submitSearch"
           >
-            {{ searching ? '匹配中…' : 'AI检索' }}
+            搜索
           </button>
         </div>
 
@@ -617,14 +433,6 @@ watch(
           </div>
         </div>
 
-        <!-- 检索失败提示 -->
-        <p v-if="searchError" class="mt-3 flex items-center gap-1.5 text-sm font-medium text-rose-600">
-          <svg class="h-4 w-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-            <path stroke-linecap="round" stroke-linejoin="round"
-                  d="M12 9v4m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
-          </svg>
-          {{ searchError }}
-        </p>
         </div>
 
         <!-- 官方风：右侧情报栏（近期截止 + 示例提问），把首屏右半区用起来 -->
@@ -705,22 +513,15 @@ watch(
       >
         <span v-if="theme === 'official'" class="doc-kicker mb-3">01 · 赛事索引</span>
         <h2 class="text-3xl font-extrabold tracking-tight text-slate-900 dark:text-slate-100">
-          {{ searched ? '检索结果' : '热门竞赛' }}
+          热门竞赛
         </h2>
         <p class="mt-2 text-base font-medium text-slate-500 dark:text-slate-400">
-          {{ searched ? 'AI 根据你的描述匹配的赛事' : '为你精选的高含金量赛事' }}
+          为你精选的高含金量赛事
         </p>
       </div>
 
-      <!-- AI 检索中 -->
-      <div v-if="searching" class="mb-8 flex items-center justify-center gap-3
-                                  rounded-2xl bg-blue-50/70 dark:bg-blue-500/15 px-6 py-4 ring-1 ring-blue-100 dark:ring-blue-500/30">
-        <span class="h-3 w-3 animate-ping rounded-full bg-blue-500"></span>
-        <p class="text-sm font-bold text-blue-700 dark:text-blue-300">AI 正在深度匹配...</p>
-      </div>
-
       <!-- 加载中：骨架屏 -->
-      <div v-if="loading && !searching" class="space-y-6">
+      <div v-if="loading" class="space-y-6">
         <div
           v-for="n in 3"
           :key="n"
@@ -768,10 +569,10 @@ watch(
         class="rounded-2xl border border-dashed border-slate-200 dark:border-slate-700 px-6 py-16 text-center"
       >
         <p class="font-bold text-slate-500 dark:text-slate-400">
-          {{ searched ? '未找到相关赛事，换个描述试试' : '暂无竞赛数据' }}
+          暂无竞赛数据
         </p>
         <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">
-          {{ searched ? '可以试试更宽泛的方向，或更换关键词' : '稍后再来看看吧' }}
+          稍后再来看看吧
         </p>
       </div>
 

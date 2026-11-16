@@ -103,6 +103,25 @@ watch(
   }
 )
 
+// 进入该赛事的备赛工作台
+function goWorkspace() {
+  if (props.id === null || props.id === undefined) return
+  router.push({ name: 'preparation-workspace', params: { id: props.id } })
+}
+
+/**
+ * 主按钮唯一入口：
+ *   未加入 → 加入备赛（保持在本页，按钮立刻变成「进入工作台」）
+ *   已加入 → 直接进工作台（不再是无反应的死按钮）
+ */
+function onPrepClick() {
+  if (isPrepared.value) {
+    goWorkspace()
+    return
+  }
+  togglePreparation()
+}
+
 // 加入 / 移出备赛（未登录先弹登录框）
 async function togglePreparation() {
   if (props.id === null || props.id === undefined) return
@@ -285,10 +304,10 @@ async function removeOnly() {
               ? 'bg-emerald-50 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 ring-1 ring-emerald-200 dark:ring-emerald-500/30 hover:bg-emerald-100'
               : 'bg-blue-600 text-white shadow-sm shadow-blue-600/25 hover:bg-blue-700 dark:hover:bg-blue-600'
           "
-          @click="togglePreparation"
+          @click="onPrepClick"
         >
           <span v-if="pending">处理中…</span>
-          <span v-else-if="isPrepared">已加入备赛</span>
+          <span v-else-if="isPrepared">进入工作台</span>
           <span v-else>加入备赛</span>
         </button>
 

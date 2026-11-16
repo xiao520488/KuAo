@@ -40,8 +40,9 @@ function onCompactSearch() {
 }
 
 /**
- * 顶部搜索：回车触发，跳转首页并携带 q 参数
- * 真正的检索交由 HomeView 监听 route.query.q 完成
+ * 顶部搜索：回车触发，统一跳转独立搜索页 /search?q=
+ * 真正的检索由 SearchView 监听 route.query.q 完成，
+ * 首页与搜索页共用同一个入口，不再出现「搜索跳回首页」的割裂。
  */
 function onSearch() {
   const q = keyword.value.trim()
@@ -49,12 +50,24 @@ function onSearch() {
 
   searching.value = true
   router
-    .push({ path: '/', query: { q } })
+    .push({ path: '/search', query: { q } })
     .finally(() => {
       searching.value = false
-      keyword.value = '' // 跳转后清空，避免残留
+      // 停留在搜索页时保留回显，其他页面跳走后清空
+      if (route.path !== '/search') keyword.value = ''
     })
 }
+
+// 已在搜索页时，把地址栏里的 q 回显到顶部输入框（切词、后退都能同步）
+watch(
+  () => [route.path, route.query.q],
+  () => {
+    if (route.path !== '/search') return
+    const q = typeof route.query.q === 'string' ? route.query.q : ''
+    if (q && keyword.value !== q) keyword.value = q
+  },
+  { immediate: true }
+)
 
 /* ---------------- 回到首页（Logo / 首页共用） ---------------- */
 /**

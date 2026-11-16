@@ -32,6 +32,7 @@ from db import list_awards_by_competition as db_list_awards_by_competition
 from db import count_awards_by_competition as db_count_awards_by_competition
 from db import list_competitions as db_list_competitions
 from db import list_hot_competitions as db_list_hot_competitions
+from db import search_competitions as db_search_competitions
 from models.schemas import (
     Award,
     AwardList,
@@ -188,6 +189,30 @@ def list_hot_competitions(
 ) -> List[Competition]:
     """首页热门竞赛（国家级 + 报名中/未开始，按紧迫度排序）。"""
     rows = db_list_hot_competitions(limit=limit)
+    return [_row_to_competition(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# GET /api/competitions/search  关键词检索（公开，不扣 AI 配额）
+# 必须声明在 /api/competitions/{id} 之前（id 是 int，理论上不冲突，但保持就近原则）
+# ---------------------------------------------------------------------------
+@router.get(
+    "/api/competitions/search",
+    response_model=List[Competition],
+    summary="关键词检索竞赛",
+    description=(
+        "独立搜索页（/search?q=）专用接口：按名称、类别、摘要逐级匹配，"
+        "支持空格/标点拆词与多词加权；不需要登录、不消耗 AI 配额。\n\n"
+        "返回完整竞赛对象（含报名/比赛时间字段），前端卡片可直接渲染，"
+        "无需再二次补全字段。"
+    ),
+)
+def search_competitions(
+    q: str = Query(..., min_length=1, description="搜索词，可含多个词，空格分隔"),
+    limit: int = Query(60, ge=1, le=200, description="最多返回条数"),
+) -> List[Competition]:
+    """关键词检索（公开接口）。"""
+    rows = db_search_competitions(q, limit=limit)
     return [_row_to_competition(r) for r in rows]
 
 
