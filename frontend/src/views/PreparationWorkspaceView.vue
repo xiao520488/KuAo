@@ -3,6 +3,7 @@ import { ref, computed, reactive, watch, nextTick, onMounted, onBeforeUnmount } 
 import { useRoute } from 'vue-router'
 import Header from '@/components/Header.vue'
 import CoverArt from '@/components/CoverArt.vue'
+import IdeaCard from '@/components/IdeaCard.vue'
 import {
   analyzeWork,
   analyzeWorks,
@@ -2391,57 +2392,13 @@ onBeforeUnmount(() => {
           </header>
 
           <div v-if="visibleIdeas.length" class="grid grid-cols-1 gap-5 md:grid-cols-2">
-            <article
+            <!-- 每张卡片是独立子组件：展开/收起状态各自持有，绝不串台 -->
+            <IdeaCard
               v-for="item in visibleIdeas"
               :key="item.key"
-              class="flex flex-col rounded-2xl bg-white dark:bg-slate-800 p-5 ring-1 ring-slate-200/70 dark:ring-slate-700 shadow-sm transition-all
-                     hover:shadow-lg hover:shadow-slate-900/10"
-            >
-              <span class="mb-3 w-fit rounded-full bg-violet-50 dark:bg-violet-500/15 px-2.5 py-1 text-xs font-bold text-violet-700 dark:text-violet-300 ring-1 ring-violet-200 dark:ring-violet-500/30">
-                {{ item.tag }}
-              </span>
-
-              <h3 class="text-base font-black leading-snug text-slate-900 dark:text-slate-100">
-                {{ item.title }}
-              </h3>
-              <p v-if="item.text" class="mt-1.5 text-sm leading-relaxed text-slate-700 dark:text-slate-200">
-                {{ item.text }}
-              </p>
-
-              <details
-                v-if="item.detailHtml"
-                class="mt-3 rounded-xl bg-slate-50 dark:bg-slate-900/60 px-3 py-2"
-              >
-                <summary class="cursor-pointer text-xs font-bold text-blue-600 dark:text-blue-400">展开方案细节</summary>
-                <div class="markdown-body mt-2 text-sm" v-html="item.detailHtml"></div>
-              </details>
-
-              <p v-if="item.novelty" class="mt-2 text-xs leading-relaxed text-slate-500 dark:text-slate-400">
-                <span class="font-bold text-slate-700 dark:text-slate-200">差异化：</span>{{ item.novelty }}
-              </p>
-              <p v-if="item.risk" class="mt-1 text-xs leading-relaxed text-slate-500 dark:text-slate-400">
-                <span class="font-bold text-slate-700 dark:text-slate-200">风险：</span>{{ item.risk }}
-              </p>
-              <p v-if="item.refs && item.refs.length" class="mt-2 text-[11px] font-medium text-slate-500 dark:text-slate-400">
-                参考样本 ID：{{ item.refs.join('、') }}
-              </p>
-
-              <div class="mt-auto flex items-center justify-end pt-4">
-                <button
-                  type="button"
-                  class="inline-flex items-center gap-2 rounded-full px-4 py-1.5 text-xs font-bold transition-colors"
-                  :class="item.favorite
-                    ? 'bg-amber-50 dark:bg-amber-500/15 text-amber-700 dark:text-amber-300 ring-1 ring-amber-200 dark:ring-amber-500/30'
-                    : 'text-slate-500 dark:text-slate-400 ring-1 ring-slate-200 dark:ring-slate-700 hover:text-slate-900 dark:hover:text-white hover:ring-slate-300 dark:hover:ring-slate-600'"
-                  @click="toggleFavorite(item)"
-                >
-                  <svg class="h-4 w-4" :fill="item.favorite ? 'currentColor' : 'none'" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M11.48 3.5l2.31 4.68 5.16.75-3.73 3.64.88 5.14-4.62-2.43-4.62 2.43.88-5.14L3.01 8.93l5.16-.75z" />
-                  </svg>
-                  {{ item.favorite ? '已收藏' : '收藏' }}
-                </button>
-              </div>
-            </article>
+              :item="item"
+              @toggle-favorite="toggleFavorite"
+            />
           </div>
 
           <div
