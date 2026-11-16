@@ -59,18 +59,36 @@ def create_access_token(user_id: int, username: str,
     payload = {
         "sub": str(user_id),
         "username": username,
+        "type": "access",
         "iat": now,
         "exp": now + timedelta(minutes=minutes),
     }
     return jwt.encode(payload, config.JWT_SECRET_KEY, algorithm=config.JWT_ALGORITHM)
 
 
-def decode_access_token(token: str) -> dict:
-    """解析并验证令牌，失败抛 401。"""
+def create_refresh_token(user_id: int, username: str,
+                         expires_days: Optional[int] = None) -> str:
+    """签发续期令牌（只存在 httpOnly Cookie 里，前端 JS 读不到）。
+
+    type=refresh 与 access 互不通用：refresh 不能当 Bearer 调业务接口，
+    access 也不能拿去换新令牌。
+    """
+    days = expires_days or config.REFRESH_TOKEN_EXPIRE_DAYS
+    now = datetime.now(timezone.utc)
+    payload = {
+        "sub": str(user_id),
+        "username": username,
+        "type": "refresh",
+        "iat": now,
+        "exp": now + timedelta(days=days),
+    }
+    return jwt.encode(payload, config.JWT_SECRET_KEY, algorithm=config.JWT_ALGORITHM)
+
+
+def decode_refresh_token(token: str) -> dict:
+    """解析续期令牌；过期 / 类型不对统一 401（前端收到后按未登录处理）。"""
     try:
-        # require：显式要求 exp / sub 存在。缺少任一 claim 的 token 一律 401，
-        # 避免「payload 为空 / 只有 username」的畸形 token 进入用户解析流程。
-        return jwt.decode(
+        payload = jwt.decode(
             token,
             config.JWT_SECRET_KEY,
             algorithms=[config.JWT_ALGORITHM],
@@ -88,6 +106,49 @@ def decode_access_token(token: str) -> dict:
             detail="无效的登录凭证",
             headers={"WWW-Authenticate": "Bearer"},
         )
+
+    if payload.get("type") != "refresh":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="无效的登录凭证",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return payload
+
+
+def decode_access_token(token: str) -> dict:
+    """解析并验证令牌，失败抛 401。"""
+    try:
+        # require：显式要求 exp / sub 存在。缺少任一 claim 的 token 一律 401，
+        # 避免「payload 为空 / 只有 username」的畸形 token 进入用户解析流程。
+        payload = jwt.decode(
+            token,
+            config.JWT_SECRET_KEY,
+            algorithms=[config.JWT_ALGORITHM],
+            options={"require": ["exp", "sub"]},
+        )
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="登录已过期，请重新登录",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    except jwt.InvalidTokenError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="无效的登录凭证",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    # refresh token 只用于 /api/auth/refresh，不能当 Bearer 调业务接口。
+    # （老版本签发的 token 没有 type 字段，按 access 兼容放行。）
+    if payload.get("type") == "refresh":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="无效的登录凭证",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return payload
 
 
 # ---------------------------------------------------------------------------

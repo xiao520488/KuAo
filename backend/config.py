@@ -124,8 +124,23 @@ if len(JWT_SECRET_KEY) < 32:
     )
 
 JWT_ALGORITHM = _get_str("JWT_ALGORITHM", "HS256")
-# Access Token 默认 24 小时（不再使用 7 天）；如需更短，可在 .env 覆盖。
-JWT_EXPIRE_MINUTES = _get_int("JWT_EXPIRE_MINUTES", 60 * 24)
+# Access Token 默认 2 小时（短令牌 + Refresh Token 滑动续期，见下方 REFRESH_*）
+JWT_EXPIRE_MINUTES = _get_int("JWT_EXPIRE_MINUTES", 60 * 2)
+
+# ------------------------------------------------------------
+# 会话保持：Refresh Token（httpOnly Cookie，滑动续期）
+# ------------------------------------------------------------
+# 登录一次后，浏览器带着这个 Cookie 就能在 access token 过期时静默换新，
+# 关掉浏览器再打开也不再要求重新登录；CSP/XSS 也偷不到它（JS 读不到 httpOnly）。
+REFRESH_TOKEN_EXPIRE_DAYS = _get_int("REFRESH_TOKEN_EXPIRE_DAYS", 30)
+REFRESH_COOKIE_NAME = _get_str("REFRESH_COOKIE_NAME", "kuao_refresh")
+# Cookie 只发给鉴权接口，不随每个业务请求上行
+REFRESH_COOKIE_PATH = _get_str("REFRESH_COOKIE_PATH", "/api/auth")
+# 纯 HTTP 部署（当前线上 112.126.90.252）必须为 False，否则浏览器直接拒收 Cookie；
+# 将来上了 HTTPS 记得改成 True。
+COOKIE_SECURE = _get_bool("COOKIE_SECURE", False)
+COOKIE_SAMESITE = _get_str("COOKIE_SAMESITE", "lax")
+COOKIE_DOMAIN = _get_str("COOKIE_DOMAIN", "") or None
 
 # ------------------------------------------------------------
 # AI daily quota (per user, resets at local midnight)

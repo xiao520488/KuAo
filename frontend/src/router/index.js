@@ -104,17 +104,23 @@ router.beforeEach(async (to) => {
   if (!needAuth) return true
 
   if (!hasToken()) {
-    // 未登录：唤醒登录弹窗 + 阻断跳转
-    //
-    // 这里同时用同步与延迟两次调用，原因见 useAuthModal.js：
-    // 地址栏直接回车（整页刷新）时，首次导航的守卫早于 app.mount，
-    // 同步设置的状态可能被紧随其后的初始化流程覆盖，导致「拦住了但没弹窗」。
-    //   - 同步调用：常规的页内跳转立即生效，无延迟感；
-    //   - 延迟调用：兜住整页刷新场景，等初始化完成后再确保弹窗可见。
-    // 两者幂等，重复置 true 无副作用。
-    openAuthModal('login')
-    openAuthModalDeferred('login')
-    return false
+    // 本地没有 access token 不一定是未登录：refresh Cookie 还在就能静默换新
+    // （关掉浏览器再打开、直接输入受保护地址都属于这种场景）。先等一次恢复，
+    // 恢复失败才弹登录。
+    const restored = await restoreSession().catch(() => null)
+    if (!restored) {
+      // 未登录：唤醒登录弹窗 + 阻断跳转
+      //
+      // 这里同时用同步与延迟两次调用，原因见 useAuthModal.js：
+      // 地址栏直接回车（整页刷新）时，首次导航的守卫早于 app.mount，
+      // 同步设置的状态可能被紧随其后的初始化流程覆盖，导致「拦住了但没弹窗」。
+      //   - 同步调用：常规的页内跳转立即生效，无延迟感；
+      //   - 延迟调用：兜住整页刷新场景，等初始化完成后再确保弹窗可见。
+      // 两者幂等，重复置 true 无副作用。
+      openAuthModal('login')
+      openAuthModalDeferred('login')
+      return false
+    }
   }
 
   const needAdmin = to.matched.some((record) => record.meta?.requiresAdmin)

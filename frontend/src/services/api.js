@@ -1,6 +1,6 @@
 import axios from 'axios'
 import { clearUserLocalData } from './localUserData'
-import { clearToken, getToken } from './tokenStore'
+import { clearToken, getToken, setToken } from './tokenStore'
 
 /**
  * 全局 axios 实例
@@ -11,10 +11,42 @@ import { clearToken, getToken } from './tokenStore'
 const api = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL || '/api',
   timeout: 60000,
+  // refresh token 存在 httpOnly Cookie 里，跨域模式下也要带上
+  withCredentials: true,
   headers: {
     'Content-Type': 'application/json'
   }
 })
+
+/**
+ * 静默续期：用 httpOnly Cookie 里的 refresh token 换一个新的 access token。
+ * 并发去重——页面同时发多个请求时只会真正刷新一次。
+ * 失败返回空串（调用方按未登录处理）。
+ */
+let refreshInFlight = null
+
+export function refreshAccessToken() {
+  if (refreshInFlight) return refreshInFlight
+
+  refreshInFlight = (async () => {
+    try {
+      const res = await axios.post(
+        `${api.defaults.baseURL}/auth/refresh`,
+        null,
+        { withCredentials: true, timeout: 15000 }
+      )
+      const token = typeof res?.data?.access_token === 'string' ? res.data.access_token : ''
+      if (token) setToken(token)
+      return token
+    } catch (e) {
+      return ''
+    } finally {
+      refreshInFlight = null
+    }
+  })()
+
+  return refreshInFlight
+}
 
 /**
  * 把 FastAPI 的错误 detail 归一化成可读字符串。
@@ -55,22 +87,33 @@ api.interceptors.request.use(
 
 api.interceptors.response.use(
   (response) => response.data,
-  (error) => {
+  async (error) => {
     let message = '网络异常，请稍后重试'
 
     if (error.response) {
       // 服务端有响应但状态码非 2xx
       const { status, data } = error.response
+      const requestUrl = String(error.config?.url || '')
+      // 登录 / 注册接口的 401 表示“账号密码错误”，不是会话失效。
+      // 此时不能清本地计划与收藏（用户可能只是重新登录时输错密码），
+      // 也不能派发 auth:unauthorized，否则会被上层当成“被踢下线”。
+      const isCredentialRequest =
+        requestUrl.includes('/auth/login') || requestUrl.includes('/auth/register')
+      const isAuthEndpoint = /\/auth\/(login|register|refresh|logout)/.test(requestUrl)
 
-      // Token 失效 / 未登录：清掉本地凭证与本地用户数据，并通知上层
+      // Token 过期：先拿 refresh Cookie 静默续期，续期成功就重放这次请求，
+      // 用户完全无感（不用重新登录，页面上也不会闪一下退出态）。
+      if (status === 401 && !isAuthEndpoint && !error.config?._authRetried) {
+        const newToken = await refreshAccessToken()
+        if (newToken) {
+          const retryConfig = { ...error.config, _authRetried: true }
+          retryConfig.headers = error.config?.headers || {}
+          return api.request(retryConfig)
+        }
+      }
+
+      // 续期也失败 / 本就不是会话问题：清掉本地凭证与本地用户数据，并通知上层
       if (status === 401) {
-        const requestUrl = String(error.config?.url || '')
-        // 登录 / 注册接口的 401 表示“账号密码错误”，不是会话失效。
-        // 此时不能清本地计划与收藏（用户可能只是重新登录时输错密码），
-        // 也不能派发 auth:unauthorized，否则会被上层当成“被踢下线”。
-        const isCredentialRequest =
-          requestUrl.includes('/auth/login') || requestUrl.includes('/auth/register')
-
         clearToken()
 
         if (!isCredentialRequest) {

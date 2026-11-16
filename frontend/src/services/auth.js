@@ -1,5 +1,5 @@
 import { reactive } from 'vue'
-import api from './api'
+import api, { refreshAccessToken } from './api'
 import { clearUserLocalData } from './localUserData'
 import {
   clearToken,
@@ -117,15 +117,18 @@ export async function restoreSession() {
   if (authState.initialized || authState.user) return authState.user
   if (inflightRestore) return inflightRestore
 
-  const token = getToken()
-  if (!token) {
-    authState.initialized = true
-    return null
-  }
-
   authState.loading = true
   inflightRestore = (async () => {
     try {
+      // 没有 access token 不代表没登录：refresh Cookie 还在就能静默换新。
+      // 这正是「关掉浏览器再打开不用重新登录」的实现点。
+      let token = getToken()
+      if (!token) token = await refreshAccessToken()
+      if (!token) {
+        authState.user = null
+        authState.initialized = true
+        return null
+      }
       return await fetchMe()
     } catch {
       clearToken()
@@ -148,6 +151,8 @@ export async function restoreSession() {
  * 退出时必须一并删除，避免下一位使用者或下一账号读到。
  */
 export function logout() {
+  // 通知后端清掉 refresh Cookie（失败不影响本地登出）
+  api.post('/auth/logout').catch(() => {})
   clearToken()
   authState.user = null
   authState.initialized = true

@@ -41,7 +41,7 @@ if "*" in config.CORS_ALLOW_ORIGINS:
 app.add_middleware(
     CORSMiddleware,
     allow_origins=config.CORS_ALLOW_ORIGINS,
-    allow_credentials=False,       # 鉴权使用 Authorization: Bearer，不依赖 Cookie
+    allow_credentials=True,        # refresh token 走 httpOnly Cookie，需允许携带凭证
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type"],
     max_age=600,

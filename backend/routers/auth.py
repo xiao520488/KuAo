@@ -13,13 +13,21 @@
 """
 
 import sqlite3
+from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Cookie, Depends, HTTPException, Response, status
 from pydantic import BaseModel, Field
 
 import config
-from db import create_user, get_user_by_username
-from security import create_access_token, get_current_user, hash_password, verify_password
+from db import create_user, get_user_by_id, get_user_by_username
+from security import (
+    create_access_token,
+    create_refresh_token,
+    decode_refresh_token,
+    get_current_user,
+    hash_password,
+    verify_password,
+)
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -107,6 +115,32 @@ def _build_token_response(user) -> TokenResponse:
     )
 
 
+def _set_refresh_cookie(response: Response, user: dict) -> None:
+    """把 refresh token 种进 httpOnly Cookie（滑动续期：每次刷新都重置 30 天）。"""
+    token = create_refresh_token(user["id"], user["username"])
+    response.set_cookie(
+        key=config.REFRESH_COOKIE_NAME,
+        value=token,
+        max_age=config.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 3600,
+        path=config.REFRESH_COOKIE_PATH,
+        domain=config.COOKIE_DOMAIN,
+        secure=config.COOKIE_SECURE,
+        httponly=True,          # JS 读不到，XSS 偷不走
+        samesite=config.COOKIE_SAMESITE,
+    )
+
+
+def _clear_refresh_cookie(response: Response) -> None:
+    response.delete_cookie(
+        key=config.REFRESH_COOKIE_NAME,
+        path=config.REFRESH_COOKIE_PATH,
+        domain=config.COOKIE_DOMAIN,
+        secure=config.COOKIE_SECURE,
+        httponly=True,
+        samesite=config.COOKIE_SAMESITE,
+    )
+
+
 # ---------------------------------------------------------------------------
 # 接口
 # ---------------------------------------------------------------------------
@@ -119,7 +153,7 @@ def _build_token_response(user) -> TokenResponse:
         409: {"description": "用户名已被注册"},
     },
 )
-def register(req: RegisterRequest) -> TokenResponse:
+def register(req: RegisterRequest, response: Response) -> TokenResponse:
     """注册新用户并签发 Token。"""
     username = _normalize_username(req.username)
     if not username:
@@ -144,6 +178,7 @@ def register(req: RegisterRequest) -> TokenResponse:
     # 兼容个别情况下 lastrowid 与查询结果不一致
     user = _to_user_dict(user)
     user["id"] = user_id
+    _set_refresh_cookie(response, user)
     return _build_token_response(user)
 
 
@@ -156,8 +191,8 @@ def register(req: RegisterRequest) -> TokenResponse:
         401: {"description": "用户名或密码错误"},
     },
 )
-def login(req: LoginRequest) -> TokenResponse:
-    """校验账号密码，返回 JWT Token。"""
+def login(req: LoginRequest, response: Response) -> TokenResponse:
+    """校验账号密码，返回 JWT Token，并种下 refresh Cookie。"""
     username = _normalize_username(req.username)
     user = get_user_by_username(username)
 
@@ -169,7 +204,65 @@ def login(req: LoginRequest) -> TokenResponse:
             headers={"WWW-Authenticate": "Bearer"},
         )
 
+    _set_refresh_cookie(response, _to_user_dict(user))
     return _build_token_response(user)
+
+
+@router.post(
+    "/refresh",
+    response_model=TokenResponse,
+    summary="续期登录（刷新 access token）",
+    description=(
+        "无需 Authorization 头，浏览器自动携带 httpOnly Cookie `kuao_refresh`。"
+        "用有效的 refresh token 换一个新的 access token，并顺延 Cookie 有效期（滑动续期）。"
+    ),
+    responses={401: {"description": "refresh token 缺失或已过期，需重新登录"}},
+)
+def refresh(
+    response: Response,
+    refresh_cookie: Optional[str] = Cookie(default=None, alias=config.REFRESH_COOKIE_NAME),
+) -> TokenResponse:
+    """用 httpOnly Cookie 里的 refresh token 静默换取新的 access token。"""
+    if not refresh_cookie:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="登录已过期，请重新登录",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    payload = decode_refresh_token(refresh_cookie)
+    try:
+        uid = int(payload.get("sub"))
+    except (TypeError, ValueError):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="无效的登录凭证",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    user = get_user_by_id(uid)
+    if user is None:
+        _clear_refresh_cookie(response)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="用户不存在或已被删除",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    user = _to_user_dict(user)
+    _set_refresh_cookie(response, user)   # 滑动续期：再用 30 天
+    return _build_token_response(user)
+
+
+@router.post(
+    "/logout",
+    summary="退出登录",
+    description="清除 refresh Cookie；前端同时清掉内存中的 access token。",
+)
+def logout(response: Response) -> dict:
+    """清掉 refresh Cookie（access token 由前端自行丢弃）。"""
+    _clear_refresh_cookie(response)
+    return {"ok": True}
 
 
 @router.get(
