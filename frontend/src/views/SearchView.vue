@@ -10,7 +10,6 @@ import {
   searchCompetitions
 } from '@/services/api'
 import { authState } from '@/services/auth'
-import { openAuthModal } from '@/composables/useAuthModal'
 import { mapCompetitionToCard } from '@/utils/competitionCard'
 
 const route = useRoute()
@@ -83,7 +82,8 @@ async function runSearch(rawQuery) {
   try {
     let items = await searchCompetitionList(q)
 
-    if (!items.length && authState.user && looksLikeIntent(q)) {
+    // 关键词 0 命中 + 句子式需求 → 直接走 AI 语义检索（公开接口，游客也能用）
+    if (!items.length && looksLikeIntent(q)) {
       try {
         const res = await searchCompetitions(q)
         items = res.items || []
@@ -111,17 +111,13 @@ async function runSearch(rawQuery) {
 }
 
 /**
- * 显式「AI 语义搜索」：空状态里的主动入口。
- * 像「文科生能参加的国家级赛事」这种句子，关键词检索天生无能为力，
- * 是否花一次 AI 配额交给用户自己点（游客先引导登录）。
+ * 显式「AI 语义搜索」：关键词 0 命中时的手动入口。
+ * /api/ai/search 是公开接口（向量检索走 embedding，不消耗用户 AI 配额），游客也能用，
+ * 所以这里不做登录拦截，点一下就能再试一次语义召回。
  */
 async function runSemantic() {
   const q = query.value.trim()
   if (!q) return
-  if (!authState.user) {
-    openAuthModal('login')
-    return
-  }
 
   const currentId = ++requestId
   semanticBusy.value = true
@@ -145,16 +141,6 @@ async function runSemantic() {
     }
   }
 }
-
-// 登录后如果当前关键词还是 0 结果，自动帮用户把这句话交给 AI 再试一次
-watch(
-  () => authState.user,
-  (user, prev) => {
-    if (user && !prev && searched.value && results.value.length === 0 && !semanticTried.value) {
-      runSemantic()
-    }
-  }
-)
 
 /** 备赛状态批量查询（未登录全部 false） */
 async function loadPreparedStates(list) {
@@ -379,13 +365,12 @@ watch(
                     d="M12 3l1.6 4.4L18 9l-4.4 1.6L12 15l-1.6-4.4L6 9l4.4-1.6L12 3zM18.5 15.5l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8.8-2.2z" />
             </svg>
             <template v-if="semanticBusy">AI 正在理解这句话…</template>
-            <template v-else-if="!authState.user">登录后用 AI 语义搜索</template>
-            <template v-else>用 AI 理解这句话</template>
+            <template v-else-if="semanticError">重试 AI 语义搜索</template>
+            <template v-else>用 AI 语义搜索</template>
           </button>
           <p class="text-[12px] font-medium text-slate-400 dark:text-slate-500">
-            <template v-if="!authState.user">这是一句需求描述，关键词匹配不到；登录后可用 AI 按语义找赛事</template>
-            <template v-else-if="semanticTried && !semanticError">AI 语义检索消耗 1 次额度</template>
-            <template v-else-if="!semanticError">关键词没搜到，试试让 AI 按语义理解</template>
+            <template v-if="semanticTried && !semanticError">AI 语义检索也不扣次数，可以反复试</template>
+            <template v-else>关键词没搜到，让 AI 按语义再找一次（免费，不扣 AI 次数）</template>
           </p>
           <p v-if="semanticError" class="text-[12px] font-semibold text-rose-500">{{ semanticError }}</p>
         </div>
