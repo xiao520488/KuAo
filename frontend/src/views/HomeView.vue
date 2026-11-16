@@ -161,6 +161,8 @@ async function loadTotalCount() {
 
 onMounted(() => {
   loadTotalCount()
+  // 首页只展示热门：首屏直接拉 /competitions/hot
+  loadCompetitions()
   // 双 rAF：确保首帧已经绘制出「位移 + 透明」的初始态，
   // 下一帧再切到终态，过渡才会真正发生（单帧内改值可能被浏览器合并而跳过动画）
   requestAnimationFrame(() => {
