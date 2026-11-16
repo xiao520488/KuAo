@@ -1021,6 +1021,47 @@ def list_competitions(category: Optional[str] = None,
     return result
 
 
+# 口语意图/虚词：只在关键词检索里剥掉，剥不干净就回退原始词元（不影响简单查询）
+_INTENT_WORDS = (
+    "帮我找一下", "帮我找", "帮我看", "帮我", "请帮我", "我想找", "我想参加", "我想", "想找", "想参加", "想",
+    "我要找", "我要", "需要找", "需要", "有没有", "有哪些", "还有哪些", "还有", "哪些", "什么", "怎么样",
+    "怎么样", "如何", "怎么", "能不能", "可不可以", "可以参加", "能参加", "能够", "可以", "适合", "推荐",
+    "准备", "参加", "报名期", "报名", "在报名", "正在", "近期", "一些", "一下", "一个", "些", "的", "了",
+    "吗", "呢", "吧", "啊", "是", "在", "有", "和", "与", "或", "及", "请问", "请问一下", "麻烦",
+    "赛事", "比赛", "竞赛", "大赛", "赛",
+)
+
+# 近义词：中文专业说法 → 库里实际使用的类别/学科写法
+_SYNONYMS = {
+    "商科": ["创业", "商业", "经济", "管理", "金融", "会计", "商务", "营销"],
+    "经管": ["创业", "商业", "经济", "管理", "金融", "会计"],
+    "财经": ["经济", "金融", "会计", "商业", "管理"],
+    "文科": ["外语", "艺术", "素养", "人文", "社科", "新闻", "法学", "教育", "经济"],
+    "理科": ["数学", "物理", "化学", "生物", "统计"],
+    "算法": ["算法", "程序设计", "人工智能", "计算机"],
+    "编程": ["程序设计", "软件", "计算机"],
+    "代码": ["程序设计", "软件"],
+    "码农": ["程序设计", "软件", "计算机"],
+    "人工智能": ["人工智能", "智能", "算法", "计算机"],
+    "机器人": ["机器人", "自动化", "控制"],
+    "自动化": ["自动化", "控制", "电气"],
+    "电子": ["电子", "电气", "通信", "信息"],
+    "机械": ["机械", "机电", "车辆"],
+    "土木": ["土木", "建筑", "工程管理"],
+    "数学建模": ["数学建模", "建模", "数学"],
+    "建模": ["建模", "数学建模"],
+    "创新创业": ["创新创业", "创业", "商业"],
+    "设计": ["设计", "工业设计", "艺术"],
+    "英语": ["英语", "外语", "翻译"],
+    "国赛": ["国家级", "全国"],
+    "国家级": ["国家级", "全国"],
+    "国一": ["国家级", "全国"],
+    "省级": ["省级", "省"],
+    "入门": ["程序设计", "数学建模", "创新创业"],
+    "简单": ["程序设计", "数学建模"],
+}
+
+
 def search_competitions(query: str, limit: int = 60) -> list:
     """按关键词检索竞赛（名称 > 类别 > 摘要 逐级命中，支持多词叠加）。
 
@@ -1043,12 +1084,34 @@ def search_competitions(query: str, limit: int = 60) -> list:
 
     tokens = [t for t in re.split(r"[\s,，、;；/|\+\-_:：()（）【】\[\]]+", raw)
               if re.search(r"[0-9A-Za-z\u4e00-\u9fff]", t)]
-    # 短词被长词包含时丢弃（"数学建模" 已含 "建模"），避免重复加分
+
+    # 1) 先剥掉口语里的意图/虚词：「我想找寒假能准备的算法赛」→ 寒假 / 算法
+    #    否则整句去匹配名称必然 0 命中，只能靠 AI 兜底（游客没配额就彻底搜不到）
+    stripped = []
+    for t in tokens:
+        piece = t
+        for w in _INTENT_WORDS:
+            piece = piece.replace(w, " ")
+        stripped.extend(p for p in piece.split() if len(p) >= 2)
+    if stripped:
+        tokens = stripped
+
+    # 2) 短词被长词包含时丢弃（"数学建模" 已含 "建模"），避免重复加分
     uniq: list = []
     for t in sorted(set(tokens), key=len, reverse=True):
         if not any(t in u for u in uniq):
             uniq.append(t)
-    tokens = uniq[:8] or [raw]
+
+    # 3) 近义词扩展：「商科」→ 创业/商业/经济…，让专业术语也能落到类别上
+    #    只在近义词覆盖了词元主体时才扩展（「文科生」≈「文科」可以，
+    #    「程序设计」里的「设计」就不算，否则会捞出一堆工业设计/广告艺术）
+    expanded = list(uniq)
+    for t in uniq:
+        for key, words in _SYNONYMS.items():
+            covers = (t == key) or (key in t and len(key) * 2 > len(t)) or (t in key and len(t) * 2 > len(key))
+            if covers:
+                expanded.extend(w for w in words if w not in expanded)
+    tokens = expanded[:10] or [raw]
 
     rows = list_competitions()
     scored = []
@@ -1056,8 +1119,10 @@ def search_competitions(query: str, limit: int = 60) -> list:
         name = str(row.get("name") or "")
         category = str(row.get("category") or "")
         summary = str(row.get("summary") or "")
+        level_label = str(row.get("level_label") or "")
         best = 0.0
         multi = 0
+        level_hit = False
         for tok in tokens:
             if tok == name:
                 base = 0.95
@@ -1067,12 +1132,19 @@ def search_competitions(query: str, limit: int = 60) -> list:
                 base = 0.55
             elif tok in summary:
                 base = 0.35
+            elif tok in level_label:
+                # 级别（国家级/省级）只做加分项，不能单独命中，
+                # 否则「…的国家级赛事」会把整库国家级赛事全捞出来
+                level_hit = True
+                continue
             else:
                 continue
             multi += 1
             best = max(best, base)
         if best <= 0:
             continue
+        if level_hit:
+            best = min(1.0, best + 0.12)
         scored.append((round(min(1.0, best + 0.05 * (multi - 1)), 4), name, row))
 
     scored.sort(key=lambda item: (-item[0], item[1]))
