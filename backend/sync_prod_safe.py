@@ -66,6 +66,30 @@ WORKSPACE_DIR = os.path.join(BASE_DIR, "workspace")
 # ---------------------------------------------------------------------------
 BUSINESS_TABLES = ("competitions", "awards", "competition_candidates")
 
+# 事实字段（人工核对结果）：目标库更新时，这些列禁止被源库旧快照覆盖
+FACT_COLUMNS = (
+    "reg_start_date",
+    "reg_end_date",
+    "contest_start_date",
+    "contest_end_date",
+    "facts_checked_at",
+)
+
+
+def facts_protected(target_row: dict, source_row: dict) -> bool:
+    """目标库的事实字段比源库更新 -> True（这几列只读不写）。
+
+    判据只有 facts_checked_at：它由后台「采纳」/「手工校正」写入。2026-11-15 事故：
+    本地快照里仍是上一届的报名窗口，一次整表同步把线上当天手工校正过的 2026
+    报名期盖回 2025，且台账没有任何记录——同步工具必须自己挡住这一刀。
+    """
+    target_checked = str((target_row or {}).get("facts_checked_at") or "").strip()
+    source_checked = str((source_row or {}).get("facts_checked_at") or "").strip()
+    if not target_checked:
+        return False
+    return target_checked > source_checked
+
+
 PROTECTED_TABLES = (
     "users",
     "user_preparations",
@@ -252,13 +276,17 @@ def plan_table(con: sqlite3.Connection, table: str) -> dict:
             mapping[values] = pk
         key_maps.append((spec, mapping))
 
-    inserts, updates, conflicts, unchanged = [], [], [], 0
+    inserts, updates, conflicts, unchanged, protected = [], [], [], 0, 0
     for row in src_rows:
         item = {c: row[c] for c in src_cols}
         pk = item.get("id")
         if pk in dst_rows:
             old = dst_rows[pk]
             changed = {c: item[c] for c in src_cols if old.get(c) != item[c]}
+            if table == "competitions" and changed and facts_protected(old, item):
+                # 线上事实字段更新过：旧快照不得覆盖（2026-11-15 报名期被盖回旧届）
+                changed = {c: v for c, v in changed.items() if c not in FACT_COLUMNS}
+                protected += 1
             if changed:
                 updates.append({"id": pk, "columns": sorted(changed)})
             else:
@@ -294,6 +322,7 @@ def plan_table(con: sqlite3.Connection, table: str) -> dict:
         "updates": updates,
         "conflicts": conflicts,
         "unchanged": unchanged,
+        "protected_facts": protected,
         "stale_on_target": stale,
     }
 
@@ -396,14 +425,8 @@ def sync(source: str, target: str, *, apply: bool, backup_dir: str, make_backup:
             for plan in plans:
                 table = plan["table"]
                 cols = columns_of(con, table, "main")
-                update_cols = [c for c in cols if c != "id"]
-                upsert = (
-                    f"INSERT INTO main.{q(table)} ({', '.join(q(c) for c in cols)}) "
-                    f"VALUES ({', '.join('?' for _ in cols)}) "
-                    f"ON CONFLICT({q('id')}) DO UPDATE SET "
-                    + ", ".join(f"{q(c)} = excluded.{q(c)}" for c in update_cols)
-                )
-                guard_sql(upsert)
+                default_update_cols = [c for c in cols if c != "id"]
+                upsert_cache = {}
                 pk_list = plan["inserts"] + [u["id"] for u in plan["updates"]]
                 if not pk_list:
                     continue
@@ -414,7 +437,30 @@ def sync(source: str, target: str, *, apply: bool, backup_dir: str, make_backup:
                     pk_list,
                 ).fetchall()
                 for row in rows:
-                    con.execute(upsert, tuple(row[c] for c in cols))
+                    data = {c: row[c] for c in cols}
+                    update_cols = default_update_cols
+                    if table == "competitions":
+                        keep = con.execute(
+                            "SELECT * FROM main.competitions WHERE id = ?",
+                            (data.get("id"),),
+                        ).fetchone()
+                        if keep is not None and facts_protected(
+                            {k: keep[k] for k in keep.keys()}, data
+                        ):
+                            update_cols = [c for c in default_update_cols
+                                           if c not in FACT_COLUMNS]
+                    key = tuple(update_cols)
+                    upsert = upsert_cache.get(key)
+                    if upsert is None:
+                        upsert = (
+                            f"INSERT INTO main.{q(table)} ({', '.join(q(c) for c in cols)}) "
+                            f"VALUES ({', '.join('?' for _ in cols)}) "
+                            f"ON CONFLICT({q('id')}) DO UPDATE SET "
+                            + ", ".join(f"{q(c)} = excluded.{q(c)}" for c in update_cols)
+                        )
+                        guard_sql(upsert)
+                        upsert_cache[key] = upsert
+                    con.execute(upsert, tuple(data[c] for c in cols))
                 written["inserted"] += len(plan["inserts"])
                 written["updated"] += len(plan["updates"])
 

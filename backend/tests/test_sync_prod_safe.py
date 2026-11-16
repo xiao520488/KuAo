@@ -188,3 +188,66 @@ def test_whitelist_is_hardcoded():
                   "ideas", "insights", "search_leads", "crawl_jobs", "ai_analysis_cache"):
         assert table in s.PROTECTED_TABLES
         assert table not in s.BUSINESS_TABLES
+
+
+# ---------------------------------------------------------------------------
+# 事实字段护栏：目标库的报名/比赛日期更新时，旧快照不得覆盖
+# ---------------------------------------------------------------------------
+FACT_SCHEMA = """
+CREATE TABLE competitions (
+    id INTEGER PRIMARY KEY,
+    name TEXT,
+    reg_start_date TEXT,
+    reg_end_date TEXT,
+    contest_start_date TEXT,
+    contest_end_date TEXT,
+    facts_checked_at TEXT
+);
+"""
+
+
+def _make_comp_db(path, row):
+    con = sqlite3.connect(path)
+    con.execute(FACT_SCHEMA.strip())
+    con.execute(
+        "INSERT INTO competitions (id, name, reg_start_date, reg_end_date, "
+        "contest_start_date, contest_end_date, facts_checked_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        row,
+    )
+    con.commit()
+    con.close()
+
+
+def _plan_two(tmp_path, src_row, dst_row):
+    src = str(tmp_path / "src.db")
+    dst = str(tmp_path / "dst.db")
+    _make_comp_db(src, src_row)
+    _make_comp_db(dst, dst_row)
+    con = s.connect(dst)
+    con.execute("ATTACH DATABASE ? AS src", (s.file_uri(src, "ro"),))
+    plan = s.plan_table(con, "competitions")
+    con.close()
+    return plan
+
+
+def test_plan_protects_newer_target_facts(tmp_path):
+    plan = _plan_two(
+        tmp_path,
+        (12, "蓝桥杯", "2025-10-20", "2026-04-27", None, None, "2026-11-15 17:09:41"),
+        (12, "蓝桥杯", "2026-10-08", "2026-12-18", None, None, "2026-11-16 17:42:52"),
+    )
+    assert plan["updates"] == []
+    assert plan["unchanged"] == 1
+    assert plan["protected_facts"] == 1
+
+
+def test_plan_applies_when_source_facts_newer(tmp_path):
+    plan = _plan_two(
+        tmp_path,
+        (12, "蓝桥杯", "2026-10-08", "2026-12-18", None, None, "2026-11-16 17:42:52"),
+        (12, "蓝桥杯", "2025-10-20", "2026-04-27", None, None, "2026-11-15 17:09:41"),
+    )
+    assert plan["protected_facts"] == 0
+    cols = set(plan["updates"][0]["columns"])
+    assert {"reg_start_date", "reg_end_date"} <= cols

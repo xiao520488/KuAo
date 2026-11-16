@@ -3743,6 +3743,36 @@ def decide_fact_staging(staging_id: int, status: str, *,
             raise ValueError("队列记录不存在")
 
 
+def _refresh_reg_months(conn, competition_id: int) -> None:
+    """按 reg_*_date 回填月份轨（reg_start_month / reg_end_month / reg_cross_year）。
+
+    月份是老前端的兜底展示（有精确日期时不用），但它曾经和日期长期不咬合，
+    这里让它在每次写入日期时自动跟随，避免两套值互相矛盾。
+    """
+    row = conn.execute(
+        "SELECT reg_start_date, reg_end_date FROM competitions WHERE id = ?",
+        (int(competition_id),),
+    ).fetchone()
+    if row is None:
+        return
+
+    def _month(value):
+        text = str(value or "").strip()
+        if len(text) >= 7 and text[4] == "-" and text[5:7].isdigit():
+            return int(text[5:7])
+        return None
+
+    start = _month(row["reg_start_date"])
+    end = _month(row["reg_end_date"])
+    if start is None or end is None:
+        return
+    conn.execute(
+        "UPDATE competitions SET reg_start_month = ?, reg_end_month = ?, "
+        "reg_cross_year = ? WHERE id = ?",
+        (start, end, 1 if end < start else 0, int(competition_id)),
+    )
+
+
 def set_competition_facts(competition_id: int, patch: dict, *,
                           source_url: Optional[str] = None,
                           verified_by: Optional[str] = None) -> dict:
@@ -3768,6 +3798,9 @@ def set_competition_facts(competition_id: int, patch: dict, *,
         )
         if cur.rowcount == 0:
             raise ValueError("赛事不存在")
+        # 月份轨是日期的派生兜底值：写入报名日期就顺手回填，避免长期不咬合
+        if {"reg_start_date", "reg_end_date"} & set(fields):
+            _refresh_reg_months(conn, int(competition_id))
         for field in fields:
             value = _date_or_none(fields[field]) if fields[field] else None
             conn.execute(
