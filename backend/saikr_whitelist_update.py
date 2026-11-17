@@ -56,10 +56,21 @@ WRITABLE = (
     "last_checked_at",
 )
 
+# ---- 事实列：人工核对过（facts_checked_at 非空）的赛事，爬虫不得覆盖 ----
+# 教训（2026-11-17）：每日 04:10 的本脚本把人工核对好的蓝桥杯报名期
+# 2026-10-08 ~ 2026-12-18 用赛氪的上一届数据 2025-10-20 ~ 2026-04-27 盖了回去，
+# 而且不碰 facts_checked_at，事后查不出痕迹。
+FACT_COLUMNS = (
+    "reg_start_date", "reg_end_date",
+    "reg_start_month", "reg_end_month", "reg_cross_year",
+    "contest_start_date", "contest_end_date",
+)
+
 # ---- 红线：这些表一行都不许变 ----
 PROTECTED_TABLES = ("awards", "ideas", "user_preparations", "users", "ai_usage", "ai_jobs")
 
 STALE_DAYS = 400          # 报名截止超过这么久 = 往年届次，跳过
+RECENT_REG_END_DAYS = 30  # 报名截止已过去这么久 = 往届窗口，不再用它的日期覆盖
 DELAY_CHOICES = (3.0, 5.0)
 
 
@@ -153,6 +164,21 @@ def resolve_contest_id(name: str, mapped: dict, cid: int, matcher) -> int | None
     return int(found["contest_id"])
 
 
+def drop_locked_facts(patch: dict, notes: list, facts_checked_at, overwrite: bool = False) -> list:
+    """人工核对过的赛事：把事实列从补丁里摘掉，返回被摘掉的列名。
+
+    人工核对（facts_checked_at 非空）优先级高于赛氪快照；除非显式 --overwrite-facts。
+    """
+    if overwrite or not str(facts_checked_at or "").strip():
+        return []
+    dropped = [key for key in FACT_COLUMNS if key in patch]
+    for key in dropped:
+        patch.pop(key, None)
+    if dropped:
+        notes.append("人工核对已锁定 %s，保留原值（%s）" % (str(facts_checked_at).strip(), "、".join(dropped)))
+    return dropped
+
+
 def _iso(dt) -> str | None:
     return dt.strftime("%Y-%m-%d") if dt else None
 
@@ -172,30 +198,39 @@ def build_patch(detail: dict, row: dict, now: datetime, parse_time) -> tuple[dic
     patch: dict = {}
     notes: list[str] = []
 
-    # ---- 1. 报名窗口（新一届换时间时刷新）----
+    # ---- 0. 往届窗口护栏 ----
+    # 赛氪常常还挂着上一届的报名窗口（例如 11 月了还停在「2025-10-20 ~ 2026-04-27」）。
+    # 这种已经结束很久的窗口一律不写：宁可保留库里的现行/未来时间，也不要退回上一届。
     reg_start = parse_time(detail.get("regist_start_time"))
     reg_end = parse_time(detail.get("regist_end_time"))
-    if _sane(reg_start, now):
-        patch["reg_start_date"] = _iso(reg_start)
-        patch["reg_start_month"] = reg_start.month
-    if _sane(reg_end, now):
-        patch["reg_end_date"] = _iso(reg_end)
-        patch["reg_end_month"] = reg_end.month
-    if _sane(reg_start, now) and _sane(reg_end, now):
-        patch["reg_cross_year"] = 1 if reg_end.year != reg_start.year else 0
+    stale_window = bool(reg_end) and _sane(reg_end, now) and (now - reg_end).days > RECENT_REG_END_DAYS
+    if stale_window:
+        notes.append("往届报名窗口（截止 %s），不覆盖报名/比赛日期" % _iso(reg_end))
+
+    # ---- 1. 报名窗口（新一届换时间时刷新）----
+    if not stale_window:
+        if _sane(reg_start, now):
+            patch["reg_start_date"] = _iso(reg_start)
+            patch["reg_start_month"] = reg_start.month
+        if _sane(reg_end, now):
+            patch["reg_end_date"] = _iso(reg_end)
+            patch["reg_end_month"] = reg_end.month
+        if _sane(reg_start, now) and _sane(reg_end, now):
+            patch["reg_cross_year"] = 1 if reg_end.year != reg_start.year else 0
 
     # ---- 2. 比赛日期：API 的 contest_*_time 常是占位符，退回赛程表 ----
     c_start = parse_time(detail.get("contest_start_time"))
     c_end = parse_time(detail.get("contest_end_time"))
-    if _sane(c_start, now):
-        patch["contest_start_date"] = _iso(c_start)
-    if _sane(c_end, now):
-        patch["contest_end_date"] = _iso(c_end)
+    if not stale_window:
+        if _sane(c_start, now):
+            patch["contest_start_date"] = _iso(c_start)
+        if _sane(c_end, now):
+            patch["contest_end_date"] = _iso(c_end)
 
     stage_list = ((detail.get("contest_stage") or {}).get("list") or []) \
         if isinstance(detail.get("contest_stage"), dict) else []
     stages = []
-    for item in stage_list:
+    for item in stage_list if not stale_window else []:
         if not isinstance(item, dict):
             continue
         title = str(item.get("title") or item.get("name") or "").strip()
@@ -271,6 +306,11 @@ def main(argv=None) -> int:
     parser.add_argument("--ids", default="", help="只处理指定竞赛 id，逗号分隔")
     parser.add_argument("--delay", default="3,5", help="每次请求间隔区间（秒），如 3,5")
     parser.add_argument("--json", action="store_true", help="以 JSON 输出汇总")
+    parser.add_argument(
+        "--overwrite-facts",
+        action="store_true",
+        help="允许覆盖人工核对过（facts_checked_at 非空）的日期字段，默认不覆盖",
+    )
     args = parser.parse_args(argv)
 
     db_path = resolve_db_path(args.db_path)
@@ -297,7 +337,7 @@ def main(argv=None) -> int:
         rows = [dict(r) for r in conn.execute(
             "SELECT id, name, summary, official_url, image_url, reg_start_date, reg_end_date, "
             "reg_start_month, reg_end_month, reg_cross_year, contest_start_date, contest_end_date, "
-            "stage_schedule, last_checked_at FROM competitions ORDER BY id"
+            "stage_schedule, last_checked_at, facts_checked_at FROM competitions ORDER BY id"
         ).fetchall()]
     finally:
         conn.close()
@@ -344,6 +384,10 @@ def main(argv=None) -> int:
 
         patch, notes = build_patch(detail, row, now, enrich._parse_api_time)
         patch["last_checked_at"] = now.strftime("%Y-%m-%d %H:%M:%S")
+
+        # 人工核对过的赛事：事实列一律不动（日期/月份/跨年），只许刷新 last_checked_at 等
+        drop_locked_facts(patch, notes, row.get("facts_checked_at"), args.overwrite_facts)
+
         plans.append({"id": int(row["id"]), "name": name, "contest_id": contest_id,
                       "patch": patch, "notes": notes})
         log("  %2d/%d %s ← %s%s" % (
