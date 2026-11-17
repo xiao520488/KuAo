@@ -35,3 +35,7 @@ backend/chroma_db/
 backend/snapshots/
 backend/backups/
 *.db.bak-*
+
+# TLS certs / private keys (local only, never commit)
+*.pem
+*.key
