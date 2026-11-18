@@ -13,6 +13,8 @@ python-dotenv==1.2.4
 # --- 鉴权 ---
 bcrypt==5.0.0
 PyJWT==2.15.1
+# 图形验证码（登录 / 注册）：生成 PNG，依赖 Pillow（已在下方图表处理段列出）
+captcha==0.7.1
 
 # --- 大模型 / JSON 修复 ---
 openai==3.42.1

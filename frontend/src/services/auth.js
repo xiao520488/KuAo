@@ -13,8 +13,9 @@ import {
  * 鉴权服务
  * ------------------------------------------------------------------
  * 后端契约（已与后端确认）：
- *   POST /api/auth/login    body: { username, password }  -> { access_token, token_type, expires_in }
- *   POST /api/auth/register body: { username, password }  -> { access_token, token_type, expires_in }
+ *   GET  /api/auth/captcha  -> { captcha_key, captcha_image(data URL), expires_in }
+ *   POST /api/auth/login    body: { username, password, captcha_key, captcha_code } -> { access_token, ... }
+ *   POST /api/auth/register body: { username, password, captcha_key, captcha_code } -> { access_token, ... }
  *   GET  /api/auth/me       header: Authorization: Bearer <token> -> { ...用户信息 }
  *
  * Token 存 sessionStorage（按标签页隔离），请求拦截器（api.js）自动注入。
@@ -57,38 +58,77 @@ async function applyAuthResult(data) {
   return authState.user
 }
 
+/**
+ * 归一化登录 / 注册入参，并做前端必填校验，避免把空值发给后端。
+ * @returns {{ username: string, password: string, captchaKey: string, captchaCode: string }}
+ */
+function readCredentialPayload(payload = {}) {
+  const username = typeof payload.username === 'string' ? payload.username.trim() : ''
+  const password = typeof payload.password === 'string' ? payload.password : ''
+  const captchaKey = typeof payload.captchaKey === 'string' ? payload.captchaKey : ''
+  const captchaCode = typeof payload.captchaCode === 'string' ? payload.captchaCode.trim() : ''
+
+  if (!username) throw new Error('请输入用户名')
+  if (!password) throw new Error('请输入密码')
+
+  return { username, password, captchaKey, captchaCode }
+}
+
 /* ------------------------------------------------------------------ */
 /* 接口调用                                                            */
 /* ------------------------------------------------------------------ */
 
 /**
  * 登录
- * @param {{ username: string, password: string }} payload
+ * @param {{ username: string, password: string, captchaKey: string, captchaCode: string }} payload
  */
 export async function login(payload = {}) {
-  const username = typeof payload.username === 'string' ? payload.username.trim() : ''
-  const password = typeof payload.password === 'string' ? payload.password : ''
+  const { username, password, captchaKey, captchaCode } = readCredentialPayload(payload)
+  if (!captchaKey) throw new Error('验证码已失效，请点击图片刷新')
+  if (!captchaCode) throw new Error('请输入验证码')
 
-  if (!username) throw new Error('请输入用户名')
-  if (!password) throw new Error('请输入密码')
-
-  const data = await api.post('/auth/login', { username, password })
+  const data = await api.post('/auth/login', {
+    username,
+    password,
+    captcha_key: captchaKey,
+    captcha_code: captchaCode
+  })
   return applyAuthResult(data)
 }
 
 /**
  * 注册（后端注册成功直接返回 token，无需再调 login）
- * @param {{ username: string, password: string }} payload
+ * @param {{ username: string, password: string, captchaKey: string, captchaCode: string }} payload
  */
 export async function register(payload = {}) {
-  const username = typeof payload.username === 'string' ? payload.username.trim() : ''
-  const password = typeof payload.password === 'string' ? payload.password : ''
+  const { username, password, captchaKey, captchaCode } = readCredentialPayload(payload)
+  if (!captchaKey) throw new Error('验证码已失效，请点击图片刷新')
+  if (!captchaCode) throw new Error('请输入验证码')
 
-  if (!username) throw new Error('请输入用户名')
-  if (!password) throw new Error('请输入密码')
-
-  const data = await api.post('/auth/register', { username, password })
+  const data = await api.post('/auth/register', {
+    username,
+    password,
+    captcha_key: captchaKey,
+    captcha_code: captchaCode
+  })
   return applyAuthResult(data)
+}
+
+/**
+ * 领取一张图形验证码
+ *
+ * 后端返回 { captcha_key, captcha_image, expires_in }：
+ * captcha_image 是 data:image/png;base64,...，可直接绑到 <img :src>，
+ * 因此不需要额外的图片域名，也不会有跨域 / 混合内容问题。
+ *
+ * @returns {Promise<{ captcha_key: string, captcha_image: string, expires_in: number }>}
+ */
+export async function fetchCaptcha() {
+  const data = await api.get('/auth/captcha')
+  if (!data || typeof data.captcha_image !== 'string' || !data.captcha_key) {
+    throw new Error('验证码加载失败，请重试')
+  }
+  return data
 }
 
 /**

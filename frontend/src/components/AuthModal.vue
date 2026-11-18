@@ -1,6 +1,6 @@
 <script setup>
 import { computed, ref, watch, nextTick, onBeforeUnmount } from 'vue'
-import { login, register } from '@/services/auth'
+import { login, register, fetchCaptcha } from '@/services/auth'
 
 /**
  * 登录 / 注册弹窗
@@ -30,6 +30,14 @@ const submitting = ref(false)
 const errorMsg = ref('')
 const usernameInput = ref(null)
 
+/* 图形验证码：key 由后端签发，code 是用户看的图里那 4 位数字 */
+const captchaKey = ref('')
+const captchaImage = ref('')
+const captchaCode = ref('')
+const captchaLoading = ref(false)
+const captchaError = ref('')
+let captchaSeq = 0
+
 const isRegister = computed(() => activeTab.value === 'register')
 
 /* ---------------- 生命周期联动 ---------------- */
@@ -40,6 +48,7 @@ watch(
     if (open) {
       activeTab.value = props.mode === 'register' ? 'register' : 'login'
       resetForm()
+      loadCaptcha()
       await nextTick()
       usernameInput.value?.focus()
     }
@@ -51,12 +60,18 @@ watch(activeTab, () => {
   errorMsg.value = ''
   password.value = ''
   confirmPassword.value = ''
+  // 验证码是一次性的：换 Tab 相当于重新开始一次提交，换一张更稳妥
+  if (props.modelValue) {
+    captchaCode.value = ''
+    loadCaptcha()
+  }
 })
 
 function resetForm() {
   username.value = ''
   password.value = ''
   confirmPassword.value = ''
+  captchaCode.value = ''
   errorMsg.value = ''
   submitting.value = false
 }
@@ -64,6 +79,31 @@ function resetForm() {
 function switchTab(tab) {
   if (submitting.value) return
   activeTab.value = tab
+}
+
+/**
+ * 取一张新验证码
+ *
+ * 用自增序号丢弃过期响应：用户可能连点几下图片，
+ * 只认最后一次请求的结果，否则会把先到的旧图覆盖上去，导致「图对不上 key」。
+ */
+async function loadCaptcha() {
+  const seq = ++captchaSeq
+  captchaLoading.value = true
+  captchaError.value = ''
+  try {
+    const data = await fetchCaptcha()
+    if (seq !== captchaSeq) return
+    captchaKey.value = data.captcha_key
+    captchaImage.value = data.captcha_image
+  } catch (err) {
+    if (seq !== captchaSeq) return
+    captchaKey.value = ''
+    captchaImage.value = ''
+    captchaError.value = err?.message || '验证码加载失败，点击图片重试'
+  } finally {
+    if (seq === captchaSeq) captchaLoading.value = false
+  }
 }
 
 function close() {
@@ -78,6 +118,8 @@ function validate() {
   if (!password.value) return '请输入密码'
   if (isRegister.value && password.value.length < 6) return '密码至少 6 位'
   if (isRegister.value && password.value !== confirmPassword.value) return '两次输入的密码不一致'
+  if (!captchaKey.value) return '验证码未加载，请点击图片重试'
+  if (!captchaCode.value.trim()) return '请输入验证码'
   return ''
 }
 
@@ -89,12 +131,21 @@ async function onSubmit() {
 
   submitting.value = true
   try {
-    const payload = { username: username.value.trim(), password: password.value }
+    const payload = {
+      username: username.value.trim(),
+      password: password.value,
+      captchaKey: captchaKey.value,
+      captchaCode: captchaCode.value.trim()
+    }
     const user = isRegister.value ? await register(payload) : await login(payload)
     visible.value = false
     emit('success', user)
   } catch (err) {
     errorMsg.value = err?.message || '操作失败，请稍后重试'
+    // 验证码是「一次性」的：这次提交不管因为什么失败，旧 key 都已作废，
+    // 必须换一张，否则用户盯着同一张图反复输也永远错。
+    captchaCode.value = ''
+    loadCaptcha()
   } finally {
     submitting.value = false
   }
@@ -234,6 +285,53 @@ onBeforeUnmount(() => {
                        focus:border-blue-400 dark:focus:border-blue-500 focus:bg-white dark:focus:bg-slate-800 focus:ring-2 focus:ring-blue-500/20 dark:focus:ring-blue-400/30"
                 :disabled="submitting"
               />
+            </div>
+
+            <!-- 图形验证码：左边输入，右边图片，点图片换一张 -->
+            <div>
+              <label class="mb-1.5 block text-sm font-bold text-slate-700 dark:text-slate-200">验证码</label>
+              <div class="flex items-stretch gap-2">
+                <input
+                  v-model="captchaCode"
+                  type="text"
+                  inputmode="numeric"
+                  autocomplete="one-time-code"
+                  maxlength="8"
+                  placeholder="请输入右侧数字"
+                  class="min-w-0 flex-1 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50/60 dark:bg-slate-800/60 px-4 py-2.5
+                         text-sm font-medium text-slate-800 dark:text-slate-100 placeholder:text-slate-500 dark:placeholder:text-slate-500
+                         outline-none transition-all
+                         focus:border-blue-400 dark:focus:border-blue-500 focus:bg-white dark:focus:bg-slate-800 focus:ring-2 focus:ring-blue-500/20 dark:focus:ring-blue-400/30"
+                  :disabled="submitting"
+                />
+                <button
+                  type="button"
+                  class="relative flex h-[42px] w-[110px] shrink-0 items-center justify-center overflow-hidden rounded-xl
+                         border border-slate-200 dark:border-slate-700 bg-slate-50/60 dark:bg-slate-800/60
+                         transition-colors hover:border-blue-300 dark:hover:border-blue-600
+                         disabled:cursor-not-allowed"
+                  :disabled="captchaLoading || submitting"
+                  title="看不清？点击换一张"
+                  aria-label="点击刷新验证码"
+                  @click="loadCaptcha"
+                >
+                  <img
+                    v-if="captchaImage"
+                    :src="captchaImage"
+                    alt="验证码"
+                    class="h-full w-full object-contain"
+                    draggable="false"
+                  />
+                  <span v-else class="text-xs text-slate-500 dark:text-slate-400">
+                    {{ captchaLoading ? '加载中…' : '点击加载' }}
+                  </span>
+                  <span
+                    v-if="captchaLoading && captchaImage"
+                    class="absolute inset-0 flex items-center justify-center bg-white/70 dark:bg-slate-800/70 text-xs text-slate-600 dark:text-slate-300"
+                  >刷新中…</span>
+                </button>
+              </div>
+              <p v-if="captchaError" class="mt-1 text-xs font-medium text-red-500 dark:text-red-400">{{ captchaError }}</p>
             </div>
 
             <!-- 错误提示 -->

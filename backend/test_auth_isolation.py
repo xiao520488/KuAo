@@ -28,6 +28,7 @@ import config
 import db
 import main
 import security
+from captcha_store import captcha_store
 
 # 复用同一个 bcrypt 哈希，避免每个用例都付一次哈希成本；明文 "pass1234" 仅测试用。
 _PASSWORD_HASH = security.hash_password("pass1234")
@@ -53,6 +54,15 @@ class AuthIsolationTest(unittest.TestCase):
         finally:
             db.DB_PATH = cls._orig_db_path
             shutil.rmtree(cls._tmpdir, ignore_errors=True)
+
+    def _captcha(self, payload: dict) -> dict:
+        """领一张验证码并把明文填进请求体（同进程可直接读缓存，无需 OCR）。"""
+        resp = self.client.get("/api/auth/captcha")
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        code = captcha_store.peek(body["captcha_key"])
+        self.assertIsNotNone(code)
+        return {**payload, "captcha_key": body["captcha_key"], "captcha_code": code}
 
     def setUp(self) -> None:
         # 外键子表先删，再删主表
@@ -203,10 +213,12 @@ class AuthIsolationTest(unittest.TestCase):
 
     def test_register_issues_distinct_token_per_user(self) -> None:
         first = self.client.post(
-            "/api/auth/register", json={"username": "register_a", "password": "pass1234"}
+            "/api/auth/register",
+            json=self._captcha({"username": "register_a", "password": "pass1234"}),
         )
         second = self.client.post(
-            "/api/auth/register", json={"username": "register_b", "password": "pass1234"}
+            "/api/auth/register",
+            json=self._captcha({"username": "register_b", "password": "pass1234"}),
         )
         self.assertEqual(first.status_code, 200)
         self.assertEqual(second.status_code, 200)

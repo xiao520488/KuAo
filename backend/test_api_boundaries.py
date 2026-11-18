@@ -51,6 +51,7 @@ import db
 import llm
 import main
 import security
+from captcha_store import captcha_store
 from routers import ai as ai_router
 
 
@@ -116,6 +117,19 @@ class _TempDBTestCase(unittest.TestCase):
     @staticmethod
     def _auth(token: str) -> dict:
         return {"Authorization": f"Bearer {token}"}
+
+    def _captcha(self, payload: dict) -> dict:
+        """领一张验证码并把明文填进请求体。
+
+        测试与后端同进程，可直接从缓存读出验证码明文，不需要 OCR；
+        每个 payload 都要单独领一张（验证码一次性，复用会被判 400）。
+        """
+        resp = self.client.get("/api/auth/captcha")
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        code = captcha_store.peek(body["captcha_key"])
+        self.assertIsNotNone(code)
+        return {**payload, "captcha_key": body["captcha_key"], "captcha_code": code}
 
     def _new_competition(self, name: str = "全国大学生数学建模竞赛", **overrides) -> int:
         data = {
@@ -386,23 +400,23 @@ class AuthBoundaryTest(_TempDBTestCase):
             ({"username": "abc", "password": "a" * 65}, 422),
         ]
         for payload, expected in cases:
-            response = self.client.post("/api/auth/register", json=payload)
+            response = self.client.post("/api/auth/register", json=self._captcha(payload))
             self.assertEqual(response.status_code, expected, payload)
 
         # 边界内且带首尾空格：Pydantic 通过，后端归一化为 abc
         response = self.client.post(
             "/api/auth/register",
-            json={"username": "  abc  ", "password": "123456"},
+            json=self._captcha({"username": "  abc  ", "password": "123456"}),
         )
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["user"]["username"], "abc")
 
     def test_register_duplicate_is_case_insensitive(self) -> None:
         first = self.client.post(
-            "/api/auth/register", json={"username": "Bob", "password": "123456"}
+            "/api/auth/register", json=self._captcha({"username": "Bob", "password": "123456"})
         )
         second = self.client.post(
-            "/api/auth/register", json={"username": "bob", "password": "123456"}
+            "/api/auth/register", json=self._captcha({"username": "bob", "password": "123456"})
         )
         self.assertEqual(first.status_code, 200)
         self.assertEqual(second.status_code, 409)
@@ -411,11 +425,11 @@ class AuthBoundaryTest(_TempDBTestCase):
         self._new_user("login_user")
         wrong_password = self.client.post(
             "/api/auth/login",
-            json={"username": "login_user", "password": "wrong-password"},
+            json=self._captcha({"username": "login_user", "password": "wrong-password"}),
         )
         unknown_user = self.client.post(
             "/api/auth/login",
-            json={"username": "nobody", "password": "whatever"},
+            json=self._captcha({"username": "nobody", "password": "whatever"}),
         )
         self.assertEqual(wrong_password.status_code, 401)
         self.assertEqual(unknown_user.status_code, 401)
@@ -427,7 +441,7 @@ class AuthBoundaryTest(_TempDBTestCase):
         self._new_user("victim_user")
         response = self.client.post(
             "/api/auth/login",
-            json={"username": "victim_user", "password": "' OR '1'='1"},
+            json=self._captcha({"username": "victim_user", "password": "' OR '1'='1"}),
         )
         self.assertEqual(response.status_code, 401)
 
@@ -435,14 +449,14 @@ class AuthBoundaryTest(_TempDBTestCase):
         username = "a' OR '1'='1"
         registered = self.client.post(
             "/api/auth/register",
-            json={"username": username, "password": "123456"},
+            json=self._captcha({"username": username, "password": "123456"}),
         )
         self.assertEqual(registered.status_code, 200)
 
         # 以同样字符串登录应成功，说明是按值匹配而非拼接 SQL
         login = self.client.post(
             "/api/auth/login",
-            json={"username": username, "password": "123456"},
+            json=self._captcha({"username": username, "password": "123456"}),
         )
         self.assertEqual(login.status_code, 200)
         self.assertEqual(login.json()["user"]["username"], username.lower())

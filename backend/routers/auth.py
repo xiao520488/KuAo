@@ -2,24 +2,32 @@
 """用户鉴权路由 (routers/auth.py)
 
 提供：
-  * POST /api/auth/register  注册（用户名 + 密码 → 建号并直接返回 Token）
-  * POST /api/auth/login     登录（校验密码 → 返回 JWT Token）
+  * GET  /api/auth/captcha   图形验证码（登录 / 注册前必须先取一张）
+  * POST /api/auth/register  注册（用户名 + 密码 + 验证码 → 建号并直接返回 Token）
+  * POST /api/auth/login     登录（校验验证码与密码 → 返回 JWT Token）
   * GET  /api/auth/me        获取当前登录用户（用于前端刷新页面后校验登录态）
 
 安全约定：
   - 密码只以 bcrypt 哈希入库，任何时候不回显明文
   - 登录失败统一提示「用户名或密码错误」，不泄露账号是否存在
   - 注册重名返回 409
+  - 验证码**一次性**：校验过就作废（成功失败都作废），失败返回 400
+  - 同一用户名 / IP 连续输错 5 次密码锁定 15 分钟，返回 429（见 login_guard.py）
 """
 
+import base64
+import secrets
 import sqlite3
 from typing import Optional
 
-from fastapi import APIRouter, Cookie, Depends, HTTPException, Response, status
+from captcha.image import ImageCaptcha
+from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, Field
 
 import config
+from captcha_store import captcha_store
 from db import create_user, get_user_by_id, get_user_by_username
+from login_guard import login_guard
 from security import (
     create_access_token,
     create_refresh_token,
@@ -38,10 +46,17 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 class RegisterRequest(BaseModel):
     username: str = Field(..., min_length=3, max_length=32, description="用户名（3-32 位）")
     password: str = Field(..., min_length=6, max_length=64, description="密码（6-64 位）")
+    captcha_key: str = Field(..., min_length=1, description="验证码标识（取自 /api/auth/captcha）")
+    captcha_code: str = Field(..., min_length=1, max_length=8, description="用户输入的验证码")
 
     model_config = {
         "json_schema_extra": {
-            "example": {"username": "alice", "password": "123456"}
+            "example": {
+                "username": "alice",
+                "password": "123456",
+                "captcha_key": "2f1c...",
+                "captcha_code": "1234",
+            }
         }
     }
 
@@ -49,12 +64,25 @@ class RegisterRequest(BaseModel):
 class LoginRequest(BaseModel):
     username: str = Field(..., description="用户名")
     password: str = Field(..., description="密码")
+    captcha_key: str = Field(..., min_length=1, description="验证码标识（取自 /api/auth/captcha）")
+    captcha_code: str = Field(..., min_length=1, max_length=8, description="用户输入的验证码")
 
     model_config = {
         "json_schema_extra": {
-            "example": {"username": "alice", "password": "123456"}
+            "example": {
+                "username": "alice",
+                "password": "123456",
+                "captcha_key": "2f1c...",
+                "captcha_code": "1234",
+            }
         }
     }
+
+
+class CaptchaResponse(BaseModel):
+    captcha_key: str = Field(..., description="验证码标识，提交登录/注册时原样回传")
+    captcha_image: str = Field(..., description="PNG 图片的 data URL（可直接塞进 <img :src>）")
+    expires_in: int = Field(..., description="有效期（秒）")
 
 
 class UserInfo(BaseModel):
@@ -142,19 +170,77 @@ def _clear_refresh_cookie(response: Response) -> None:
 
 
 # ---------------------------------------------------------------------------
+# 图形验证码
+# ---------------------------------------------------------------------------
+# 复用同一个 ImageCaptcha 实例：它每次 generate 都会新建 Image 并重新挑字体、加噪点，
+# 单实例即可，无需每请求 new 一个。
+_CAPTCHA_RENDERER = ImageCaptcha(width=150, height=50)
+
+
+def _random_captcha_code() -> str:
+    """生成指定位数的纯数字验证码（用 secrets，不用可预测的 random）。"""
+    length = max(1, int(config.CAPTCHA_LENGTH))
+    return "".join(secrets.choice("0123456789") for _ in range(length))
+
+
+def _client_ip(request: Request) -> str:
+    """真实客户端 IP。
+
+    uvicorn 以 ``--proxy-headers --forwarded-allow-ips=127.0.0.1`` 启动，
+    nginx 会带上 X-Forwarded-For，所以 request.client.host 已经是用户真实 IP。
+    """
+    return request.client.host if request.client else ""
+
+
+def _require_captcha(captcha_key: str, captcha_code: str) -> None:
+    """校验验证码；不通过直接抛 400（key 一次性，校验即作废）。"""
+    if not captcha_store.consume(captcha_key, captcha_code):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="验证码错误或已过期",
+        )
+
+
+# ---------------------------------------------------------------------------
 # 接口
 # ---------------------------------------------------------------------------
+@router.get(
+    "/captcha",
+    response_model=CaptchaResponse,
+    summary="获取图形验证码",
+    description=(
+        "返回 PNG 图片的 Base64 data URL 与唯一 captcha_key，有效期 5 分钟。"
+        "登录 / 注册时必须同时回传 captcha_key 与用户输入的 captcha_code；"
+        "一个验证码只能用一次（成功失败都会作废）。"
+    ),
+)
+def get_captcha() -> CaptchaResponse:
+    """生成一张验证码图片，并把「key → 文本」登记进一次性缓存。"""
+    code = _random_captcha_code()
+    png = _CAPTCHA_RENDERER.generate(code).getvalue()
+    key = captcha_store.issue(code)
+    return CaptchaResponse(
+        captcha_key=key,
+        captcha_image="data:image/png;base64," + base64.b64encode(png).decode("ascii"),
+        expires_in=config.CAPTCHA_TTL_SECONDS,
+    )
+
+
 @router.post(
     "/register",
     response_model=TokenResponse,
     summary="注册账号",
     description="创建新用户。用户名重复返回 409；成功后直接返回 Token，前端可免二次登录。",
     responses={
+        400: {"description": "验证码错误或已过期"},
         409: {"description": "用户名已被注册"},
     },
 )
-def register(req: RegisterRequest, response: Response) -> TokenResponse:
+def register(req: RegisterRequest, request: Request, response: Response) -> TokenResponse:
     """注册新用户并签发 Token。"""
+    # 验证码先校验：机器人连「用户名是否重复」这一步都不该走到
+    _require_captcha(req.captcha_key, req.captcha_code)
+
     username = _normalize_username(req.username)
     if not username:
         raise HTTPException(status_code=422, detail="用户名不能为空")
@@ -188,22 +274,41 @@ def register(req: RegisterRequest, response: Response) -> TokenResponse:
     summary="登录",
     description="用户名 + 密码换取 JWT Token。前端需保存 token，并在调用 AI 接口时放入请求头：`Authorization: Bearer <token>`。",
     responses={
+        400: {"description": "验证码错误或已过期"},
         401: {"description": "用户名或密码错误"},
+        429: {"description": "连续登录失败过多，已临时锁定"},
     },
 )
-def login(req: LoginRequest, response: Response) -> TokenResponse:
-    """校验账号密码，返回 JWT Token，并种下 refresh Cookie。"""
+def login(req: LoginRequest, request: Request, response: Response) -> TokenResponse:
+    """校验验证码与账号密码，返回 JWT Token，并种下 refresh Cookie。"""
     username = _normalize_username(req.username)
+    ip = _client_ip(request)
+
+    # 1) 锁定期内直接挡掉：连验证码校验和 bcrypt 都不必付
+    remaining = login_guard.locked_remaining(username, ip)
+    if remaining > 0:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="请稍后再试",
+            headers={"Retry-After": str(remaining)},
+        )
+
+    # 2) 验证码：一次性，错了就作废，防脚本复用同一张图穷举
+    _require_captcha(req.captcha_key, req.captcha_code)
+
     user = get_user_by_username(username)
 
-    # 用户不存在 / 密码错误 → 统一文案，防账号枚举
+    # 3) 用户不存在 / 密码错误 → 统一文案，防账号枚举
     if user is None or not verify_password(req.password, user["password_hash"]):
+        login_guard.record_failure(username, ip)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="用户名或密码错误",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
+    # 4) 登录成功：清零失败计数，避免历史错误把正常用户越锁越久
+    login_guard.reset(username, ip)
     _set_refresh_cookie(response, _to_user_dict(user))
     return _build_token_response(user)
 

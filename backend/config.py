@@ -136,11 +136,26 @@ REFRESH_TOKEN_EXPIRE_DAYS = _get_int("REFRESH_TOKEN_EXPIRE_DAYS", 30)
 REFRESH_COOKIE_NAME = _get_str("REFRESH_COOKIE_NAME", "kuao_refresh")
 # Cookie 只发给鉴权接口，不随每个业务请求上行
 REFRESH_COOKIE_PATH = _get_str("REFRESH_COOKIE_PATH", "/api/auth")
-# 纯 HTTP 部署（当前线上 112.126.90.252）必须为 False，否则浏览器直接拒收 Cookie；
-# 将来上了 HTTPS 记得改成 True。
+# 纯 HTTP 部署时必须为 False，否则浏览器直接拒收 Cookie；
+# 线上已全站 HTTPS，通过 .env 里的 COOKIE_SECURE=1 打开（本地开发保持默认 False）。
 COOKIE_SECURE = _get_bool("COOKIE_SECURE", False)
 COOKIE_SAMESITE = _get_str("COOKIE_SAMESITE", "lax")
 COOKIE_DOMAIN = _get_str("COOKIE_DOMAIN", "") or None
+
+# ------------------------------------------------------------
+# 图形验证码（登录 / 注册防机器人注册与撞库）
+# ------------------------------------------------------------
+# 验证码位数：4 位数字（10^1 组合很少，靠「一次性 + 5 分钟 + 错误即作废」兜底）
+CAPTCHA_LENGTH = _get_int("CAPTCHA_LENGTH", 4)
+# 有效期（秒）：超过即失效，前端拿到 400 会自动换一张
+CAPTCHA_TTL_SECONDS = _get_int("CAPTCHA_TTL_SECONDS", 300)
+
+# ------------------------------------------------------------
+# 登录防爆破：连续密码错误 → 锁定
+# ------------------------------------------------------------
+# 同一用户名或同一 IP 连续输错几次密码后锁定，以及锁定多长时间（秒）
+LOGIN_MAX_FAILURES = _get_int("LOGIN_MAX_FAILURES", 5)
+LOGIN_LOCK_SECONDS = _get_int("LOGIN_LOCK_SECONDS", 15 * 60)
 
 # ------------------------------------------------------------
 # AI daily quota (per user, resets at local midnight)

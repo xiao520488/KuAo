@@ -130,7 +130,9 @@ api.interceptors.response.use(
       // 后端此时返回 { detail: "..." }，文案直接用 detail，不在前端硬编码。
       // 攻略生成接口的 429 带的是 { status, reason } 而不是 detail（限流原因
       // 由详情页按钮就地提示），这里用 detail 是否存在来区分，避免误弹 Toast。
-      if (status === 429 && normalizeDetail(data?.detail)) {
+      // 登录 / 注册的 429 是「失败次数过多，已锁定」，由弹窗就地提示，
+      // 不该再弹「AI 次数用完」的全局 Toast，所以把鉴权接口排除在外。
+      if (status === 429 && !isAuthEndpoint && normalizeDetail(data?.detail)) {
         if (typeof window !== 'undefined') {
           window.dispatchEvent(
             new CustomEvent('ai:quota-exceeded', {
