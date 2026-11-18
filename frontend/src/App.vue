@@ -1,5 +1,6 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted } from 'vue'
+import AppFooter from '@/components/AppFooter.vue'
 import AuthModal from '@/components/AuthModal.vue'
 import ChangelogModal from '@/components/ChangelogModal.vue'
 import Toast from '@/components/Toast.vue'
@@ -62,6 +63,9 @@ onBeforeUnmount(() => {
         <component :is="Component" :key="route.name" />
       </keep-alive>
     </router-view>
+
+    <!-- 全站页脚：ICP 备案号（mt-auto 保证内容不足一屏时贴底） -->
+    <AppFooter />
 
     <!-- 全局登录/注册弹窗：固定在根组件，不依赖具体页面 -->
     <AuthModal v-model="showAuth" :mode="authMode" />
