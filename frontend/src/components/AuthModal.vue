@@ -306,7 +306,7 @@ onBeforeUnmount(() => {
                 />
                 <button
                   type="button"
-                  class="relative flex h-[42px] w-[110px] shrink-0 items-center justify-center overflow-hidden rounded-xl
+                  class="relative flex h-[50px] w-[160px] shrink-0 items-center justify-center overflow-hidden rounded-xl
                          border border-slate-200 dark:border-slate-700 bg-slate-50/60 dark:bg-slate-800/60
                          transition-colors hover:border-blue-300 dark:hover:border-blue-600
                          disabled:cursor-not-allowed"

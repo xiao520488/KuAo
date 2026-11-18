@@ -174,7 +174,7 @@ def _clear_refresh_cookie(response: Response) -> None:
 # ---------------------------------------------------------------------------
 # 复用同一个 ImageCaptcha 实例：它每次 generate 都会新建 Image 并重新挑字体、加噪点，
 # 单实例即可，无需每请求 new 一个。
-_CAPTCHA_RENDERER = ImageCaptcha(width=150, height=50)
+_CAPTCHA_RENDERER = ImageCaptcha(width=160, height=56)
 
 
 def _random_captcha_code() -> str:
