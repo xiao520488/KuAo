@@ -244,6 +244,12 @@ def _clean(value, spec: dict) -> str:
     text = _cell(value)
     strip_chars = spec.get("strip")
     chars = strip_chars if isinstance(strip_chars, str) and strip_chars else _DEFAULT_STRIP
+    text = text.strip(chars)
+    # PDF 单元格常把长校名/多人折成两行：换行一律当空格，再压掉多余空白；
+    # 「哈尔滨工业大学\n（深圳）」这种括号前不留空格，避免把校名拆成两家。
+    text = text.replace("\r", "").replace("\n", " ")
+    text = re.sub(r"[ \t\u3000]{2,}", " ", text)
+    text = re.sub(r"\s+([（(])", r"\1", text)
     return text.strip(chars)
 
 
@@ -710,6 +716,27 @@ def _normalize_members(text: str) -> str:
     return "、".join(parts)
 
 
+# 官方 PDF 常把奖项写成「特等 / 一等 / 优胜」，而全库既有口径是「特等奖」，
+# 不补这个后缀，同一场比赛在页面上会同时出现「特等」和「特等奖」两种写法。
+_BARE_GRADES = {"特等", "一等", "二等", "三等", "优胜", "优秀"}
+
+
+def _normalize_grade(value: Optional[str], spec: Optional[dict] = None) -> Optional[str]:
+    """奖项归一：先按 `spec.grade_map` 精确覆盖，再对裸档位补「奖」字。
+
+    「本科组一等奖」「一等奖（MVP）」这类已经完整的写法不动。
+    """
+    text = (value or "").strip()
+    if not text:
+        return None
+    mapping = (spec or {}).get("grade_map") or {}
+    if text in mapping:
+        return mapping[text]
+    if text in _BARE_GRADES:
+        return text + "奖"
+    return text
+
+
 def _finalize(records: List[dict], spec: Optional[dict] = None) -> List[dict]:
     """收尾：拼 summary、补 title、规范化 year、清掉内部字段。"""
     spec = spec or {}
@@ -718,6 +745,8 @@ def _finalize(records: List[dict], spec: Optional[dict] = None) -> List[dict]:
     out = []
     for rec in records:
         # 表头行被当成数据混进来时（PDF 每页重复表头很常见）在这里兜底丢掉
+        if rec.get("award_grade"):
+            rec["award_grade"] = _normalize_grade(rec["award_grade"], spec)
         if not rec.get("title") and template:
             rec["title"] = _render_template(template, rec)
         if _norm_key(rec.get("title")) in header_words:
@@ -744,6 +773,20 @@ def _finalize(records: List[dict], spec: Optional[dict] = None) -> List[dict]:
         rec.pop("_page", None)
         out.append(rec)
     return out
+
+
+def parse_by_adapter(content: bytes, adapter: str, spec: dict) -> List[dict]:
+    """按 adapter 名分发到具体解析器（CLI 与维护脚本共用，别各写一份 if）。"""
+    name = (adapter or "").lower()
+    if name in ("xlsx_sheet", "xlsx"):
+        return parse_xlsx(content, spec)
+    if name in ("docx_table", "docx"):
+        return parse_docx(content, spec)
+    if name in ("pdf_table", "pdf"):
+        return parse_pdf(content, spec)
+    if name in ("html_table", "html"):
+        return parse_html_table(content, spec)
+    raise ValueError(f"未知 adapter：{adapter!r}")
 
 
 def prepare_records(raw_rows: Sequence[dict], spec: dict,
@@ -843,16 +886,7 @@ def ingest_source(source: dict, *, apply: bool = False, approve: bool = False,
         log.info("抓到 %d 字节，判定格式 %s（%s）", len(content), fmt, final_url)
 
         adapter = (source.get("adapter") or "").lower()
-        if adapter in ("xlsx_sheet", "xlsx"):
-            raw = parse_xlsx(content, spec)
-        elif adapter in ("docx_table", "docx"):
-            raw = parse_docx(content, spec)
-        elif adapter in ("pdf_table", "pdf"):
-            raw = parse_pdf(content, spec)
-        elif adapter in ("html_table", "html"):
-            raw = parse_html_table(content, spec)
-        else:
-            raise ValueError(f"未知 adapter：{adapter!r}")
+        raw = parse_by_adapter(content, adapter, spec)
 
         stats["parsed"] = len(raw)
         records = prepare_records(raw, spec, source)

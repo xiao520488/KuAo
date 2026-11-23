@@ -83,5 +83,32 @@ class AwardSourcesDbTest(unittest.TestCase):
         self.assertIsNone(db.get_award_source(sid))
 
 
+class AwardWritableFieldsTest(unittest.TestCase):
+    """create_award 必须能把 session / track 写进去（曾经漏在可写字段外，静默丢数据）。"""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.path = os.path.join(self.tmp.name, "t.db")
+        db.init_db(self.path)
+        db.DB_PATH, self._orig = self.path, db.DB_PATH
+        self.cid = db.add_competition({"name": "测试赛事丙", "category": "测试"})
+
+    def tearDown(self):
+        db.DB_PATH = self._orig
+        self.tmp.cleanup()
+
+    def test_session_and_track_roundtrip(self):
+        award_id = db.create_award({
+            "competition_id": self.cid, "title": "某作品", "team": "某大学",
+            "session": "第19届", "track": "ARM 实现", "award_grade": "特等奖",
+        })
+        with db.get_conn(self.path) as conn:
+            row = conn.execute(
+                "SELECT session, track FROM awards WHERE id=?", (award_id,)
+            ).fetchone()
+        self.assertEqual(row["session"], "第19届")
+        self.assertEqual(row["track"], "ARM 实现")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1790,17 +1790,18 @@ def list_users(limit: int = 100, offset: int = 0) -> list:
 #   - competition_raw 保存未归并到 competitions 的原始赛事名；
 #   - award_grade 是前端 Award 模型与检索读取的获奖等级，抓取时与 award_level 双写。
 _AWARD_WRITABLE_FIELDS = (
-    "competition_id", "competition_raw", "year", "category", "title", "team",
-    "advisor", "award_level", "award_grade", "summary", "tech_stack",
-    "highlights", "detail_md", "source_url", "source_type", "raw_html_path",
-    "confidence", "review_status", "embedding_state", "content_hash",
+    "competition_id", "competition_raw", "year", "session", "category", "title",
+    "team", "advisor", "award_level", "award_grade", "track", "summary",
+    "tech_stack", "highlights", "detail_md", "source_url", "source_type",
+    "raw_html_path", "confidence", "review_status", "embedding_state",
+    "content_hash",
 )
 
 # 这些字段变化会影响向量语义，需要把 embedding_state 标脏
 _AWARD_EMBEDDING_FIELDS = (
     "title", "summary", "highlights", "detail_md", "tech_stack",
     "category", "award_level", "award_grade", "competition_raw",
-    "year", "team", "advisor",
+    "year", "session", "track", "team", "advisor",
 )
 
 

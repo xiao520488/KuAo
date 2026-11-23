@@ -176,5 +176,33 @@ class ParsePdfLinesTest(unittest.TestCase):
         self.assertIsNone(sec_re.search("10430 广东技术师范大学 智教先锋"))
 
 
+class GradeAndWhitespaceTest(unittest.TestCase):
+    """奖项写法归一 + PDF 单元格换行清洗（系统能力大赛 2025 名单暴露的两个坑）。"""
+
+    def test_bare_grade_gets_suffix(self):
+        for bare, full in [("特等", "特等奖"), ("一等", "一等奖"), ("三等", "三等奖"),
+                           ("优胜", "优胜奖"), ("优秀", "优秀奖")]:
+            self.assertEqual(A._normalize_grade(bare), full)
+
+    def test_complete_grade_untouched(self):
+        for text in ["本科组一等奖", "一等奖（MVP）", "三等奖", "高职高专组二等奖"]:
+            self.assertEqual(A._normalize_grade(text), text)
+
+    def test_grade_map_override(self):
+        spec = {"grade_map": {"特等": "特等奖（冠军）"}}
+        self.assertEqual(A._normalize_grade("特等", spec), "特等奖（冠军）")
+        self.assertEqual(A._normalize_grade("二等", spec), "二等奖")
+
+    def test_blank_grade(self):
+        self.assertIsNone(A._normalize_grade(None))
+        self.assertIsNone(A._normalize_grade("  "))
+
+    def test_clean_collapses_wrapped_cell(self):
+        spec = {}
+        self.assertEqual(A._clean("哈尔滨工业大学\n（深圳）", spec), "哈尔滨工业大学（深圳）")
+        self.assertEqual(A._clean("李昕昊\n翁浩男", spec), "李昕昊 翁浩男")
+        self.assertEqual(A._clean("  电子科技大学 \n", spec), "电子科技大学")
+
+
 if __name__ == "__main__":
     unittest.main()

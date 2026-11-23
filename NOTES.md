@@ -52,3 +52,15 @@ ginx 均 active；本地仓库干净（未跟踪的只有 out/、shots/、erify
 - 服务器 venv 缺 pdfplumber/openpyxl/python-docx（requirements 有但没装），首次 `--all --apply` 只成功 HTML 那个；`pip install` 后重跑幂等（软件杯 603 条全部 skipped 不重复）。
 **清掉的脏数据**：47 条 `source_type='mock'`（"四足机器人…/机器人方向第2组"）原为 approved，会进前台和 AI 素材，已全部标 rejected（可回滚）。真实覆盖率因此从"17"变 **9/85** —— 旧的 17 里有 12 个赛事只有 mock。
 **下一步（不用再查来源）**：① 系统能力 #14 的 2025 届三份 PDF 有文字层，直接登记即可；② 4 个 OCR 赛事（#2 挑战杯 61 页扫描、#34、#71 坏 CID、#14-2026）；③ 重生成受 mock 影响的 AI 攻略/洞察（#21 正文仍在描述假数据）；④ `award_sources` 不在 sync_prod_safe 白名单，跨机同步靠 `--seed` 在服务器自建。
+
+**部署状态**：提交 `ecba3f3` 已 push 到 GitHub master；服务器 `/root/KuAo/backend/` 已同步 award_ingest.py / award_sources.seed.json / db.py / schema_v2.sql 并装好 pdfplumber 0.11.10 + openpyxl 3.1.5 + python-docx 1.2.0（原 venv 缺这三个，requirements 里有但没装）。
+
+### 2026-11-23 续：系统能力 #14 补到 2025 届 + 修掉两个静默丢数据的 bug
+
+**新增入库**：#14 三份 2025 届 PDF（编译 59 / OS 126 / DB 48 = 233 条），全库 9,396 条、覆盖赛事 **10/85**。
+**顺手挖出的 bug（重要，不看代码想不到）**：
+1. `db._AWARD_WRITABLE_FIELDS` 里**没有 `session` / `track`** —— `create_award` 按这个元组裁剪，于是这两个字段被静默丢弃，而我写的 `content_hash` 又是带 track 算的。修好后历史 7,190 行用 `backend/backfill_award_track.py`（重解析→按 content_hash 对齐→UPDATE）补齐，不删不重建。
+2. 官方 PDF 常把奖项写成「特等/一等/优胜」，全库既有口径是「特等奖」→ 新增 `_normalize_grade()`（裸档位补「奖」字，`parse_spec.grade_map` 可精确覆盖）。
+3. PDF 单元格折行（`哈尔滨工业大学\n（深圳）`）会带着换行入库 → `_clean()` 里把换行压成空格并去掉括号前空格。
+**下次加赛事记住**：`award_ingest.py` 的 `parse_by_adapter()` 是唯一分发口；解析新站点先 `--source-id N --print-rows 5` 看候选，再 `--apply`。
+**还剩**：OCR 管线（#2/#34/#71/#14-2026）+ 重生成受 mock 影响的 AI 攻略。
