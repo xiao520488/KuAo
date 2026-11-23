@@ -47,11 +47,24 @@ def find_issues(conn) -> dict:
         "  AND contest_start_month IS NOT NULL"
     ).fetchall()
 
+    # R4 月份列与精确日期不同月：精确日期来自原文，月份是早期补全留下的，
+    #    以日期为准（例：cid=10 报名月份 4 但报名日期 2026-03-01）。
+    drift = conn.execute(
+        "SELECT id, name, reg_start_month, reg_start_date, "
+        "       contest_start_month, contest_start_date "
+        "FROM competitions WHERE "
+        "(reg_start_month IS NOT NULL AND reg_start_date IS NOT NULL "
+        " AND CAST(strftime('%m', reg_start_date) AS INTEGER) <> reg_start_month) OR "
+        "(contest_start_month IS NOT NULL AND contest_start_date IS NOT NULL "
+        " AND CAST(strftime('%m', contest_start_date) AS INTEGER) <> contest_start_month)"
+    ).fetchall()
+
     return {
         "copied_reg_dates": r1,
         "same_window_but_has_month": r1_ok,
         "backwards": [dict(r) for r in backwards],
         "grain_mismatch": [dict(r) for r in grain],
+        "month_drift": [dict(r) for r in drift],
     }
 
 
@@ -61,6 +74,8 @@ def main() -> int:
                     help="修复 R1：把抄来的报名日期清成 NULL")
     ap.add_argument("--include-same-window", action="store_true",
                     help="连同 R1b 一起处理：窗口相同且原文只有报名语境时，清比赛日期")
+    ap.add_argument("--sync-months", action="store_true",
+                    help="R4：月份列按精确日期纠正（日期来自原文，月份是早期补全的）")
     args = ap.parse_args()
 
     with db.get_conn() as conn:
@@ -78,6 +93,10 @@ def main() -> int:
             print(f"  cid={r['id']:<4} {r['name'][:30]}")
         print(f"\nR3 有精确报名日期但缺报名月份：{len(issues['grain_mismatch'])} 条"
               "（前端只显示日期，不算错，仅提示）")
+        print(f"\nR4 月份列与精确日期不同月：{len(issues['month_drift'])} 条")
+        for r in issues["month_drift"]:
+            print(f"  cid={r['id']:<4} 报名月份={r['reg_start_month']} 日期={r['reg_start_date']} / "
+                  f"比赛月份={r['contest_start_month']} 日期={r['contest_start_date']}  {r['name'][:24]}")
 
         if args.apply:
             fixed = 0
@@ -102,6 +121,27 @@ def main() -> int:
                     cleared += 1
                 print(f"已清 {cleared} 条 R1b 的比赛日期"
                       "（原文只写了报名窗口、没写比赛日期，赛段细节仍在 stage_schedule）")
+
+            if args.sync_months:
+                fixed = 0
+                for r in issues["month_drift"]:
+                    sets, vals = [], []
+                    for month_col, date_col in (("reg_start_month", "reg_start_date"),
+                                                ("contest_start_month", "contest_start_date")):
+                        month, date = r[month_col], r[date_col]
+                        if month is not None and date:
+                            real = int(str(date)[5:7])
+                            if real != month:
+                                sets.append(f"{month_col}=?")
+                                vals.append(real)
+                    if sets:
+                        conn.execute(
+                            "UPDATE competitions SET " + ", ".join(sets) + " WHERE id=?",
+                            (*vals, r["id"]),
+                        )
+                        fixed += 1
+                        print(f"  cid={r['id']} 月份已按日期纠正：{sets}")
+                print(f"已同步 {fixed} 条赛事的月份列")
         elif issues["copied_reg_dates"]:
             print("\n加 --apply 可把上面 R1 的报名日期清成 NULL")
     return 0
