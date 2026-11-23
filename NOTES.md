@@ -148,3 +148,15 @@ outers.ai._keyword_search 三处打分统一接入别称；另加 EXTRA_ALIASES�
 
 **测试**：ackend/tests/test_search_alias.py 7 passed（含「大挑排在小挑前」「大广赛不被拆字」「别称按名称对齐 id」）；全量 77 passed / 1 skipped（routers.ai 依赖 chromadb，本机跳过、线上会跑）。已部署重启 kuao-backend，线上 /search?q=大挑 返回 2 项且大挑在前。
 **遗留**：AI 兜底仍只在「0 命中」时触发；若查询只弱命中别人的简介，仍会被当成有效结果。要更稳需给关键词接口回传匹配分、低于阈值再并一次语义结果（未做）。
+
+### 2026-11-23 弱命中也要补 AI（搜索页第二处修补）
+
+**问题**：搜索页原来只在「关键词 0 命中」时才调 AI 语义检索。可「大挑」当时并不是 0 命中——它弱命中了小挑简介（0.35 分），错误结果因此被当成唯一答案。别名修好后这类误判少了很多，但机制上的洞还在。
+
+**做法**：
+1. 新增 GET /api/competitions/search/scored（ScoredSearchResponse：items[].match_score + est_score），与 /competitions/search 同一套打分，只多回传分数；老接口契约不动。db 侧拆出 search_competitions_scored()，search_competitions() 变成它的薄包装。
+2. 前端 SearchView 用带分接口；est_score < 0.6 判为弱命中（0.55 类别 / 0.35 简介），再叠加原有的「描述型需求」（looksLikeIntent）条件，才补一次 AI。
+3. 合并口径：关键词有强命中 → 关键词领跑、AI 只补缺；只是弱命中 → AI 领跑（语义更接近意图），关键词结果按 id 去重后追加。命中数比纯关键词多时，页面显示「AI 语义匹配」角标。
+
+**阈值**：0.6 写在 SearchView.vue 的 WEAK_SCORE，与后端 /scored 描述里的一致；改一处要同步另一处。
+**验证**：	ests/test_search_scored.py 6 例（含「只命中简介 → 分数 < 0.6」「best_score 取全批最高」「空查询」），全量 81 passed / 3 skipped（缺 fastapi/chromadb 的本机项线上会跑）。线上：「大挑」仍是大挑在前且不触发 AI；「我想参加奥林匹克」弱命中→ 8 条 AI 结果领跑。

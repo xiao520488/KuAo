@@ -292,6 +292,37 @@ export function searchCompetitionList(query, limit = 60) {
 }
 
 /**
+ * 关键词检索竞赛（带匹配分，搜索页专用）
+ *
+ * GET /api/competitions/search/scored?q=机器人&limit=60
+ *
+ * 返回 { q, total, best_score, items: [{ ...竞赛字段, match_score }] }。
+ * best_score < 0.6 说明只弱命中了类别/简介，前端据此再补一次 AI 语义检索。
+ *
+ * @param {string} query 搜索词
+ * @param {number} [limit=60] 最多返回条数
+ * @returns {Promise<{ items: Array, bestScore: number }>}
+ */
+export function searchCompetitionListScored(query, limit = 60) {
+  const q = typeof query === 'string' ? query.trim() : ''
+  if (!q) return Promise.resolve({ items: [], bestScore: 0 })
+  return api
+    .get('/competitions/search/scored', { params: { q, limit } })
+    .then((data) => {
+      const items = Array.isArray(data?.items)
+        ? data.items
+        : Array.isArray(data)
+          ? data
+          : []
+      const best = Number(data?.best_score)
+      return {
+        items,
+        bestScore: Number.isFinite(best) ? best : 0
+      }
+    })
+}
+
+/**
  * 获取竞赛详情
  * @param {string|number} id 竞赛 ID
  * @returns {Promise<Object>} 竞赛详情对象

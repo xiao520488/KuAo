@@ -6,7 +6,7 @@ import BackToTop from '@/components/BackToTop.vue'
 import CompetitionCard from '@/components/CompetitionCard.vue'
 import {
   checkPrepared,
-  searchCompetitionList,
+  searchCompetitionListScored,
   searchCompetitions
 } from '@/services/api'
 import { authState } from '@/services/auth'
@@ -50,14 +50,31 @@ onBeforeUnmount(() => {
  */
 const INTENT_HINTS = /(我想|想找|想参加|适合|能不能|可以参加|有没有|推荐|哪些|什么|如何|怎么|准备|方向|寒假|暑假|大一|大二|大三|文科|理科|零基础)/
 
+/** 低于这个分说明关键词只弱命中了类别/简介，需要补一次语义检索 */
+const WEAK_SCORE = 0.6
+
 function looksLikeIntent(q) {
   return q.length >= 10 || INTENT_HINTS.test(q)
 }
 
+/** 按 id 去重合并：primary 在前，extra 只补缺（AI 结果不覆盖关键词命中） */
+function mergeById(primary, extra) {
+  const seen = new Set()
+  const out = []
+  for (const item of [...primary, ...extra]) {
+    const id = item?.id
+    if (id === null || id === undefined || seen.has(String(id))) continue
+    seen.add(String(id))
+    out.push(item)
+  }
+  return out
+}
+
 /**
  * 检索主入口：统一由 URL 的 ?q= 驱动
- *   1) 先走公开关键词检索（快、字段全，游客可用）
- *   2) 关键词命中为空、且查询是「描述型需求」、且已登录时，再用 AI 语义检索兜底
+ *   1) 先走公开关键词检索（快、字段全，游客可用），同时拿到匹配分
+ *   2) 只是「弱命中」（只落在类别/简介，best_score < 0.6）或 0 命中，
+ *      且查询是描述型需求时，再补一次 AI 语义检索，与关键词结果合并
  */
 async function runSearch(rawQuery) {
   const q = String(rawQuery ?? '').trim()
@@ -80,16 +97,25 @@ async function runSearch(rawQuery) {
   semanticError.value = ''
 
   try {
-    let items = await searchCompetitionList(q)
+    const { items: kwItems, bestScore } = await searchCompetitionListScored(q)
+    let items = kwItems
 
-    // 关键词 0 命中 + 句子式需求 → 直接走 AI 语义检索（公开接口，游客也能用）
-    if (!items.length && looksLikeIntent(q)) {
+    // 弱命中口径：只落在类别（0.55）/简介（0.35）说明关键词没抓住用户想找的那一场，
+    // 典型如「大挑」曾被判给了简介里提到它的另一场比赛。这类查询值得再问一次 AI。
+    const weak = kwItems.length > 0 && bestScore < WEAK_SCORE
+
+    if ((!kwItems.length || weak) && looksLikeIntent(q)) {
       try {
         const res = await searchCompetitions(q)
-        items = res.items || []
-        semantic.value = items.length > 0
+        const aiItems = res.items || []
+        // 排序口径：关键词有强命中（名称/别称）时它更可信，排在前面；
+        // 只是弱命中（类别/简介）时，AI 的语义排序更接近用户意图，改由 AI 领跑。
+        items = kwItems.length === 0 || weak
+          ? mergeById(aiItems, kwItems)
+          : mergeById(kwItems, aiItems)
+        semantic.value = items.length > kwItems.length
       } catch (err) {
-        // 语义兜底失败不影响主流程（可能是配额用尽）
+        // 语义补充失败不影响主流程（可能是配额用尽）
         console.warn('[SearchView] semantic fallback skipped:', err?.message || err)
       } finally {
         semanticTried.value = true

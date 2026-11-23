@@ -1070,7 +1070,7 @@ def search_competitions(query: str, limit: int = 60) -> list:
     游客也能搜索；命中顺序稳定，返回的是完整竞赛对象，卡片字段不用二次补全。
 
     打分口径（0~1）：
-      * 名称包含词元 0.75 / 名称全等 0.95
+      * 名称全等 0.95 / 别称命中 0.90 / 名称包含 0.75
       * 类别包含 0.55
       * 摘要包含 0.35
       * 每多命中一个词元 +0.05，上限 1.0
@@ -1078,6 +1078,15 @@ def search_competitions(query: str, limit: int = 60) -> list:
     :param query: 用户输入（自然语言也可，按空白/标点拆词）
     :param limit: 最多返回条数
     :return: 竞赛列表（按得分倒序，同分按名称排序）
+    """
+    return [row for _, row in search_competitions_scored(query, limit)]
+
+
+def search_competitions_scored(query: str, limit: int = 60) -> list:
+    """同 search_competitions，但把匹配分一起返回：[(score, row), ...]。
+
+    给 /api/competitions/search?with_score=1 用：前端据此判断「这次只是弱命中
+    了别人的简介」→ 再补一次 AI 语义检索，避免错误结果被当成唯一答案。
     """
     raw = (query or "").strip()
     if not raw:
@@ -1170,7 +1179,7 @@ def search_competitions(query: str, limit: int = 60) -> list:
         scored.append((round(min(1.0, best + 0.05 * (multi - 1)), 4), name, row))
 
     scored.sort(key=lambda item: (-item[0], item[1]))
-    return [row for _, _, row in scored[:int(limit)]]
+    return [(score, row) for score, _, row in scored[:int(limit)]]
 
 
 def list_hot_competitions(limit: int = 8) -> list:

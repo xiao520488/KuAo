@@ -34,6 +34,7 @@ from db import PUBLIC_AWARDS_CAP
 from db import list_competitions as db_list_competitions
 from db import list_hot_competitions as db_list_hot_competitions
 from db import search_competitions as db_search_competitions
+from db import search_competitions_scored as db_search_competitions_scored
 from models.schemas import (
     Award,
     AwardList,
@@ -215,6 +216,54 @@ def search_competitions(
     """关键词检索（公开接口）。"""
     rows = db_search_competitions(q, limit=limit)
     return [_row_to_competition(r) for r in rows]
+
+
+class ScoredCompetition(Competition):
+    """带匹配分的竞赛（仅 /api/competitions/search/scored 使用）。"""
+
+    match_score: float = Field(0.0, ge=0.0, le=1.0, description="关键词匹配分（0~1）")
+
+
+class ScoredSearchResponse(BaseModel):
+    """带分数的关键词检索结果。"""
+
+    q: str = Field(..., description="回显查询词")
+    total: int = Field(0, description="返回条数")
+    best_score: float = Field(
+        0.0, ge=0.0, le=1.0,
+        description=("最高匹配分。0.9+ 名称/别称命中，0.75 名称包含，"
+                     "0.55 只命中类别，0.35 只命中简介——低于 0.6 视为「弱命中」"),
+    )
+    items: List[ScoredCompetition] = Field(default_factory=list)
+
+
+@router.get(
+    "/api/competitions/search/scored",
+    response_model=ScoredSearchResponse,
+    summary="关键词检索竞赛（带匹配分）",
+    description=(
+        "与 /api/competitions/search 同一套打分，额外回传每条命中分与全批最高分。\n\n"
+        "搜索页据此判断是否需要补一次 AI 语义检索：`best_score < 0.6` 说明只是"
+        "弱命中（类别/简介），关键词结果可能不是用户想要的那一场。"
+    ),
+)
+def search_competitions_scored(
+    q: str = Query(..., min_length=1, description="搜索词，可含多个词，空格分隔"),
+    limit: int = Query(60, ge=1, le=200, description="最多返回条数"),
+) -> ScoredSearchResponse:
+    """关键词检索（带分，公开接口）。"""
+    scored = db_search_competitions_scored(q, limit=limit)
+    items = []
+    for score, row in scored:
+        comp = _row_to_competition(row).model_dump()
+        comp["match_score"] = round(float(score), 4)
+        items.append(comp)
+    return ScoredSearchResponse(
+        q=q,
+        total=len(items),
+        best_score=round(max((s for s, _ in scored), default=0.0), 4),
+        items=items,
+    )
 
 
 # ---------------------------------------------------------------------------
