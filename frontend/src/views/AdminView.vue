@@ -3,21 +3,13 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import Header from '@/components/Header.vue'
 import {
-  getAdminCandidates,
   getAdminFeedback,
   getAdminCompetitions,
   getChangelogs,
   createAdminChangelog,
   updateAdminChangelog,
   deleteAdminChangelog,
-  getFactQueue,
-  fetchFactCandidates,
-  applyFactCandidate,
-  rejectFactCandidate,
-  markFactUnknown,
   saveCompetitionFacts,
-  approveAdminCandidate,
-  rejectAdminCandidate,
   markAdminFeedbackRead,
   deleteAdminCompetition
 } from '@/services/api'
@@ -26,7 +18,7 @@ import { showToast } from '@/composables/useToast'
 /**
  * 管理后台
  * ------------------------------------------------------------------
- * 布局：左侧侧边栏（候选赛事 / 用户反馈 / 赛事管理 / 更新日志）+ 右侧内容区，
+ * 布局：左侧侧边栏（用户反馈 / 赛事管理 / 更新日志）+ 右侧内容区，
  *      沿用全站的 Tailwind 暗色 / 极简风，不引入任何 UI 组件库。
  *
  * 权限：路由 meta.requiresAdmin 已在 router/index.js 拦截；
@@ -39,17 +31,13 @@ import { showToast } from '@/composables/useToast'
 const route = useRoute()
 const router = useRouter()
 
-// 当前面板支持 ?tab=feedback 深链，刷新 / 前进后退后停在原面板
+// 当前面板支持 ?tab= 深链，刷新 / 前进后退后停在原面板
+// 旧链接（?tab=candidates / ?tab=facts）对应面板已下线，统一落到第一个面板
+const TAB_IDS = ['feedback', 'competitions', 'changelogs']
 const activeTab = ref(
-  ['candidates', 'feedback', 'competitions', 'changelogs', 'facts'].includes(route.query.tab)
-    ? route.query.tab
-    : 'candidates'
+  TAB_IDS.includes(route.query.tab) ? route.query.tab : 'feedback'
 )
 
-const candidates = ref([])
-const candidatesTotal = ref(0)
-const candidatesLoading = ref(false)
-const candidatesError = ref('')
 
 const feedbacks = ref([])
 const feedbackUnread = ref(0)
@@ -69,14 +57,7 @@ const changelogs = ref([])
 const changelogsLoading = ref(false)
 const changelogsError = ref('')
 
-// 赛事核对：官网抽取的待确认队列 + 手动校正日期
-const factQueue = ref([])
-const factLoading = ref(false)
-const factError = ref('')
-const factFetching = ref(false)
-const factBusyId = ref(null)
-const factIdsInput = ref('')
-const factSourceUrl = ref('')
+// 赛事管理：手工校正日期弹窗（唯一的数据订正入口）
 const factsEditOpen = ref(false)
 const factsEditItem = ref(null)
 const factsSaving = ref(false)
@@ -117,25 +98,6 @@ const deleteBusy = ref(false)
 
 // 正在处理的行（按钮 loading / 防重复点击）
 const busyId = ref(null)
-
-// 二次确认弹窗：审核「通过 / 拒绝」会写入主库，必须先确认
-const confirmOpen = ref(false)
-const confirmAction = ref('') // approve | reject
-const confirmItem = ref(null)
-const confirmBusy = ref(false)
-
-const confirmTone = computed(() => (confirmAction.value === 'reject' ? 'reject' : 'approve'))
-const confirmTitle = computed(() =>
-  confirmTone.value === 'reject' ? '确认拒绝这个赛事？' : '确认审核通过这个赛事？'
-)
-const confirmDesc = computed(() =>
-  confirmTone.value === 'reject'
-    ? '拒绝后该赛事仅在候选表里标记为已拒绝，不会进入正式赛事列表。'
-    : '通过后该赛事会立即写入正式赛事库，前台马上可被搜索到。'
-)
-const confirmOkText = computed(() =>
-  confirmTone.value === 'reject' ? '确认拒绝' : '确认通过'
-)
 
 /* ---------------------------- 工具 ---------------------------- */
 
@@ -179,21 +141,6 @@ function sourceLabel(source) {
 }
 
 /* ---------------------------- 数据加载 ---------------------------- */
-
-async function loadCandidates() {
-  candidatesLoading.value = true
-  candidatesError.value = ''
-  try {
-    const data = await getAdminCandidates({ limit: 200 })
-    candidates.value = data.items
-    candidatesTotal.value = data.total
-  } catch (err) {
-    candidatesError.value = errorText(err, '候选赛事加载失败')
-    if (err?.response?.status === 403) candidatesError.value = '当前账号没有管理员权限'
-  } finally {
-    candidatesLoading.value = false
-  }
-}
 
 async function loadFeedback() {
   feedbackLoading.value = true
@@ -363,66 +310,15 @@ function switchTab(tab) {
   activeTab.value = tab
   // 同步到地址栏（replace，不污染历史栈）
   router.replace({ query: { ...route.query, tab } })
-  if (tab === 'candidates' && !candidates.value.length) loadCandidates()
   if (tab === 'feedback' && !feedbacks.value.length) loadFeedback()
   if (tab === 'competitions' && !competitions.value.length) loadCompetitions()
   if (tab === 'changelogs' && !changelogs.value.length) loadChangelogs()
-  if (tab === 'facts' && !factQueue.value.length) loadFacts()
 }
 
 function refresh() {
-  if (activeTab.value === 'candidates') loadCandidates()
-  else if (activeTab.value === 'feedback') loadFeedback()
+  if (activeTab.value === 'feedback') loadFeedback()
   else if (activeTab.value === 'changelogs') loadChangelogs()
-  else if (activeTab.value === 'facts') loadFacts()
   else loadCompetitions()
-}
-
-/* ---------------------------- 审核操作 ---------------------------- */
-/* 通过 / 拒绝都会写主库，统一走「先弹确认、再调接口」两步。 */
-
-/** 打开确认弹窗（不直接发请求） */
-function askAudit(action, item) {
-  if (busyId.value || confirmBusy.value) return
-  confirmAction.value = action
-  confirmItem.value = item
-  confirmOpen.value = true
-}
-
-function cancelConfirm() {
-  if (confirmBusy.value) return
-  confirmOpen.value = false
-  confirmItem.value = null
-}
-
-/** 确认后才真正落库 */
-async function confirmAudit() {
-  const item = confirmItem.value
-  const action = confirmAction.value
-  if (!item || confirmBusy.value) return
-
-  confirmBusy.value = true
-  busyId.value = item.id
-  try {
-    if (action === 'approve') {
-      // 通过后会同步抓赛氪详情 + AI 提纯，最长约 1 分钟，先给个进度提示
-      showToast('审批中：正在补全简称与赛氪详情（约 20~60 秒）…')
-      const data = await approveAdminCandidate(item.id)
-      showToast(data?.message || '已通过')
-    } else {
-      await rejectAdminCandidate(item.id)
-      showToast('已拒绝')
-    }
-    candidates.value = candidates.value.filter((row) => row.id !== item.id)
-    candidatesTotal.value = Math.max(0, candidatesTotal.value - 1)
-    confirmOpen.value = false
-    confirmItem.value = null
-  } catch (err) {
-    showToast(errorText(err, '操作失败，请重试'))
-  } finally {
-    confirmBusy.value = false
-    busyId.value = null
-  }
 }
 
 /* ---------------------------- 删除赛事 ---------------------------- */
@@ -467,7 +363,6 @@ async function confirmDelete() {
 function onGlobalKeydown(event) {
   if (event.key !== 'Escape') return
   if (deleteOpen.value) cancelDelete()
-  else if (confirmOpen.value) cancelConfirm()
 }
 onMounted(() => window.addEventListener('keydown', onGlobalKeydown))
 onBeforeUnmount(() => window.removeEventListener('keydown', onGlobalKeydown))
@@ -486,95 +381,6 @@ async function onMarkRead(item) {
     showToast(errorText(err, '操作失败，请重试'))
   } finally {
     busyId.value = null
-  }
-}
-
-/* ---------------------------- 赛事核对 ---------------------------- */
-/* 抽取结果只进队列，采纳才写主表；日期必须能在官网页面上找到，否则抽取直接报错。 */
-
-async function loadFacts() {
-  factLoading.value = true
-  factError.value = ''
-  try {
-    const data = await getFactQueue({ status: 'pending', limit: 50 })
-    factQueue.value = data.items
-  } catch (err) {
-    factError.value = errorText(err, '待确认队列加载失败')
-  } finally {
-    factLoading.value = false
-  }
-}
-
-/** 抓一轮官网（同步，最多 5 条，单条约 30-60 秒） */
-async function runFactFetch() {
-  if (factFetching.value) return
-  factFetching.value = true
-  factError.value = ''
-  try {
-    showToast('正在抓官网 + 抽取日期，约 30-60 秒…')
-    const ids = factIdsInput.value
-      .split(/[\s,，]+/)
-      .map((raw) => Number(raw))
-      .filter((id) => Number.isInteger(id) && id > 0)
-    const payload = { limit: 5, competition_ids: ids }
-    // 指定赛事 1 条时才允许覆盖来源页（批量时同一个链接没有意义）
-    if (ids.length === 1 && factSourceUrl.value.trim()) {
-      payload.source_url = factSourceUrl.value.trim()
-    }
-    const data = await fetchFactCandidates(payload)
-    showToast(data?.message || '已入队')
-    const failed = (data?.results || []).filter((row) => !row.ok)
-    if (failed.length) {
-      factError.value = failed
-        .map((row) => `${row.name || row.competition_id}：${row.error}`)
-        .join('；')
-    }
-    await loadFacts()
-  } catch (err) {
-    factError.value = errorText(err, '抽取失败，请稍后重试')
-  } finally {
-    factFetching.value = false
-  }
-}
-
-async function adoptFact(item) {
-  if (factBusyId.value) return
-  factBusyId.value = item.id
-  try {
-    await applyFactCandidate(item.id)
-    showToast('已采纳，前台立即生效')
-    await loadFacts()
-  } catch (err) {
-    factError.value = errorText(err, '采纳失败')
-  } finally {
-    factBusyId.value = null
-  }
-}
-
-async function ignoreFact(item) {
-  if (factBusyId.value) return
-  factBusyId.value = item.id
-  try {
-    await rejectFactCandidate(item.id)
-    await loadFacts()
-  } catch (err) {
-    factError.value = errorText(err, '操作失败')
-  } finally {
-    factBusyId.value = null
-  }
-}
-
-async function markUnknown(item) {
-  if (factBusyId.value) return
-  factBusyId.value = item.id
-  try {
-    await markFactUnknown(item.id)
-    showToast('已标记为官网未公布')
-    await loadFacts()
-  } catch (err) {
-    factError.value = errorText(err, '操作失败')
-  } finally {
-    factBusyId.value = null
   }
 }
 
@@ -621,12 +427,6 @@ async function saveFactsEdit() {
 
 const navItems = computed(() => [
   {
-    id: 'candidates',
-    label: '候选赛事',
-    hint: '待审核',
-    count: candidatesTotal.value
-  },
-  {
     id: 'feedback',
     label: '用户反馈',
     hint: '未读',
@@ -643,54 +443,40 @@ const navItems = computed(() => [
     label: '更新日志管理',
     hint: '发布',
     count: changelogs.value.length
-  },
-  {
-    id: 'facts',
-    label: '赛事核对',
-    hint: '待确认',
-    count: factQueue.value.length
   }
 ])
 
 const currentTitle = computed(() => {
-  if (activeTab.value === 'candidates') return '候选赛事审核'
   if (activeTab.value === 'feedback') return '用户反馈'
   if (activeTab.value === 'changelogs') return '更新日志管理'
-  if (activeTab.value === 'facts') return '赛事核对'
   return '赛事管理'
 })
 
 const currentDesc = computed(() => {
-  if (activeTab.value === 'candidates') {
-    return '从采集库里捞出来的赛事，通过后进入正式赛事列表，拒绝则仅在候选表里标记。'
-  }
   if (activeTab.value === 'feedback') {
     return '用户在「个人中心」提交的反馈，标为已读后不再计入未读角标。'
   }
   if (activeTab.value === 'changelogs') {
     return '发布后立即出现在前台「更新日志」弹窗里；正文支持 Markdown，版本号不可重复。'
   }
-  if (activeTab.value === 'facts') {
-    return '抓官网抽出来的日期先进这里，点「采纳」才写进正式库；找不到日期的赛事，可在「赛事管理」里手动改。'
-  }
   return '正式赛事库里的全部比赛，可在这里永久删除（连带获奖作品、备赛灵感与 AI 洞察，不可恢复）。'
 })
 
 const currentLoading = computed(() => {
-  if (activeTab.value === 'candidates') return candidatesLoading.value
   if (activeTab.value === 'feedback') return feedbackLoading.value
   if (activeTab.value === 'changelogs') return changelogsLoading.value
-  if (activeTab.value === 'facts') return factLoading.value
   return competitionsLoading.value
 })
 
 onMounted(() => {
-  // 四个面板都先拉一次：侧边栏的待审 / 未读 / 赛事总数 / 日志数角标需要这些数字
-  loadCandidates()
+  // 三个面板都先拉一次：侧边栏的未读 / 赛事总数 / 日志数角标需要这些数字
   loadFeedback()
   loadCompetitions()
   loadChangelogs()
-  loadFacts()
+  // 旧深链（已下线面板）顺手纠正地址栏，避免收藏夹里留着死参数
+  if (route.query.tab && !TAB_IDS.includes(route.query.tab)) {
+    router.replace({ query: { ...route.query, tab: activeTab.value } })
+  }
 })
 </script>
 
@@ -706,7 +492,7 @@ onMounted(() => {
             管理后台
           </h1>
           <p class="mt-2 text-sm text-slate-500 dark:text-slate-400">
-            赛事候选审核 · 用户反馈处理 · 更新日志发布
+            用户反馈处理 · 赛事管理 · 更新日志发布
           </p>
         </div>
         <button
@@ -763,118 +549,8 @@ onMounted(() => {
             <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ currentDesc }}</p>
           </div>
 
-          <!-- ============ 候选赛事 ============ -->
-          <template v-if="activeTab === 'candidates'">
-            <div
-              v-if="candidatesError"
-              class="mb-4 rounded-xl border border-red-100 dark:border-red-500/30 bg-red-50 dark:bg-red-500/15
-                     px-4 py-3 text-sm font-semibold text-red-600 dark:text-red-400"
-            >
-              {{ candidatesError }}
-            </div>
-
-            <!-- 骨架屏 -->
-            <div v-if="candidatesLoading" class="space-y-2">
-              <div
-                v-for="n in 5"
-                :key="n"
-                class="h-12 animate-pulse rounded-xl bg-slate-100 dark:bg-slate-700/60"
-              ></div>
-            </div>
-
-            <div
-              v-else-if="!candidates.length"
-              class="rounded-xl border border-dashed border-slate-200 dark:border-slate-700
-                     px-4 py-14 text-center text-sm text-slate-500 dark:text-slate-400"
-            >
-              <template v-if="candidatesError">数据没加载出来，点右上角「刷新」重试</template>
-              <template v-else>没有待审核的候选赛事，全部处理完了 🎉</template>
-            </div>
-
-            <template v-else>
-              <div class="overflow-x-auto">
-                <table class="w-full min-w-[720px] border-collapse text-left text-sm">
-                  <thead>
-                    <tr class="border-b border-slate-200 dark:border-slate-700 text-xs uppercase tracking-wide
-                               text-slate-500 dark:text-slate-400">
-                      <th class="px-3 py-3 font-bold">赛事名称</th>
-                      <th class="px-3 py-3 font-bold">级别</th>
-                      <th class="px-3 py-3 font-bold">来源</th>
-                      <th class="px-3 py-3 font-bold">抓取月份</th>
-                      <th class="px-3 py-3 text-right font-bold">操作</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr
-                      v-for="item in candidates"
-                      :key="item.id"
-                      class="border-b border-slate-100 dark:border-slate-700/60
-                             transition-colors hover:bg-slate-50 dark:hover:bg-slate-700/30"
-                    >
-                      <td class="px-3 py-3">
-                        <p class="font-semibold text-slate-900 dark:text-slate-100">{{ item.name }}</p>
-                        <a
-                          v-if="item.source_url"
-                          :href="item.source_url"
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          class="mt-0.5 block max-w-[420px] truncate text-xs text-blue-600 dark:text-blue-400
-                                 hover:underline"
-                        >
-                          {{ item.source_url }}
-                        </a>
-                      </td>
-                      <td class="whitespace-nowrap px-3 py-3">
-                        <span
-                          class="rounded-full bg-slate-100 dark:bg-slate-700/60 px-2.5 py-1
-                                 text-xs font-semibold text-slate-600 dark:text-slate-300"
-                        >
-                          {{ item.level_label || '未标注' }}
-                        </span>
-                      </td>
-                      <td class="whitespace-nowrap px-3 py-3 text-slate-600 dark:text-slate-300">
-                        {{ sourceLabel(item.source) }}
-                      </td>
-                      <td class="whitespace-nowrap px-3 py-3 text-slate-600 dark:text-slate-300">
-                        {{ formatMonth(item.created_at) }}
-                      </td>
-                      <td class="whitespace-nowrap px-3 py-3 text-right">
-                        <div class="inline-flex gap-2">
-                          <button
-                            type="button"
-                            class="rounded-full bg-blue-600 px-3.5 py-1.5 text-xs font-bold text-white
-                                   transition-colors hover:bg-blue-700 disabled:opacity-50"
-                            :disabled="busyId === item.id"
-                            @click="askAudit('approve', item)"
-                          >
-                            {{ busyId === item.id ? '处理中…' : '通过' }}
-                          </button>
-                          <button
-                            type="button"
-                            class="rounded-full border border-slate-200 dark:border-slate-600 px-3.5 py-1.5
-                                   text-xs font-bold text-slate-600 dark:text-slate-300
-                                   transition-colors hover:border-red-300 hover:text-red-600
-                                   dark:hover:border-red-500/40 dark:hover:text-red-400
-                                   disabled:opacity-50"
-                            :disabled="busyId === item.id"
-                            @click="askAudit('reject', item)"
-                          >
-                            拒绝
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
-              <p class="mt-3 text-xs text-slate-500 dark:text-slate-400">
-                共 {{ candidates.length }} 条待审（后端统计 {{ candidatesTotal }} 条）
-              </p>
-            </template>
-          </template>
-
-          <!-- ============ 赛事管理 ============ -->
-          <template v-else-if="activeTab === 'competitions'">
+          <!-- ============ 赛事管理（默认面板） ============ -->
+          <template v-if="activeTab === 'competitions'">
             <div
               v-if="competitionsError"
               class="mb-4 rounded-xl border border-red-100 dark:border-red-500/30 bg-red-50 dark:bg-red-500/15
@@ -1010,163 +686,6 @@ onMounted(() => {
                 </div>
               </div>
             </template>
-          </template>
-
-          <!-- ============ 赛事核对 ============ -->
-          <template v-else-if="activeTab === 'facts'">
-            <div class="flex flex-wrap items-center gap-3">
-              <button
-                type="button"
-                class="rounded-full bg-blue-600 px-5 py-2.5 text-sm font-bold text-white
-                       transition-colors hover:bg-blue-700 disabled:opacity-50"
-                :disabled="factFetching"
-                @click="runFactFetch"
-              >
-                {{ factFetching ? '抽取中…' : '抓官网抽 5 条' }}
-              </button>
-              <p class="text-xs leading-relaxed text-slate-500 dark:text-slate-400">
-                抽取结果只进队列，点「采纳」才写正式库；日期必须能在官网页面上找到，
-                找不到会直接报错（不会编）。
-              </p>
-            </div>
-
-            <div class="mt-3 grid gap-2 sm:grid-cols-[180px_1fr]">
-              <input
-                v-model="factIdsInput"
-                type="text"
-                placeholder="赛事 ID（可选，如 10）"
-                class="rounded-xl border border-slate-200 dark:border-slate-600
-                       bg-white dark:bg-slate-900 px-3 py-2 text-sm text-slate-700
-                       dark:text-slate-200"
-              />
-              <input
-                v-model="factSourceUrl"
-                type="url"
-                placeholder="来源页链接（可选，仅指定 1 条赛事时生效；官网首页没有日期时填通知页）"
-                class="rounded-xl border border-slate-200 dark:border-slate-600
-                       bg-white dark:bg-slate-900 px-3 py-2 text-sm text-slate-700
-                       dark:text-slate-200"
-              />
-            </div>
-
-            <div
-              v-if="factError"
-              class="mt-4 rounded-xl border border-red-100 dark:border-red-500/30 bg-red-50 dark:bg-red-500/15
-                     px-4 py-3 text-sm font-semibold text-red-600 dark:text-red-400"
-            >
-              {{ factError }}
-            </div>
-
-            <div v-if="factLoading" class="mt-4 space-y-2">
-              <div
-                v-for="n in 3"
-                :key="n"
-                class="h-20 animate-pulse rounded-2xl bg-slate-100 dark:bg-slate-700/60"
-              ></div>
-            </div>
-
-            <div
-              v-else-if="!factQueue.length"
-              class="mt-4 rounded-xl border border-dashed border-slate-200 dark:border-slate-700
-                     px-4 py-14 text-center text-sm text-slate-500 dark:text-slate-400"
-            >
-              队列是空的：点上面的按钮抓一轮官网
-            </div>
-
-            <div v-else class="mt-4 space-y-3">
-              <article
-                v-for="item in factQueue"
-                :key="item.id"
-                class="rounded-2xl border border-slate-200 dark:border-slate-700
-                       bg-white dark:bg-slate-800/60 p-4"
-              >
-                <header class="flex flex-wrap items-start justify-between gap-2">
-                  <div class="min-w-0">
-                    <p class="break-words font-bold text-slate-900 dark:text-slate-100">
-                      {{ item.competition_name }}
-                    </p>
-                    <p class="mt-1 break-all text-xs text-slate-500 dark:text-slate-400">
-                      <a
-                        v-if="item.source_url"
-                        :href="item.source_url"
-                        target="_blank"
-                        rel="noopener"
-                        class="underline hover:text-blue-600"
-                      >{{ item.source_url }}</a>
-                      · 抽取于 {{ item.fetched_at }}
-                    </p>
-                  </div>
-                  <span
-                    class="shrink-0 rounded-full bg-amber-50 dark:bg-amber-500/15 px-2.5 py-1
-                           text-xs font-bold text-amber-600 dark:text-amber-400"
-                  >
-                    待确认 {{ item.diffs.length }} 项
-                  </span>
-                </header>
-
-                <ul class="mt-3 space-y-1.5 text-sm">
-                  <li
-                    v-for="d in item.diffs"
-                    :key="d.field"
-                    class="flex flex-wrap items-center gap-2"
-                  >
-                    <span class="w-16 shrink-0 text-xs font-bold text-slate-500 dark:text-slate-400">
-                      {{ d.label }}
-                    </span>
-                    <span class="text-slate-400 line-through">{{ d.current || '空' }}</span>
-                    <span class="text-slate-400">→</span>
-                    <span class="font-bold text-emerald-600 dark:text-emerald-400">{{ d.incoming }}</span>
-                  </li>
-                </ul>
-
-                <p
-                  v-if="item.evidence"
-                  class="mt-3 rounded-lg bg-slate-50 dark:bg-slate-700/40 px-3 py-2
-                         text-xs leading-relaxed text-slate-500 dark:text-slate-400"
-                >
-                  原文：{{ item.evidence }}
-                </p>
-
-                <div class="mt-3 flex flex-wrap items-center gap-2">
-                  <button
-                    type="button"
-                    class="rounded-full bg-emerald-600 px-4 py-1.5 text-xs font-bold text-white
-                           transition-colors hover:bg-emerald-700 disabled:opacity-50"
-                    :disabled="factBusyId === item.id"
-                    @click="adoptFact(item)"
-                  >
-                    全部采纳
-                  </button>
-                  <button
-                    type="button"
-                    class="rounded-full border border-slate-200 dark:border-slate-600 px-4 py-1.5
-                           text-xs font-bold text-slate-600 dark:text-slate-300
-                           transition-colors hover:bg-slate-50 dark:hover:bg-slate-700/60 disabled:opacity-50"
-                    :disabled="factBusyId === item.id"
-                    @click="markUnknown(item)"
-                  >
-                    官网未公布
-                  </button>
-                  <button
-                    type="button"
-                    class="rounded-full border border-slate-200 dark:border-slate-600 px-4 py-1.5
-                           text-xs font-bold text-slate-500 dark:text-slate-400
-                           transition-colors hover:bg-slate-50 dark:hover:bg-slate-700/60 disabled:opacity-50"
-                    :disabled="factBusyId === item.id"
-                    @click="ignoreFact(item)"
-                  >
-                    忽略
-                  </button>
-                  <router-link
-                    :to="`/competition/${item.competition_id}`"
-                    target="_blank"
-                    class="text-xs font-bold text-blue-600 hover:underline dark:text-blue-400"
-                  >
-                    查看赛事 →
-                  </router-link>
-                </div>
-              </article>
-            </div>
           </template>
 
           <!-- ============ 用户反馈 ============ -->
@@ -1436,72 +955,6 @@ onMounted(() => {
       </div>
     </main>
 
-    <!-- ============ 二次确认弹窗（审核写主库，防误触） ============ -->
-    <Teleport to="body">
-      <Transition
-        enter-active-class="transition duration-150 ease-out"
-        enter-from-class="opacity-0"
-        enter-to-class="opacity-100"
-        leave-active-class="transition duration-100 ease-in"
-        leave-from-class="opacity-100"
-        leave-to-class="opacity-0"
-      >
-        <div
-          v-if="confirmOpen"
-          class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 px-4 backdrop-blur-sm"
-          @click.self="cancelConfirm"
-        >
-          <div
-            role="dialog"
-            aria-modal="true"
-            class="w-full max-w-[440px] rounded-2xl border border-slate-200 bg-white p-6
-                   shadow-xl dark:border-slate-700 dark:bg-slate-800"
-          >
-            <h2 class="text-lg font-bold text-slate-900 dark:text-slate-100">
-              {{ confirmTitle }}
-            </h2>
-
-            <p
-              class="mt-2 break-words rounded-xl bg-slate-50 px-3 py-2 text-sm font-semibold
-                     text-slate-700 dark:bg-slate-700/50 dark:text-slate-200"
-            >
-              《{{ confirmItem?.name }}》
-            </p>
-
-            <p class="mt-3 text-sm leading-relaxed text-slate-500 dark:text-slate-400">
-              {{ confirmDesc }}
-            </p>
-
-            <div class="mt-6 flex justify-end gap-2">
-              <button
-                type="button"
-                class="rounded-full border border-slate-200 px-4 py-2 text-sm font-bold
-                       text-slate-600 transition-colors hover:bg-slate-50
-                       disabled:opacity-50 dark:border-slate-600 dark:text-slate-300
-                       dark:hover:bg-slate-700/60"
-                :disabled="confirmBusy"
-                @click="cancelConfirm"
-              >
-                取消
-              </button>
-              <button
-                type="button"
-                class="rounded-full px-4 py-2 text-sm font-bold text-white transition-colors
-                       disabled:opacity-50"
-                :class="confirmTone === 'reject'
-                  ? 'bg-red-600 hover:bg-red-700'
-                  : 'bg-blue-600 hover:bg-blue-700'"
-                :disabled="confirmBusy"
-                @click="confirmAudit"
-              >
-                {{ confirmBusy ? '提交中…' : confirmOkText }}
-              </button>
-            </div>
-          </div>
-        </div>
-      </Transition>
-    </Teleport>
-
     <!-- ============ 删除赛事二次确认（不可恢复，红色警示） ============ -->
     <Teleport to="body">
       <Transition
@@ -1700,7 +1153,7 @@ onMounted(() => {
             </label>
 
             <p class="mt-3 text-xs leading-relaxed text-slate-500 dark:text-slate-400">
-              留空表示清空该日期；保存后前台会显示「信息核对于今天」。
+              留空表示清空该日期；保存后前台立即生效。
             </p>
 
             <div class="mt-6 flex justify-end gap-2">

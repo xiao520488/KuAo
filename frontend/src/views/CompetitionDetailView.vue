@@ -634,7 +634,7 @@ const guideReady = computed(() => Boolean(detail.value?.full_process_guide))
           </span>
         </section>
 
-        <!-- 3.5 阶段与核对信息：状态由服务端按日期实时推导，核对时间来自管理员台账 -->
+        <!-- 3.5 阶段状态：由服务端按日期实时推导 -->
         <section class="mt-4 flex flex-wrap items-center gap-3 text-xs">
           <span
             v-if="detail.status"
@@ -642,12 +642,6 @@ const guideReady = computed(() => Boolean(detail.value?.full_process_guide))
             :class="statusToneClass"
           >
             {{ detail.status_label }}
-          </span>
-          <span v-if="detail.facts_checked_at" class="text-slate-500 dark:text-slate-400">
-            日期核对于 {{ String(detail.facts_checked_at).slice(0, 10) }}
-          </span>
-          <span v-else class="text-amber-600 dark:text-amber-400">
-            日期尚未人工核对，以官网当年通知为准
           </span>
         </section>
 

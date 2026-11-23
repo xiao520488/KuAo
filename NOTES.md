@@ -125,3 +125,12 @@ ginx 均 active；本地仓库干净（未跟踪的只有 out/、shots/、erify
 - 覆盖率分母：`competition_whitelist.WHITELIST`（85 个，不扩容）
 
 **还没动的活**：① 74 个零获奖赛事的补全（多数只能等官网发文字版名单）；② 13 个「只剩报名窗口」的占位赛事要等新一届通知；③ 前端「获奖作品」Tab 目前一次最多展示 300 条，若用户要「看全部」需要加「查看完整名单」的二次入口；④ 受 mock 数据影响的 AI 攻略仍待重生成。
+
+### 2026-11-23 后台瘦身 + 去掉「日期核对」提示
+
+**用户决定**：详情页那行「日期尚未人工核对／日期核对于 X」整条删除（含已核实的），理由是对用户没价值；后台「候选赛事」「赛事核对」两个面板一并下线，因为候选池/事实队列早就没人处理了（历史 5 采纳 / 13 忽略）。
+
+**做法**：只删前端，后端接口与 competition_candidates / competition_facts_staging 两表**保留**（真删要备份，恢复成本高）。AdminView.vue 1733 → 1187 行；面板顺序改为 赛事管理 / 用户反馈 / 更新日志，默认 tab 从 candidates 改为「赛事管理」，旧深链 ?tab=candidates|facts 自动纠正到默认面板并改写地址栏（不会白屏）。
+**注意**：删第一个面板后，剩下的第一个 <template> 必须从 -else-if 改成 -if，否则 Vue 编译报 Cannot read properties of undefined (reading 'type')。
+**顺手停掉**：prod crontab 里每周一 05:10 的 competition_facts.py --limit 8（队列没人采纳，白烧 LLM），原行已注释，crontab 备份在 /tmp/crontab.bak.*。
+**保留**：赛事管理列表里的「日期」按钮 + 校正弹窗（唯一手改数据入口），弹窗文案去掉了「前台会显示信息核对于今天」。
