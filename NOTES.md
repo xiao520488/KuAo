@@ -18,6 +18,7 @@
 **新增护栏**：`sanitize_facts` 加跨对矛盾检测（报名晚于比赛 / 比赛早于报名），丢比赛对保留报名对；测试 `backend/tests/test_facts_sanitize.py` 9 条。
 **剩余 4 个**：#92 21世纪杯、#93 工行杯、#111 金砖大赛（官方只到月份）；#112 医学技术技能大赛（无全国赛通知）—— 下一年度通知发布后再补，不要再跑脚本。
 **核查产物**：`out/dates_g1.md`、`dates_g2.md`、`dates_g3.md`（含来源 URL + 原文片段 + 可信度），`out/dates_plan.json` 是写入用的机器可读计划。
+
 ## 2026-11-23 赛事边界确认：只收 84 项 + 金种子杯
 
 **用户明确要求**：主表只能是教育部 84 项学科竞赛 + 自己加的金种子杯，之前的野赛不许回来。
@@ -26,3 +27,15 @@
 - `PROVINCIAL_RE` 含「选拔赛」，把白名单 #82「世界技能大赛中国选拔赛」误判成省级赛（`gate` 先把完全相等的白名单名放行，再做省级判定）。
 - `saikr_whitelist_update.py` 用 `is_whitelisted()` 过滤，导致特批的金种子杯永远拿不到每日更新；改 `gate()`。
 **以后动数据的规矩**：改前改后各跑一次 `out/whitelist_audit.py`；做 S1 获奖作品时只碰白名单内赛事；不扩容、不加省级赛。
+
+## 2026-11-23 收尾状态（下次开工从这里接）
+
+**线上**：https://www.kuao.xyz 跑在 db4fa64，kuao-backend / 
+ginx 均 active；本地仓库干净（未跟踪的只有 out/、shots/、erify/，都不入库）。
+**今天做完的**：① 登录/注册图形验证码 + 5 次错密码锁 15 分钟（已上线验收）；② 26 个无日期赛事 → 4 个（写 64 个字段，全部带 ledger）；③ 白名单 bug 两处；④ ROADMAP.md + NOTES.md 落盘。
+**待办（按优先级）**：
+1. **S1 获奖作品**——68/85 赛事 0 条，直接导致 AI 灵感按钮置灰。先做「获奖名单来源普查」：为 T1 十个头部赛事找到公示 URL 并验证可解析，再写 ward_ingest.py + ward_sources 表。别先写爬虫。
+2. 剩 4 个赛事日期（#92 #93 #111 只到月份；#112 无全国赛）——等下一年度通知。
+3. ROADMAP 里的 P0：截止提醒（邮件基建）、收藏云同步、SEO（线上确认无 robots.txt / sitemap.xml）。
+**可复跑脚本**（都在 out/，只读，scp 到 /tmp 后用 PYTHONPATH=/root/KuAo/backend 跑）：data_gap_survey.py（数据体检）、whitelist_audit.py（赛事边界，必须 allowed=85 denied=0）、queue_check.py（事实队列）、pply_dates.py --dry-run（批量写日期）。
+**坑**：PowerShell 直接 ssh kuao "python -c '...'" 引号必炸 → 一律写成 .py/.sh 文件 scp 过去再跑；读中文文件用 read 工具，不要 Get-Content。
