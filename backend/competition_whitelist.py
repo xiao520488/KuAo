@@ -331,6 +331,11 @@ def gate(name: str) -> tuple[bool, str]:
     if spec is not None:
         return True, "特批：%s" % spec["name"]
     hit = match(name)
+    # 白名单官方名本身就带「选拔赛/初赛」这类字眼（如 #82「世界技能大赛中国选拔赛」），
+    # 完全相等时不能被省级规则误杀（2026-11-23 修：该条曾被判成「省级/区域赛事」，
+    # 导致主表里这条赛事每一次白名单体检都报红）。
+    if hit is not None and normalize(name) == hit["matched"]:
+        return True, "#%d %s" % (hit["index"], hit["name"])
     if is_provincial(name):
         return False, "省级/区域赛事（非 84 项国家级核心赛）"
     if hit is None:
