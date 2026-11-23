@@ -279,6 +279,10 @@ def keyword_scores(query: str, rows: Optional[List[dict]] = None) -> Dict[int, f
     if rows is None:
         rows = _query("SELECT id, name, short_name, category, summary FROM competitions")
 
+    # 别称表（大挑/小挑/大广赛…）：正式名里没有这些俗称
+    import search_alias
+    amap = search_alias.alias_map(rows)
+
     out: Dict[int, float] = {}
     for row in rows:
         try:
@@ -293,10 +297,15 @@ def keyword_scores(query: str, rows: Optional[List[dict]] = None) -> Dict[int, f
         best = 0.0
         multi = 0
         for tok in tokens:
+            alias = search_alias.alias_score(cid, tok, amap)
             if tok == name:
                 base = 1.0
+            elif alias >= search_alias.ALIAS_EXACT:
+                base = alias
             elif tok in name:
                 base = 0.80
+            elif alias > 0:
+                base = alias
             elif tok in short:
                 base = 0.65
             elif tok in category:

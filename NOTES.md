@@ -134,3 +134,17 @@ ginx 均 active；本地仓库干净（未跟踪的只有 out/、shots/、erify
 **注意**：删第一个面板后，剩下的第一个 <template> 必须从 -else-if 改成 -if，否则 Vue 编译报 Cannot read properties of undefined (reading 'type')。
 **顺手停掉**：prod crontab 里每周一 05:10 的 competition_facts.py --limit 8（队列没人采纳，白烧 LLM），原行已注释，crontab 备份在 /tmp/crontab.bak.*。
 **保留**：赛事管理列表里的「日期」按钮 + 校正弹窗（唯一手改数据入口），弹窗文案去掉了「前台会显示信息核对于今天」。
+
+### 2026-11-23 修「搜大挑出来的是小挑」
+
+**不是 AI 兜底策略的问题**，关键词检索第一步就把「大挑」判给了小挑：唯一命中来自小挑简介里的「与『大挑』交替举办」（summary 档 0.35），而大挑正式名里根本没有「大挑」二字（name 档 0 命中）。命中非空 → 前端不会走 AI（SearchView 只在 0 命中且 looksLikeIntent 时才调 /api/ai/search），错误结果被固化。
+
+**三层修法**：
+1. 新增 ackend/search_alias.py：把白名单 ALIASES 按**名称**对齐到 competitions.id（白名单序号 10 是大广赛，库里是 64，编号不是一套；另有 4 条名称措辞不同，见 _NAME_FIX），别称全等 0.90 / 被查询包住 0.80，高于「别的赛事简介提到」的 0.35。
+2. db.search_competitions / 
+etriever.keyword_scores / 
+outers.ai._keyword_search 三处打分统一接入别称；另加 EXTRA_ALIASES（数模/计设/信安/智能车/服创/三创/市调）——刻意不写进 competition_whitelist.ALIASES，那份还兼着入库闸门，检索可以宽、闸门不能。
+3. 意图词剥离只剥多字词、单字虚词（赛/的/在）只剥整词：原来「大广赛」被单字「赛」拆成「大广」→ 0 命中。已知别称整词保留。
+
+**测试**：ackend/tests/test_search_alias.py 7 passed（含「大挑排在小挑前」「大广赛不被拆字」「别称按名称对齐 id」）；全量 77 passed / 1 skipped（routers.ai 依赖 chromadb，本机跳过、线上会跑）。已部署重启 kuao-backend，线上 /search?q=大挑 返回 2 项且大挑在前。
+**遗留**：AI 兜底仍只在「0 命中」时触发；若查询只弱命中别人的简介，仍会被当成有效结果。要更稳需给关键词接口回传匹配分、低于阈值再并一次语义结果（未做）。

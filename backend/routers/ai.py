@@ -1207,6 +1207,9 @@ def _keyword_search(query: str, list_comps_fn: Callable[..., List[Dict[str, Any]
     # 返回的行必然 name 命中，会让 category/summary 分级永远失效。
     all_rows = list_comps_fn() or []
 
+    import search_alias
+    amap = search_alias.alias_map(all_rows)
+
     result: Dict[int, float] = {}
     for row in all_rows:
         cid = row.get("id")
@@ -1222,11 +1225,16 @@ def _keyword_search(query: str, list_comps_fn: Callable[..., List[Dict[str, Any]
         best = 0.0       # 本竞赛在所有词元上的最高单次命中分
         multi = 0        # 命中的不同词元个数
         for tok in tokens:
-            # 命中精度权重：名称全等 > 名称包含 > 类别包含 > 摘要包含
+            # 命中精度权重：名称全等 > 别称 > 名称包含 > 类别包含 > 摘要包含
+            alias = search_alias.alias_score(cid, tok, amap)
             if tok == name:
                 base = 0.95
+            elif alias >= search_alias.ALIAS_EXACT:
+                base = alias
             elif tok in name:
                 base = 0.75
+            elif alias > 0:
+                base = alias
             elif tok in category:
                 base = 0.55
             elif tok in summary:

@@ -42,6 +42,7 @@ from datetime import datetime
 from urllib.parse import urlparse
 
 import image_guard
+import search_alias
 
 logger = logging.getLogger(__name__)
 
@@ -1082,17 +1083,32 @@ def search_competitions(query: str, limit: int = 60) -> list:
     if not raw:
         return []
 
+    rows = list_competitions()
+    # 别称表（大挑/小挑/大广赛…）：正式名里没有这些俗称，只能靠白名单别名补
+    amap = search_alias.alias_map(rows)
+
     tokens = [t for t in re.split(r"[\s,，、;；/|\+\-_:：()（）【】\[\]]+", raw)
               if re.search(r"[0-9A-Za-z\u4e00-\u9fff]", t)]
 
     # 1) 先剥掉口语里的意图/虚词：「我想找寒假能准备的算法赛」→ 寒假 / 算法
     #    否则整句去匹配名称必然 0 命中，只能靠 AI 兜底（游客没配额就彻底搜不到）
-    stripped = []
+    #    两条边界（踩过的坑）：
+    #      * 已知别称整词保留——「大广赛」不能被单字「赛」拆成「大广」；
+    #      * 单字虚词（赛/的/在…）只剥整词，不做字内替换。
+    stripped: list = []
     for t in tokens:
+        if search_alias.norm(t) in amap:
+            stripped.append(t)
+            continue
         piece = t
         for w in _INTENT_WORDS:
-            piece = piece.replace(w, " ")
-        stripped.extend(p for p in piece.split() if len(p) >= 2)
+            if len(w) >= 2 or piece == w:
+                piece = piece.replace(w, " ")
+        parts = [p for p in piece.split() if len(p) >= 2]
+        if parts:
+            stripped.extend(parts)
+        elif len(t) >= 2:
+            stripped.append(t)
     if stripped:
         tokens = stripped
 
@@ -1124,10 +1140,16 @@ def search_competitions(query: str, limit: int = 60) -> list:
         multi = 0
         level_hit = False
         for tok in tokens:
+            alias = search_alias.alias_score(row.get("id"), tok, amap)
             if tok == name:
                 base = 0.95
+            elif alias >= search_alias.ALIAS_EXACT:
+                # 命中别称（「大挑」）优先于别的赛事的简介提及
+                base = alias
             elif tok in name:
                 base = 0.75
+            elif alias > 0:
+                base = alias
             elif tok in category:
                 base = 0.55
             elif tok in summary:
