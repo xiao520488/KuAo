@@ -18,3 +18,11 @@
 **新增护栏**：`sanitize_facts` 加跨对矛盾检测（报名晚于比赛 / 比赛早于报名），丢比赛对保留报名对；测试 `backend/tests/test_facts_sanitize.py` 9 条。
 **剩余 4 个**：#92 21世纪杯、#93 工行杯、#111 金砖大赛（官方只到月份）；#112 医学技术技能大赛（无全国赛通知）—— 下一年度通知发布后再补，不要再跑脚本。
 **核查产物**：`out/dates_g1.md`、`dates_g2.md`、`dates_g3.md`（含来源 URL + 原文片段 + 可信度），`out/dates_plan.json` 是写入用的机器可读计划。
+## 2026-11-23 赛事边界确认：只收 84 项 + 金种子杯
+
+**用户明确要求**：主表只能是教育部 84 项学科竞赛 + 自己加的金种子杯，之前的野赛不许回来。
+**当前状态**：`out/whitelist_audit.py` 跑出 `total=85 allowed=85 denied=0 missing=0` —— 正好 84+1，一条不多一条不少；我只 UPDATE 日期，从未 INSERT 赛事；线上无 `candidates` 表，也没有"待审野赛"回流通道。
+**修的两个反向 bug**：
+- `PROVINCIAL_RE` 含「选拔赛」，把白名单 #82「世界技能大赛中国选拔赛」误判成省级赛（`gate` 先把完全相等的白名单名放行，再做省级判定）。
+- `saikr_whitelist_update.py` 用 `is_whitelisted()` 过滤，导致特批的金种子杯永远拿不到每日更新；改 `gate()`。
+**以后动数据的规矩**：改前改后各跑一次 `out/whitelist_audit.py`；做 S1 获奖作品时只碰白名单内赛事；不扩容、不加省级赛。
