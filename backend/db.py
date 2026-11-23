@@ -1969,7 +1969,8 @@ _AWARD_SOURCE_WRITABLE = (
 )
 
 AWARD_SOURCE_KINDS = ("official_notice", "official_gallery", "saikr", "news")
-AWARD_SOURCE_ADAPTERS = ("html_table", "xlsx_sheet", "docx_table", "pdf_table")
+AWARD_SOURCE_ADAPTERS = ("html_table", "xlsx_sheet", "docx_table", "pdf_table",
+                         "pdf_dual_border")
 AWARD_SOURCE_STATUSES = ("ok", "dry_ok", "no_data", "failed", "skipped")
 
 

@@ -176,6 +176,39 @@ def fetch_source(source: dict, *, timeout: int = DEFAULT_TIMEOUT) -> Tuple[bytes
     return http_get(source["url"], session=session, referer=referer, timeout=timeout)
 
 
+def fetch_paged(source: dict, *, timeout: int = DEFAULT_TIMEOUT) -> List[Tuple[str, bytes]]:
+    """抓「一个来源 = 多个页面」的名单（大广赛这类一页 15 行、120 页的分页表）。
+
+    parse_spec.urls 给出除主 URL 之外的其余页面；同一会话内顺序抓，任何一页失败
+    就整体失败（宁可这条来源 failed，也不要拿半截名单入库）。
+    """
+    spec = source.get("parse_spec_obj") or {}
+    explicit = [u for u in (spec.get("urls") or []) if u]
+    template = spec.get("url_template")
+    page_count = int(spec.get("page_count") or 0)
+    if template and page_count > 0:
+        # 分页站点（大广赛 500 页）用模板展开，seed 里只存一条模板 + 页数，
+        # 不必把 500 个 URL 塞进 JSON
+        urls = [template.replace("{page}", str(i)) for i in range(1, page_count + 1)]
+        urls += explicit
+    else:
+        urls = [source["url"]] + explicit
+    session = build_session()
+    boot = spec.get("bootstrap_url") or source.get("bootstrap_url")
+    if boot:
+        log.info("bootstrap 会话：%s", boot)
+        http_get(boot, session=session, timeout=timeout)
+    referer = spec.get("referer") or boot
+    out = []
+    for idx, url in enumerate(urls, 1):
+        content, final_url, _ctype = http_get(url, session=session, referer=referer,
+                                              timeout=timeout)
+        out.append((final_url or url, content))
+        if idx % 20 == 0 or idx == len(urls):
+            log.info("分页抓取 %d/%d", idx, len(urls))
+    return out
+
+
 # =============================================================================
 # 二、格式判定与解码
 # =============================================================================
@@ -715,9 +748,15 @@ def _render_template(template: str, rec: dict) -> str:
     return out.strip(" ·（）()")
 
 
-def _normalize_members(text: str) -> str:
-    """成员分隔符归一：半角/全角逗号、斜杠、顿号统一成「、」，去掉空项与尾随符。"""
-    parts = [p.strip() for p in re.split(r"[,，、/;；]+", text or "") if p.strip()]
+def _normalize_members(text: str, spec: Optional[dict] = None) -> str:
+    """成员分隔符归一：半角/全角逗号、斜杠、顿号统一成「、」，去掉空项与尾随符。
+
+    `spec.members_split == "space"` 时额外按空格切（大广赛「易小露 吴玮玲 林嘉瑜」
+    这种整队成员空格串；默认不按空格切，因为中文姓名里不该有空格）。
+    """
+    pattern = r"[,，、/;；\s]+" if (spec or {}).get("members_split") == "space" \
+        else r"[,，、/;；]+"
+    parts = [p.strip() for p in re.split(pattern, text or "") if p.strip()]
     return "、".join(parts)
 
 
@@ -754,11 +793,19 @@ def _finalize(records: List[dict], spec: Optional[dict] = None) -> List[dict]:
             rec["award_grade"] = _normalize_grade(rec["award_grade"], spec)
         if not rec.get("title") and template:
             rec["title"] = _render_template(template, rec)
+        strip_chars = spec.get("strip_chars")
+        if strip_chars and rec.get("title"):
+            # 大广赛第 18 届标题带书名号《…》，第 17 届不带，入库统一去掉
+            rec["title"] = str(rec["title"]).strip(strip_chars).strip()
         if _norm_key(rec.get("title")) in header_words:
             continue
         parts: List[str] = list(rec.pop("_extras", []) or [])
+        ignore = set(spec.get("ignore_columns") or [])
+        if ignore:
+            for key in [k for k in rec if k in ignore]:
+                rec.pop(key, None)
         if rec.get("members"):
-            rec["members"] = _normalize_members(rec["members"])
+            rec["members"] = _normalize_members(rec["members"], spec)
             parts.append(f"成员：{rec['members']}")
         for key in [k for k in rec if k not in _SEMANTIC_FIELDS]:
             value = rec.pop(key)
@@ -780,6 +827,121 @@ def _finalize(records: List[dict], spec: Optional[dict] = None) -> List[dict]:
     return out
 
 
+def parse_pdf_dual_border(content: bytes, spec: dict) -> List[dict]:
+    """双线边框表格专用解析（机械创新设计大赛 #62 这类）。
+
+    通用 pdf_table 在这种版式上会崩：单元格边框被重复绘制两次，extract_tables()
+    把 5 列识别成 11 列；「序号」垂直居中、跨行，靠「本行有序号就新起一行」会错行。
+
+    这里改用显式几何：
+      1. 竖线按 tol 聚类得到真实列边界，用 bisect 把每个 word 归列；
+      2. 行边界 = 「序号」列单元格自身的 top/bottom（合并重复绘制的矩形）；
+      3. 奖项等级只在段标题里（「一等奖（173项）」…「（一等奖结束）」），按 y 坐标
+         在页内生效并跨页延续；
+      4. 页首没有序号的文字是上一条的续行，append 回上一条。
+    """
+    import bisect
+
+    import pdfplumber
+
+    names = spec.get("col_names") or ["序号", "作品名称", "所在学校", "参赛者", "指导教师"]
+    ncol = len(names)
+    sec_re = re.compile(spec.get("section_regex")
+                        or r"^(一等奖|二等奖|三等奖)\s*[（(]\s*\d+\s*项")
+    end_re = re.compile(spec.get("section_end_regex")
+                        or r"^[（(]\s*(一等奖|二等奖|三等奖)\s*结束")
+    tol = float(spec.get("line_tol", 8))
+
+    def cluster(vals: List[float]) -> List[float]:
+        vals = sorted(vals)
+        if not vals:
+            return []
+        groups = [[vals[0]]]
+        for v in vals[1:]:
+            if v - groups[-1][-1] <= tol:
+                groups[-1].append(v)
+            else:
+                groups.append([v])
+        return [sum(g) / len(g) for g in groups]
+
+    def strip_marks(text: str) -> str:
+        return re.sub(r"(一等奖|二等奖|三等奖)\s*[（(]\s*\d+\s*项\s*[）)]"
+                      r"|[（(]\s*(一等奖|二等奖|三等奖)\s*结束\s*[）)]", "", text)
+
+    rows: List[dict] = []
+    cur: Optional[dict] = None
+    state: Optional[str] = None
+    with pdfplumber.open(io.BytesIO(content)) as pdf:
+        for page in pdf.pages:
+            events = []
+            try:
+                for line in page.extract_text_lines():
+                    text = (line.get("text") or "").strip()
+                    m = sec_re.match(text)
+                    if m:
+                        events.append((line["top"], m.group(1)))
+                        continue
+                    if end_re.match(text):
+                        events.append((line["top"], None))
+            except Exception:  # noqa: BLE001 - 结构异常就当这页没有段标题
+                pass
+            events.sort()
+
+            vlines = [e for e in page.edges if e["orientation"] == "v"]
+            xs = cluster([e["x0"] for e in vlines]) if vlines else []
+            if len(xs) < ncol:
+                continue
+
+            def col_of(x: float) -> int:
+                return min(max(bisect.bisect_right(xs, x) - 1, 0), ncol - 1)
+
+            marks = [(e["top"], e["bottom"]) for e in vlines
+                     if xs[0] - 2 <= e["x0"] <= xs[1] + 2 and (e["bottom"] - e["top"]) > 8]
+            merged: List[Tuple[float, float]] = []
+            for top, bottom in sorted({(round(t, 1), round(b, 1)) for t, b in marks}):
+                if merged and abs(merged[-1][0] - top) < 3 and abs(merged[-1][1] - bottom) < 3:
+                    continue
+                merged.append((top, bottom))
+
+            words = [w for w in page.extract_words()
+                     if xs[0] - 3 <= (w["x0"] + w["x1"]) / 2 <= xs[-1] + 3]
+
+            def cells_of(band: List[dict]) -> List[str]:
+                buckets: dict = {}
+                for w in band:
+                    buckets.setdefault(col_of((w["x0"] + w["x1"]) / 2), []).append(w["text"])
+                return [strip_marks(re.sub(r"\s+", "", "".join(buckets.get(i, []))))
+                        for i in range(ncol)]
+
+            top0 = merged[0][0] if merged else 10 ** 6
+            head = [w for w in words if 40 < (w["top"] + w["bottom"]) / 2 < top0 - 0.5]
+            if head and cur is not None:                    # 页首续行
+                vals = cells_of(head)
+                for i in range(1, ncol):
+                    if vals[i]:
+                        cur[names[i]] = cur.get(names[i], "") + vals[i]
+
+            grade_now = state
+            for top, bottom in merged:
+                for ev_top, ev_grade in events:
+                    if ev_top <= top + 1:
+                        grade_now = ev_grade
+                vals = cells_of([w for w in words
+                                 if top - 0.5 <= (w["top"] + w["bottom"]) / 2 < bottom + 0.5])
+                if not vals or vals[0] == names[0] or str(vals[1]).startswith(names[1]):
+                    continue
+                if not re.fullmatch(r"\d{1,4}", str(vals[0])):
+                    continue
+                if cur and any(cur.get(n) for n in names[1:]):
+                    rows.append(cur)
+                cur = dict(zip(names, vals))
+                cur["段内奖项等级"] = grade_now
+            state = grade_now
+    if cur and any(cur.get(n) for n in names[1:]):
+        rows.append(cur)
+    return rows
+
+
 def parse_by_adapter(content: bytes, adapter: str, spec: dict) -> List[dict]:
     """按 adapter 名分发到具体解析器（CLI 与维护脚本共用，别各写一份 if）。"""
     name = (adapter or "").lower()
@@ -789,6 +951,8 @@ def parse_by_adapter(content: bytes, adapter: str, spec: dict) -> List[dict]:
         return parse_docx(content, spec)
     if name in ("pdf_table", "pdf"):
         return parse_pdf(content, spec)
+    if name in ("pdf_dual_border", "pdf_dual"):
+        return parse_pdf_dual_border(content, spec)
     if name in ("html_table", "html"):
         return parse_html_table(content, spec)
     raise ValueError(f"未知 adapter：{adapter!r}")
@@ -898,15 +1062,39 @@ def ingest_source(source: dict, *, apply: bool = False, approve: bool = False,
                                            error=skip_reason, db_path=db_path)
             return stats
 
-        content, final_url, ctype = fetch_source(source, timeout=timeout)
-        fmt = detect_format(final_url or source["url"], ctype, content)
-        stats["format"] = fmt
-        log.info("抓到 %d 字节，判定格式 %s（%s）", len(content), fmt, final_url)
+        # 分页来源（parse_spec.urls）：逐页抓、逐页解析，最后合并成一批候选行
+        paged = bool(spec.get("urls")
+                     or (spec.get("url_template") and int(spec.get("page_count") or 0)))
+        if paged:
+            pages = fetch_paged(source, timeout=timeout)
+            favg = detect_format(pages[0][0], "", pages[0][1]) if pages else "html"
+            stats["format"] = favg
+            log.info("分页来源：%d 页，判定格式 %s", len(pages), favg)
+            raw = []
+            track_map = spec.get("track_by_url") or {}
+            for page_url, page_bytes in pages:
+                page_fmt = detect_format(page_url, "", page_bytes)
+                pg_spec = dict(spec)
+                pg_spec.setdefault("_page_url", page_url)
+                page_rows = parse_by_adapter(page_bytes, source.get("adapter") or "", pg_spec)
+                # 分页名单常按类目分页（大广赛 19 个类目）：URL 里能看出类目的，
+                # 就按 track_by_url 打上 track，不用抽同一列
+                for frag, track in track_map.items():
+                    if frag in page_url:
+                        for row in page_rows:
+                            row.setdefault("track", track)
+                        break
+                raw.extend(page_rows)
+            stats["parsed"] = len(raw)
+        else:
+            content, final_url, ctype = fetch_source(source, timeout=timeout)
+            fmt = detect_format(final_url or source["url"], ctype, content)
+            stats["format"] = fmt
+            log.info("抓到 %d 字节，判定格式 %s（%s）", len(content), fmt, final_url)
 
-        adapter = (source.get("adapter") or "").lower()
-        raw = parse_by_adapter(content, adapter, spec)
-
-        stats["parsed"] = len(raw)
+            adapter = (source.get("adapter") or "").lower()
+            raw = parse_by_adapter(content, adapter, spec)
+            stats["parsed"] = len(raw)
         records = prepare_records(raw, spec, source)
         if records:
             from collections import Counter

@@ -863,6 +863,782 @@
         },
         "skip": "官方名单只公示获奖者（学校/队员/姓名），没有作品名，按产品口径不作为作品入库"
       }
+    },
+    {
+      "competition_id": 62,
+      "url": "https://12umic.hit.edu.cn/_upload/article/files/eb/4e/0627d93d4486acf6409a61814eec/90ef1bc1-13d3-40d0-a826-79c72e1eaf5c.pdf",
+      "title": "第十二届（2026）“博实杯”全国大学生机械创新设计大赛常规赛全国决赛获奖名单",
+      "source_kind": "official_notice",
+      "years": "2026",
+      "adapter": "pdf_dual_border",
+      "notes": "39 页、3.21 MB，有文字层。版式坑：单元格边框双线重复绘制（通用 pdf_table 会把 5 列识别成 11 列）、序号单元格垂直居中跨行；奖项等级只写在段标题里并跨页延续。已用专用 adapter pdf_dual_border 复现 801 行（一等 173 / 二等 289 / 三等 339），三段序号各自从 1 重排，所以 dedupe_key 必须同时带 award_grade。",
+      "parse_spec": {
+        "columns": {
+          "序号": "work_no",
+          "作品名称": "title",
+          "所在学校": "school",
+          "参赛者": "members",
+          "指导教师": "advisor",
+          "段内奖项等级": "award_grade"
+        },
+        "col_names": [
+          "序号",
+          "作品名称",
+          "所在学校",
+          "参赛者",
+          "指导教师"
+        ],
+        "dedupe_key": [
+          "award_grade",
+          "title",
+          "school"
+        ],
+        "fixed": {
+          "year": 2026,
+          "session": "第十二届"
+        }
+      }
+    },
+    {
+      "competition_id": 64,
+      "url": "https://www.sun-ada.net/home/search/awards?code=1801&class=Aa%20%E5%B9%B3%E9%9D%A2%E7%B1%BB%E5%B9%B3%E9%9D%A2%E5%B9%BF%E5%91%8A&name=%E7%AC%AC18%E5%B1%8A%E5%A4%A7%E5%B9%BF%E8%B5%9B%20%E5%85%A8%E5%9B%BD%E6%80%BB%E8%AF%84%E5%AE%A1&prize=&matchsename=18TH%20Competition&page=1",
+      "title": "第18届（2026）大广赛全国总评审获奖名单 · Aa 平面类平面广告",
+      "source_kind": "official_notice",
+      "years": "2026",
+      "adapter": "html_table",
+      "notes": "服务端分页：每页 15 行、共 117 页 / 1746 行；表头每页重复（第 1 个 tr 跳过）；class 参数是唯一类目键，拼错会静默返回 0 行；必须 https + UA + Referer；标题带书名号需 strip。",
+      "parse_spec": {
+        "url_template": "https://www.sun-ada.net/home/search/awards?code=1801&class=Aa%20%E5%B9%B3%E9%9D%A2%E7%B1%BB%E5%B9%B3%E9%9D%A2%E5%B9%BF%E5%91%8A&name=%E7%AC%AC18%E5%B1%8A%E5%A4%A7%E5%B9%BF%E8%B5%9B%20%E5%85%A8%E5%9B%BD%E6%80%BB%E8%AF%84%E5%AE%A1&prize=&matchsename=18TH%20Competition&page={page}",
+        "page_count": 117,
+        "columns": {
+          "奖项": "award_grade",
+          "参赛编号": "work_no",
+          "标题": "title",
+          "作者": "members",
+          "指导老师": "advisor",
+          "所属院校": "school",
+          "赛区": "province",
+          "命题": "category"
+        },
+        "members_split": "space",
+        "strip_chars": "《》",
+        "dedupe_key": [
+          "track",
+          "title",
+          "school",
+          "award_grade"
+        ],
+        "fixed": {
+          "year": 2026,
+          "session": "第18届",
+          "track": "Aa 平面类平面广告"
+        },
+        "ignore_columns": [
+          "证书"
+        ]
+      }
+    },
+    {
+      "competition_id": 64,
+      "url": "https://www.sun-ada.net/home/search/awards?code=1801&class=Ab%20%E5%B9%B3%E9%9D%A2%E7%B1%BB%E4%BA%A7%E5%93%81%E4%B8%8E%E5%8C%85%E8%A3%85&name=%E7%AC%AC18%E5%B1%8A%E5%A4%A7%E5%B9%BF%E8%B5%9B%20%E5%85%A8%E5%9B%BD%E6%80%BB%E8%AF%84%E5%AE%A1&prize=&matchsename=18TH%20Competition&page=1",
+      "title": "第18届（2026）大广赛全国总评审获奖名单 · Ab 平面类产品与包装",
+      "source_kind": "official_notice",
+      "years": "2026",
+      "adapter": "html_table",
+      "notes": "服务端分页：每页 15 行、共 9 页 / 128 行；表头每页重复（第 1 个 tr 跳过）；class 参数是唯一类目键，拼错会静默返回 0 行；必须 https + UA + Referer；标题带书名号需 strip。",
+      "parse_spec": {
+        "url_template": "https://www.sun-ada.net/home/search/awards?code=1801&class=Ab%20%E5%B9%B3%E9%9D%A2%E7%B1%BB%E4%BA%A7%E5%93%81%E4%B8%8E%E5%8C%85%E8%A3%85&name=%E7%AC%AC18%E5%B1%8A%E5%A4%A7%E5%B9%BF%E8%B5%9B%20%E5%85%A8%E5%9B%BD%E6%80%BB%E8%AF%84%E5%AE%A1&prize=&matchsename=18TH%20Competition&page={page}",
+        "page_count": 9,
+        "columns": {
+          "奖项": "award_grade",
+          "参赛编号": "work_no",
+          "标题": "title",
+          "作者": "members",
+          "指导老师": "advisor",
+          "所属院校": "school",
+          "赛区": "province",
+          "命题": "category"
+        },
+        "members_split": "space",
+        "strip_chars": "《》",
+        "dedupe_key": [
+          "track",
+          "title",
+          "school",
+          "award_grade"
+        ],
+        "fixed": {
+          "year": 2026,
+          "session": "第18届",
+          "track": "Ab 平面类产品与包装"
+        },
+        "ignore_columns": [
+          "证书"
+        ]
+      }
+    },
+    {
+      "competition_id": 64,
+      "url": "https://www.sun-ada.net/home/search/awards?code=1801&class=Ac%20%E5%B9%B3%E9%9D%A2%E7%B1%BBIP%E4%B8%8E%E5%88%9B%E6%84%8F%E5%91%A8%E8%BE%B9&name=%E7%AC%AC18%E5%B1%8A%E5%A4%A7%E5%B9%BF%E8%B5%9B%20%E5%85%A8%E5%9B%BD%E6%80%BB%E8%AF%84%E5%AE%A1&prize=&matchsename=18TH%20Competition&page=1",
+      "title": "第18届（2026）大广赛全国总评审获奖名单 · Ac 平面类IP与创意周边",
+      "source_kind": "official_notice",
+      "years": "2026",
+      "adapter": "html_table",
+      "notes": "服务端分页：每页 15 行、共 10 页 / 140 行；表头每页重复（第 1 个 tr 跳过）；class 参数是唯一类目键，拼错会静默返回 0 行；必须 https + UA + Referer；标题带书名号需 strip。",
+      "parse_spec": {
+        "url_template": "https://www.sun-ada.net/home/search/awards?code=1801&class=Ac%20%E5%B9%B3%E9%9D%A2%E7%B1%BBIP%E4%B8%8E%E5%88%9B%E6%84%8F%E5%91%A8%E8%BE%B9&name=%E7%AC%AC18%E5%B1%8A%E5%A4%A7%E5%B9%BF%E8%B5%9B%20%E5%85%A8%E5%9B%BD%E6%80%BB%E8%AF%84%E5%AE%A1&prize=&matchsename=18TH%20Competition&page={page}",
+        "page_count": 10,
+        "columns": {
+          "奖项": "award_grade",
+          "参赛编号": "work_no",
+          "标题": "title",
+          "作者": "members",
+          "指导老师": "advisor",
+          "所属院校": "school",
+          "赛区": "province",
+          "命题": "category"
+        },
+        "members_split": "space",
+        "strip_chars": "《》",
+        "dedupe_key": [
+          "track",
+          "title",
+          "school",
+          "award_grade"
+        ],
+        "fixed": {
+          "year": 2026,
+          "session": "第18届",
+          "track": "Ac 平面类IP与创意周边"
+        },
+        "ignore_columns": [
+          "证书"
+        ]
+      }
+    },
+    {
+      "competition_id": 64,
+      "url": "https://www.sun-ada.net/home/search/awards?code=1801&class=Ba%20%E8%A7%86%E9%A2%91%E7%B1%BB%E5%BD%B1%E8%A7%86%E5%B9%BF%E5%91%8A&name=%E7%AC%AC18%E5%B1%8A%E5%A4%A7%E5%B9%BF%E8%B5%9B%20%E5%85%A8%E5%9B%BD%E6%80%BB%E8%AF%84%E5%AE%A1&prize=&matchsename=18TH%20Competition&page=1",
+      "title": "第18届（2026）大广赛全国总评审获奖名单 · Ba 视频类影视广告",
+      "source_kind": "official_notice",
+      "years": "2026",
+      "adapter": "html_table",
+      "notes": "服务端分页：每页 15 行、共 52 页 / 775 行；表头每页重复（第 1 个 tr 跳过）；class 参数是唯一类目键，拼错会静默返回 0 行；必须 https + UA + Referer；标题带书名号需 strip。",
+      "parse_spec": {
+        "url_template": "https://www.sun-ada.net/home/search/awards?code=1801&class=Ba%20%E8%A7%86%E9%A2%91%E7%B1%BB%E5%BD%B1%E8%A7%86%E5%B9%BF%E5%91%8A&name=%E7%AC%AC18%E5%B1%8A%E5%A4%A7%E5%B9%BF%E8%B5%9B%20%E5%85%A8%E5%9B%BD%E6%80%BB%E8%AF%84%E5%AE%A1&prize=&matchsename=18TH%20Competition&page={page}",
+        "page_count": 52,
+        "columns": {
+          "奖项": "award_grade",
+          "参赛编号": "work_no",
+          "标题": "title",
+          "作者": "members",
+          "指导老师": "advisor",
+          "所属院校": "school",
+          "赛区": "province",
+          "命题": "category"
+        },
+        "members_split": "space",
+        "strip_chars": "《》",
+        "dedupe_key": [
+          "track",
+          "title",
+          "school",
+          "award_grade"
+        ],
+        "fixed": {
+          "year": 2026,
+          "session": "第18届",
+          "track": "Ba 视频类影视广告"
+        },
+        "ignore_columns": [
+          "证书"
+        ]
+      }
+    },
+    {
+      "competition_id": 64,
+      "url": "https://www.sun-ada.net/home/search/awards?code=1801&class=Bb%20%E8%A7%86%E9%A2%91%E7%B1%BB%E5%BE%AE%E7%94%B5%E5%BD%B1%E5%B9%BF%E5%91%8A&name=%E7%AC%AC18%E5%B1%8A%E5%A4%A7%E5%B9%BF%E8%B5%9B%20%E5%85%A8%E5%9B%BD%E6%80%BB%E8%AF%84%E5%AE%A1&prize=&matchsename=18TH%20Competition&page=1",
+      "title": "第18届（2026）大广赛全国总评审获奖名单 · Bb 视频类微电影广告",
+      "source_kind": "official_notice",
+      "years": "2026",
+      "adapter": "html_table",
+      "notes": "服务端分页：每页 15 行、共 42 页 / 619 行；表头每页重复（第 1 个 tr 跳过）；class 参数是唯一类目键，拼错会静默返回 0 行；必须 https + UA + Referer；标题带书名号需 strip。",
+      "parse_spec": {
+        "url_template": "https://www.sun-ada.net/home/search/awards?code=1801&class=Bb%20%E8%A7%86%E9%A2%91%E7%B1%BB%E5%BE%AE%E7%94%B5%E5%BD%B1%E5%B9%BF%E5%91%8A&name=%E7%AC%AC18%E5%B1%8A%E5%A4%A7%E5%B9%BF%E8%B5%9B%20%E5%85%A8%E5%9B%BD%E6%80%BB%E8%AF%84%E5%AE%A1&prize=&matchsename=18TH%20Competition&page={page}",
+        "page_count": 42,
+        "columns": {
+          "奖项": "award_grade",
+          "参赛编号": "work_no",
+          "标题": "title",
+          "作者": "members",
+          "指导老师": "advisor",
+          "所属院校": "school",
+          "赛区": "province",
+          "命题": "category"
+        },
+        "members_split": "space",
+        "strip_chars": "《》",
+        "dedupe_key": [
+          "track",
+          "title",
+          "school",
+          "award_grade"
+        ],
+        "fixed": {
+          "year": 2026,
+          "session": "第18届",
+          "track": "Bb 视频类微电影广告"
+        },
+        "ignore_columns": [
+          "证书"
+        ]
+      }
+    },
+    {
+      "competition_id": 64,
+      "url": "https://www.sun-ada.net/home/search/awards?code=1801&class=Bc%20%E8%A7%86%E9%A2%91%E7%B1%BB%E7%9F%AD%E8%A7%86%E9%A2%91%E5%B9%BF%E5%91%8A&name=%E7%AC%AC18%E5%B1%8A%E5%A4%A7%E5%B9%BF%E8%B5%9B%20%E5%85%A8%E5%9B%BD%E6%80%BB%E8%AF%84%E5%AE%A1&prize=&matchsename=18TH%20Competition&page=1",
+      "title": "第18届（2026）大广赛全国总评审获奖名单 · Bc 视频类短视频广告",
+      "source_kind": "official_notice",
+      "years": "2026",
+      "adapter": "html_table",
+      "notes": "服务端分页：每页 15 行、共 30 页 / 439 行；表头每页重复（第 1 个 tr 跳过）；class 参数是唯一类目键，拼错会静默返回 0 行；必须 https + UA + Referer；标题带书名号需 strip。",
+      "parse_spec": {
+        "url_template": "https://www.sun-ada.net/home/search/awards?code=1801&class=Bc%20%E8%A7%86%E9%A2%91%E7%B1%BB%E7%9F%AD%E8%A7%86%E9%A2%91%E5%B9%BF%E5%91%8A&name=%E7%AC%AC18%E5%B1%8A%E5%A4%A7%E5%B9%BF%E8%B5%9B%20%E5%85%A8%E5%9B%BD%E6%80%BB%E8%AF%84%E5%AE%A1&prize=&matchsename=18TH%20Competition&page={page}",
+        "page_count": 30,
+        "columns": {
+          "奖项": "award_grade",
+          "参赛编号": "work_no",
+          "标题": "title",
+          "作者": "members",
+          "指导老师": "advisor",
+          "所属院校": "school",
+          "赛区": "province",
+          "命题": "category"
+        },
+        "members_split": "space",
+        "strip_chars": "《》",
+        "dedupe_key": [
+          "track",
+          "title",
+          "school",
+          "award_grade"
+        ],
+        "fixed": {
+          "year": 2026,
+          "session": "第18届",
+          "track": "Bc 视频类短视频广告"
+        },
+        "ignore_columns": [
+          "证书"
+        ]
+      }
+    },
+    {
+      "competition_id": 64,
+      "url": "https://www.sun-ada.net/home/search/awards?code=1801&class=C%20%E5%8A%A8%E7%94%BB%E7%B1%BB&name=%E7%AC%AC18%E5%B1%8A%E5%A4%A7%E5%B9%BF%E8%B5%9B%20%E5%85%A8%E5%9B%BD%E6%80%BB%E8%AF%84%E5%AE%A1&prize=&matchsename=18TH%20Competition&page=1",
+      "title": "第18届（2026）大广赛全国总评审获奖名单 · C 动画类",
+      "source_kind": "official_notice",
+      "years": "2026",
+      "adapter": "html_table",
+      "notes": "服务端分页：每页 15 行、共 32 页 / 467 行；表头每页重复（第 1 个 tr 跳过）；class 参数是唯一类目键，拼错会静默返回 0 行；必须 https + UA + Referer；标题带书名号需 strip。",
+      "parse_spec": {
+        "url_template": "https://www.sun-ada.net/home/search/awards?code=1801&class=C%20%E5%8A%A8%E7%94%BB%E7%B1%BB&name=%E7%AC%AC18%E5%B1%8A%E5%A4%A7%E5%B9%BF%E8%B5%9B%20%E5%85%A8%E5%9B%BD%E6%80%BB%E8%AF%84%E5%AE%A1&prize=&matchsename=18TH%20Competition&page={page}",
+        "page_count": 32,
+        "columns": {
+          "奖项": "award_grade",
+          "参赛编号": "work_no",
+          "标题": "title",
+          "作者": "members",
+          "指导老师": "advisor",
+          "所属院校": "school",
+          "赛区": "province",
+          "命题": "category"
+        },
+        "members_split": "space",
+        "strip_chars": "《》",
+        "dedupe_key": [
+          "track",
+          "title",
+          "school",
+          "award_grade"
+        ],
+        "fixed": {
+          "year": 2026,
+          "session": "第18届",
+          "track": "C 动画类"
+        },
+        "ignore_columns": [
+          "证书"
+        ]
+      }
+    },
+    {
+      "competition_id": 64,
+      "url": "https://www.sun-ada.net/home/search/awards?code=1801&class=Da%20%E7%BA%BF%E4%B8%8A%E4%BA%92%E5%8A%A8%E5%B9%BF%E5%91%8A&name=%E7%AC%AC18%E5%B1%8A%E5%A4%A7%E5%B9%BF%E8%B5%9B%20%E5%85%A8%E5%9B%BD%E6%80%BB%E8%AF%84%E5%AE%A1&prize=&matchsename=18TH%20Competition&page=1",
+      "title": "第18届（2026）大广赛全国总评审获奖名单 · Da 线上互动广告",
+      "source_kind": "official_notice",
+      "years": "2026",
+      "adapter": "html_table",
+      "notes": "服务端分页：每页 15 行、共 13 页 / 188 行；表头每页重复（第 1 个 tr 跳过）；class 参数是唯一类目键，拼错会静默返回 0 行；必须 https + UA + Referer；标题带书名号需 strip。",
+      "parse_spec": {
+        "url_template": "https://www.sun-ada.net/home/search/awards?code=1801&class=Da%20%E7%BA%BF%E4%B8%8A%E4%BA%92%E5%8A%A8%E5%B9%BF%E5%91%8A&name=%E7%AC%AC18%E5%B1%8A%E5%A4%A7%E5%B9%BF%E8%B5%9B%20%E5%85%A8%E5%9B%BD%E6%80%BB%E8%AF%84%E5%AE%A1&prize=&matchsename=18TH%20Competition&page={page}",
+        "page_count": 13,
+        "columns": {
+          "奖项": "award_grade",
+          "参赛编号": "work_no",
+          "标题": "title",
+          "作者": "members",
+          "指导老师": "advisor",
+          "所属院校": "school",
+          "赛区": "province",
+          "命题": "category"
+        },
+        "members_split": "space",
+        "strip_chars": "《》",
+        "dedupe_key": [
+          "track",
+          "title",
+          "school",
+          "award_grade"
+        ],
+        "fixed": {
+          "year": 2026,
+          "session": "第18届",
+          "track": "Da 线上互动广告"
+        },
+        "ignore_columns": [
+          "证书"
+        ]
+      }
+    },
+    {
+      "competition_id": 64,
+      "url": "https://www.sun-ada.net/home/search/awards?code=1801&class=Ea%2015%E7%A7%92%E5%B9%BF%E6%92%AD%E5%B9%BF%E5%91%8A&name=%E7%AC%AC18%E5%B1%8A%E5%A4%A7%E5%B9%BF%E8%B5%9B%20%E5%85%A8%E5%9B%BD%E6%80%BB%E8%AF%84%E5%AE%A1&prize=&matchsename=18TH%20Competition&page=1",
+      "title": "第18届（2026）大广赛全国总评审获奖名单 · Ea 15秒广播广告",
+      "source_kind": "official_notice",
+      "years": "2026",
+      "adapter": "html_table",
+      "notes": "服务端分页：每页 15 行、共 14 页 / 207 行；表头每页重复（第 1 个 tr 跳过）；class 参数是唯一类目键，拼错会静默返回 0 行；必须 https + UA + Referer；标题带书名号需 strip。",
+      "parse_spec": {
+        "url_template": "https://www.sun-ada.net/home/search/awards?code=1801&class=Ea%2015%E7%A7%92%E5%B9%BF%E6%92%AD%E5%B9%BF%E5%91%8A&name=%E7%AC%AC18%E5%B1%8A%E5%A4%A7%E5%B9%BF%E8%B5%9B%20%E5%85%A8%E5%9B%BD%E6%80%BB%E8%AF%84%E5%AE%A1&prize=&matchsename=18TH%20Competition&page={page}",
+        "page_count": 14,
+        "columns": {
+          "奖项": "award_grade",
+          "参赛编号": "work_no",
+          "标题": "title",
+          "作者": "members",
+          "指导老师": "advisor",
+          "所属院校": "school",
+          "赛区": "province",
+          "命题": "category"
+        },
+        "members_split": "space",
+        "strip_chars": "《》",
+        "dedupe_key": [
+          "track",
+          "title",
+          "school",
+          "award_grade"
+        ],
+        "fixed": {
+          "year": 2026,
+          "session": "第18届",
+          "track": "Ea 15秒广播广告"
+        },
+        "ignore_columns": [
+          "证书"
+        ]
+      }
+    },
+    {
+      "competition_id": 64,
+      "url": "https://www.sun-ada.net/home/search/awards?code=1801&class=Eb%2030%E7%A7%92%E5%B9%BF%E6%92%AD%E5%B9%BF%E5%91%8A&name=%E7%AC%AC18%E5%B1%8A%E5%A4%A7%E5%B9%BF%E8%B5%9B%20%E5%85%A8%E5%9B%BD%E6%80%BB%E8%AF%84%E5%AE%A1&prize=&matchsename=18TH%20Competition&page=1",
+      "title": "第18届（2026）大广赛全国总评审获奖名单 · Eb 30秒广播广告",
+      "source_kind": "official_notice",
+      "years": "2026",
+      "adapter": "html_table",
+      "notes": "服务端分页：每页 15 行、共 49 页 / 722 行；表头每页重复（第 1 个 tr 跳过）；class 参数是唯一类目键，拼错会静默返回 0 行；必须 https + UA + Referer；标题带书名号需 strip。",
+      "parse_spec": {
+        "url_template": "https://www.sun-ada.net/home/search/awards?code=1801&class=Eb%2030%E7%A7%92%E5%B9%BF%E6%92%AD%E5%B9%BF%E5%91%8A&name=%E7%AC%AC18%E5%B1%8A%E5%A4%A7%E5%B9%BF%E8%B5%9B%20%E5%85%A8%E5%9B%BD%E6%80%BB%E8%AF%84%E5%AE%A1&prize=&matchsename=18TH%20Competition&page={page}",
+        "page_count": 49,
+        "columns": {
+          "奖项": "award_grade",
+          "参赛编号": "work_no",
+          "标题": "title",
+          "作者": "members",
+          "指导老师": "advisor",
+          "所属院校": "school",
+          "赛区": "province",
+          "命题": "category"
+        },
+        "members_split": "space",
+        "strip_chars": "《》",
+        "dedupe_key": [
+          "track",
+          "title",
+          "school",
+          "award_grade"
+        ],
+        "fixed": {
+          "year": 2026,
+          "session": "第18届",
+          "track": "Eb 30秒广播广告"
+        },
+        "ignore_columns": [
+          "证书"
+        ]
+      }
+    },
+    {
+      "competition_id": 64,
+      "url": "https://www.sun-ada.net/home/search/awards?code=1801&class=F%20%E7%AD%96%E5%88%92%E6%A1%88%E7%B1%BB&name=%E7%AC%AC18%E5%B1%8A%E5%A4%A7%E5%B9%BF%E8%B5%9B%20%E5%85%A8%E5%9B%BD%E6%80%BB%E8%AF%84%E5%AE%A1&prize=&matchsename=18TH%20Competition&page=1",
+      "title": "第18届（2026）大广赛全国总评审获奖名单 · F 策划案类",
+      "source_kind": "official_notice",
+      "years": "2026",
+      "adapter": "html_table",
+      "notes": "服务端分页：每页 15 行、共 47 页 / 701 行；表头每页重复（第 1 个 tr 跳过）；class 参数是唯一类目键，拼错会静默返回 0 行；必须 https + UA + Referer；标题带书名号需 strip。",
+      "parse_spec": {
+        "url_template": "https://www.sun-ada.net/home/search/awards?code=1801&class=F%20%E7%AD%96%E5%88%92%E6%A1%88%E7%B1%BB&name=%E7%AC%AC18%E5%B1%8A%E5%A4%A7%E5%B9%BF%E8%B5%9B%20%E5%85%A8%E5%9B%BD%E6%80%BB%E8%AF%84%E5%AE%A1&prize=&matchsename=18TH%20Competition&page={page}",
+        "page_count": 47,
+        "columns": {
+          "奖项": "award_grade",
+          "参赛编号": "work_no",
+          "标题": "title",
+          "作者": "members",
+          "指导老师": "advisor",
+          "所属院校": "school",
+          "赛区": "province",
+          "命题": "category"
+        },
+        "members_split": "space",
+        "strip_chars": "《》",
+        "dedupe_key": [
+          "track",
+          "title",
+          "school",
+          "award_grade"
+        ],
+        "fixed": {
+          "year": 2026,
+          "session": "第18届",
+          "track": "F 策划案类"
+        },
+        "ignore_columns": [
+          "证书"
+        ]
+      }
+    },
+    {
+      "competition_id": 64,
+      "url": "https://www.sun-ada.net/home/search/awards?code=1801&class=G%20%E6%96%87%E6%A1%88%E7%B1%BB&name=%E7%AC%AC18%E5%B1%8A%E5%A4%A7%E5%B9%BF%E8%B5%9B%20%E5%85%A8%E5%9B%BD%E6%80%BB%E8%AF%84%E5%AE%A1&prize=&matchsename=18TH%20Competition&page=1",
+      "title": "第18届（2026）大广赛全国总评审获奖名单 · G 文案类",
+      "source_kind": "official_notice",
+      "years": "2026",
+      "adapter": "html_table",
+      "notes": "服务端分页：每页 15 行、共 11 页 / 164 行；表头每页重复（第 1 个 tr 跳过）；class 参数是唯一类目键，拼错会静默返回 0 行；必须 https + UA + Referer；标题带书名号需 strip。",
+      "parse_spec": {
+        "url_template": "https://www.sun-ada.net/home/search/awards?code=1801&class=G%20%E6%96%87%E6%A1%88%E7%B1%BB&name=%E7%AC%AC18%E5%B1%8A%E5%A4%A7%E5%B9%BF%E8%B5%9B%20%E5%85%A8%E5%9B%BD%E6%80%BB%E8%AF%84%E5%AE%A1&prize=&matchsename=18TH%20Competition&page={page}",
+        "page_count": 11,
+        "columns": {
+          "奖项": "award_grade",
+          "参赛编号": "work_no",
+          "标题": "title",
+          "作者": "members",
+          "指导老师": "advisor",
+          "所属院校": "school",
+          "赛区": "province",
+          "命题": "category"
+        },
+        "members_split": "space",
+        "strip_chars": "《》",
+        "dedupe_key": [
+          "track",
+          "title",
+          "school",
+          "award_grade"
+        ],
+        "fixed": {
+          "year": 2026,
+          "session": "第18届",
+          "track": "G 文案类"
+        },
+        "ignore_columns": [
+          "证书"
+        ]
+      }
+    },
+    {
+      "competition_id": 64,
+      "url": "https://www.sun-ada.net/home/search/awards?code=1801&class=H%20UI%E7%B1%BB&name=%E7%AC%AC18%E5%B1%8A%E5%A4%A7%E5%B9%BF%E8%B5%9B%20%E5%85%A8%E5%9B%BD%E6%80%BB%E8%AF%84%E5%AE%A1&prize=&matchsename=18TH%20Competition&page=1",
+      "title": "第18届（2026）大广赛全国总评审获奖名单 · H UI类",
+      "source_kind": "official_notice",
+      "years": "2026",
+      "adapter": "html_table",
+      "notes": "服务端分页：每页 15 行、共 12 页 / 167 行；表头每页重复（第 1 个 tr 跳过）；class 参数是唯一类目键，拼错会静默返回 0 行；必须 https + UA + Referer；标题带书名号需 strip。",
+      "parse_spec": {
+        "url_template": "https://www.sun-ada.net/home/search/awards?code=1801&class=H%20UI%E7%B1%BB&name=%E7%AC%AC18%E5%B1%8A%E5%A4%A7%E5%B9%BF%E8%B5%9B%20%E5%85%A8%E5%9B%BD%E6%80%BB%E8%AF%84%E5%AE%A1&prize=&matchsename=18TH%20Competition&page={page}",
+        "page_count": 12,
+        "columns": {
+          "奖项": "award_grade",
+          "参赛编号": "work_no",
+          "标题": "title",
+          "作者": "members",
+          "指导老师": "advisor",
+          "所属院校": "school",
+          "赛区": "province",
+          "命题": "category"
+        },
+        "members_split": "space",
+        "strip_chars": "《》",
+        "dedupe_key": [
+          "track",
+          "title",
+          "school",
+          "award_grade"
+        ],
+        "fixed": {
+          "year": 2026,
+          "session": "第18届",
+          "track": "H UI类"
+        },
+        "ignore_columns": [
+          "证书"
+        ]
+      }
+    },
+    {
+      "competition_id": 64,
+      "url": "https://www.sun-ada.net/home/search/awards?code=1801&class=Ia%20%E7%A7%91%E6%8A%80%E7%B1%BB%E5%93%81%E7%89%8C%E5%BD%A2%E8%B1%A1IP&name=%E7%AC%AC18%E5%B1%8A%E5%A4%A7%E5%B9%BF%E8%B5%9B%20%E5%85%A8%E5%9B%BD%E6%80%BB%E8%AF%84%E5%AE%A1&prize=&matchsename=18TH%20Competition&page=1",
+      "title": "第18届（2026）大广赛全国总评审获奖名单 · Ia 科技类品牌形象IP",
+      "source_kind": "official_notice",
+      "years": "2026",
+      "adapter": "html_table",
+      "notes": "服务端分页：每页 15 行、共 6 页 / 90 行；表头每页重复（第 1 个 tr 跳过）；class 参数是唯一类目键，拼错会静默返回 0 行；必须 https + UA + Referer；标题带书名号需 strip。",
+      "parse_spec": {
+        "url_template": "https://www.sun-ada.net/home/search/awards?code=1801&class=Ia%20%E7%A7%91%E6%8A%80%E7%B1%BB%E5%93%81%E7%89%8C%E5%BD%A2%E8%B1%A1IP&name=%E7%AC%AC18%E5%B1%8A%E5%A4%A7%E5%B9%BF%E8%B5%9B%20%E5%85%A8%E5%9B%BD%E6%80%BB%E8%AF%84%E5%AE%A1&prize=&matchsename=18TH%20Competition&page={page}",
+        "page_count": 6,
+        "columns": {
+          "奖项": "award_grade",
+          "参赛编号": "work_no",
+          "标题": "title",
+          "作者": "members",
+          "指导老师": "advisor",
+          "所属院校": "school",
+          "赛区": "province",
+          "命题": "category"
+        },
+        "members_split": "space",
+        "strip_chars": "《》",
+        "dedupe_key": [
+          "track",
+          "title",
+          "school",
+          "award_grade"
+        ],
+        "fixed": {
+          "year": 2026,
+          "session": "第18届",
+          "track": "Ia 科技类品牌形象IP"
+        },
+        "ignore_columns": [
+          "证书"
+        ]
+      }
+    },
+    {
+      "competition_id": 64,
+      "url": "https://www.sun-ada.net/home/search/awards?code=1801&class=Ib%20%E7%A7%91%E6%8A%80%E7%B1%BB%E6%96%87%E5%88%9B%E5%91%A8%E8%BE%B9&name=%E7%AC%AC18%E5%B1%8A%E5%A4%A7%E5%B9%BF%E8%B5%9B%20%E5%85%A8%E5%9B%BD%E6%80%BB%E8%AF%84%E5%AE%A1&prize=&matchsename=18TH%20Competition&page=1",
+      "title": "第18届（2026）大广赛全国总评审获奖名单 · Ib 科技类文创周边",
+      "source_kind": "official_notice",
+      "years": "2026",
+      "adapter": "html_table",
+      "notes": "服务端分页：每页 15 行、共 7 页 / 93 行；表头每页重复（第 1 个 tr 跳过）；class 参数是唯一类目键，拼错会静默返回 0 行；必须 https + UA + Referer；标题带书名号需 strip。",
+      "parse_spec": {
+        "url_template": "https://www.sun-ada.net/home/search/awards?code=1801&class=Ib%20%E7%A7%91%E6%8A%80%E7%B1%BB%E6%96%87%E5%88%9B%E5%91%A8%E8%BE%B9&name=%E7%AC%AC18%E5%B1%8A%E5%A4%A7%E5%B9%BF%E8%B5%9B%20%E5%85%A8%E5%9B%BD%E6%80%BB%E8%AF%84%E5%AE%A1&prize=&matchsename=18TH%20Competition&page={page}",
+        "page_count": 7,
+        "columns": {
+          "奖项": "award_grade",
+          "参赛编号": "work_no",
+          "标题": "title",
+          "作者": "members",
+          "指导老师": "advisor",
+          "所属院校": "school",
+          "赛区": "province",
+          "命题": "category"
+        },
+        "members_split": "space",
+        "strip_chars": "《》",
+        "dedupe_key": [
+          "track",
+          "title",
+          "school",
+          "award_grade"
+        ],
+        "fixed": {
+          "year": 2026,
+          "session": "第18届",
+          "track": "Ib 科技类文创周边"
+        },
+        "ignore_columns": [
+          "证书"
+        ]
+      }
+    },
+    {
+      "competition_id": 64,
+      "url": "https://www.sun-ada.net/home/search/awards?code=1801&class=Ja%20%E8%90%A5%E9%94%80%E5%88%9B%E5%AE%A2%E5%BE%AE%E7%9F%AD%E5%89%A7&name=%E7%AC%AC18%E5%B1%8A%E5%A4%A7%E5%B9%BF%E8%B5%9B%20%E5%85%A8%E5%9B%BD%E6%80%BB%E8%AF%84%E5%AE%A1&prize=&matchsename=18TH%20Competition&page=1",
+      "title": "第18届（2026）大广赛全国总评审获奖名单 · Ja 营销创客微短剧",
+      "source_kind": "official_notice",
+      "years": "2026",
+      "adapter": "html_table",
+      "notes": "服务端分页：每页 15 行、共 7 页 / 105 行；表头每页重复（第 1 个 tr 跳过）；class 参数是唯一类目键，拼错会静默返回 0 行；必须 https + UA + Referer；标题带书名号需 strip。",
+      "parse_spec": {
+        "url_template": "https://www.sun-ada.net/home/search/awards?code=1801&class=Ja%20%E8%90%A5%E9%94%80%E5%88%9B%E5%AE%A2%E5%BE%AE%E7%9F%AD%E5%89%A7&name=%E7%AC%AC18%E5%B1%8A%E5%A4%A7%E5%B9%BF%E8%B5%9B%20%E5%85%A8%E5%9B%BD%E6%80%BB%E8%AF%84%E5%AE%A1&prize=&matchsename=18TH%20Competition&page={page}",
+        "page_count": 7,
+        "columns": {
+          "奖项": "award_grade",
+          "参赛编号": "work_no",
+          "标题": "title",
+          "作者": "members",
+          "指导老师": "advisor",
+          "所属院校": "school",
+          "赛区": "province",
+          "命题": "category"
+        },
+        "members_split": "space",
+        "strip_chars": "《》",
+        "dedupe_key": [
+          "track",
+          "title",
+          "school",
+          "award_grade"
+        ],
+        "fixed": {
+          "year": 2026,
+          "session": "第18届",
+          "track": "Ja 营销创客微短剧"
+        },
+        "ignore_columns": [
+          "证书"
+        ]
+      }
+    },
+    {
+      "competition_id": 64,
+      "url": "https://www.sun-ada.net/home/search/awards?code=1801&class=Jb%20%E8%90%A5%E9%94%80%E5%88%9B%E5%AE%A2%E5%BE%AE%E8%A7%86%E9%A2%91&name=%E7%AC%AC18%E5%B1%8A%E5%A4%A7%E5%B9%BF%E8%B5%9B%20%E5%85%A8%E5%9B%BD%E6%80%BB%E8%AF%84%E5%AE%A1&prize=&matchsename=18TH%20Competition&page=1",
+      "title": "第18届（2026）大广赛全国总评审获奖名单 · Jb 营销创客微视频",
+      "source_kind": "official_notice",
+      "years": "2026",
+      "adapter": "html_table",
+      "notes": "服务端分页：每页 15 行、共 13 页 / 187 行；表头每页重复（第 1 个 tr 跳过）；class 参数是唯一类目键，拼错会静默返回 0 行；必须 https + UA + Referer；标题带书名号需 strip。",
+      "parse_spec": {
+        "url_template": "https://www.sun-ada.net/home/search/awards?code=1801&class=Jb%20%E8%90%A5%E9%94%80%E5%88%9B%E5%AE%A2%E5%BE%AE%E8%A7%86%E9%A2%91&name=%E7%AC%AC18%E5%B1%8A%E5%A4%A7%E5%B9%BF%E8%B5%9B%20%E5%85%A8%E5%9B%BD%E6%80%BB%E8%AF%84%E5%AE%A1&prize=&matchsename=18TH%20Competition&page={page}",
+        "page_count": 13,
+        "columns": {
+          "奖项": "award_grade",
+          "参赛编号": "work_no",
+          "标题": "title",
+          "作者": "members",
+          "指导老师": "advisor",
+          "所属院校": "school",
+          "赛区": "province",
+          "命题": "category"
+        },
+        "members_split": "space",
+        "strip_chars": "《》",
+        "dedupe_key": [
+          "track",
+          "title",
+          "school",
+          "award_grade"
+        ],
+        "fixed": {
+          "year": 2026,
+          "session": "第18届",
+          "track": "Jb 营销创客微视频"
+        },
+        "ignore_columns": [
+          "证书"
+        ]
+      }
+    },
+    {
+      "competition_id": 64,
+      "url": "https://www.sun-ada.net/home/search/awards?code=1801&class=Jc%20%E8%90%A5%E9%94%80%E5%88%9B%E5%AE%A2%E7%BD%91%E7%BB%9C%E7%9B%B4%E6%92%AD&name=%E7%AC%AC18%E5%B1%8A%E5%A4%A7%E5%B9%BF%E8%B5%9B%20%E5%85%A8%E5%9B%BD%E6%80%BB%E8%AF%84%E5%AE%A1&prize=&matchsename=18TH%20Competition&page=1",
+      "title": "第18届（2026）大广赛全国总评审获奖名单 · Jc 营销创客网络直播",
+      "source_kind": "official_notice",
+      "years": "2026",
+      "adapter": "html_table",
+      "notes": "服务端分页：每页 15 行、共 13 页 / 188 行；表头每页重复（第 1 个 tr 跳过）；class 参数是唯一类目键，拼错会静默返回 0 行；必须 https + UA + Referer；标题带书名号需 strip。",
+      "parse_spec": {
+        "url_template": "https://www.sun-ada.net/home/search/awards?code=1801&class=Jc%20%E8%90%A5%E9%94%80%E5%88%9B%E5%AE%A2%E7%BD%91%E7%BB%9C%E7%9B%B4%E6%92%AD&name=%E7%AC%AC18%E5%B1%8A%E5%A4%A7%E5%B9%BF%E8%B5%9B%20%E5%85%A8%E5%9B%BD%E6%80%BB%E8%AF%84%E5%AE%A1&prize=&matchsename=18TH%20Competition&page={page}",
+        "page_count": 13,
+        "columns": {
+          "奖项": "award_grade",
+          "参赛编号": "work_no",
+          "标题": "title",
+          "作者": "members",
+          "指导老师": "advisor",
+          "所属院校": "school",
+          "赛区": "province",
+          "命题": "category"
+        },
+        "members_split": "space",
+        "strip_chars": "《》",
+        "dedupe_key": [
+          "track",
+          "title",
+          "school",
+          "award_grade"
+        ],
+        "fixed": {
+          "year": 2026,
+          "session": "第18届",
+          "track": "Jc 营销创客网络直播"
+        },
+        "ignore_columns": [
+          "证书"
+        ]
+      }
+    },
+    {
+      "competition_id": 64,
+      "url": "https://www.sun-ada.net/home/search/awards?code=1801&class=Jd%20%E8%90%A5%E9%94%80%E5%88%9B%E5%AE%A2AIGC%E5%BE%AE%E7%9F%AD%E5%89%A7&name=%E7%AC%AC18%E5%B1%8A%E5%A4%A7%E5%B9%BF%E8%B5%9B%20%E5%85%A8%E5%9B%BD%E6%80%BB%E8%AF%84%E5%AE%A1&prize=&matchsename=18TH%20Competition&page=1",
+      "title": "第18届（2026）大广赛全国总评审获奖名单 · Jd 营销创客AIGC微短剧",
+      "source_kind": "official_notice",
+      "years": "2026",
+      "adapter": "html_table",
+      "notes": "服务端分页：每页 15 行、共 16 页 / 232 行；表头每页重复（第 1 个 tr 跳过）；class 参数是唯一类目键，拼错会静默返回 0 行；必须 https + UA + Referer；标题带书名号需 strip。",
+      "parse_spec": {
+        "url_template": "https://www.sun-ada.net/home/search/awards?code=1801&class=Jd%20%E8%90%A5%E9%94%80%E5%88%9B%E5%AE%A2AIGC%E5%BE%AE%E7%9F%AD%E5%89%A7&name=%E7%AC%AC18%E5%B1%8A%E5%A4%A7%E5%B9%BF%E8%B5%9B%20%E5%85%A8%E5%9B%BD%E6%80%BB%E8%AF%84%E5%AE%A1&prize=&matchsename=18TH%20Competition&page={page}",
+        "page_count": 16,
+        "columns": {
+          "奖项": "award_grade",
+          "参赛编号": "work_no",
+          "标题": "title",
+          "作者": "members",
+          "指导老师": "advisor",
+          "所属院校": "school",
+          "赛区": "province",
+          "命题": "category"
+        },
+        "members_split": "space",
+        "strip_chars": "《》",
+        "dedupe_key": [
+          "track",
+          "title",
+          "school",
+          "award_grade"
+        ],
+        "fixed": {
+          "year": 2026,
+          "session": "第18届",
+          "track": "Jd 营销创客AIGC微短剧"
+        },
+        "ignore_columns": [
+          "证书"
+        ]
+      }
     }
   ]
 }
