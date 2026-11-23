@@ -19,10 +19,23 @@ import argparse
 import db
 
 
+def _window_evidence(row: dict) -> tuple:
+    """从赛段表判断这同一段窗口到底是「报名窗口」还是「比赛窗口」。
+
+    返回 (has_reg, has_contest)。stage_schedule 的 stage/note 和 exam_schedule
+    里出现「报名」即认为窗口是报名侧；出现「比赛/决赛/初赛/开幕式」即认为比赛侧。
+    """
+    text = " ".join(str(row.get(k) or "") for k in ("stage_schedule", "exam_schedule"))
+    has_reg = "报名" in text
+    has_contest = any(k in text for k in ("比赛", "决赛", "初赛", "开幕式"))
+    return has_reg, has_contest
+
+
 def find_issues(conn) -> dict:
     same = conn.execute(
         "SELECT id, name, reg_start_date, reg_end_date, "
-        "       contest_start_date, contest_end_date, reg_start_month "
+        "       contest_start_date, contest_end_date, reg_start_month, "
+        "       stage_schedule, exam_schedule "
         "FROM competitions "
         "WHERE reg_start_date IS NOT NULL AND contest_start_date IS NOT NULL "
         "  AND reg_start_date = contest_start_date "
@@ -111,16 +124,32 @@ def main() -> int:
 
             if args.include_same_window:
                 cleared = 0
+                skipped = 0
                 for r in issues["same_window_but_has_month"]:
-                    conn.execute(
-                        "UPDATE competitions SET contest_start_date=NULL, "
-                        "contest_end_date=NULL, "
-                        "last_checked_at=datetime('now','localtime') WHERE id=?",
-                        (r["id"],),
-                    )
+                    has_reg, has_contest = _window_evidence(r)
+                    if has_reg and has_contest:
+                        # 两边都有原文证据，分不清方向，不猜
+                        skipped += 1
+                        continue
+                    if has_reg:
+                        # 窗口是报名侧：比赛日期是抄来的
+                        conn.execute(
+                            "UPDATE competitions SET contest_start_date=NULL, "
+                            "contest_end_date=NULL, "
+                            "last_checked_at=datetime('now','localtime') WHERE id=?",
+                            (r["id"],),
+                        )
+                    else:
+                        # 窗口是比赛侧（或没有任何赛段证据）：报名日期是抄来的
+                        conn.execute(
+                            "UPDATE competitions SET reg_start_date=NULL, "
+                            "reg_end_date=NULL, reg_start_month=NULL, reg_end_month=NULL, "
+                            "last_checked_at=datetime('now','localtime') WHERE id=?",
+                            (r["id"],),
+                        )
                     cleared += 1
-                print(f"已清 {cleared} 条 R1b 的比赛日期"
-                      "（原文只写了报名窗口、没写比赛日期，赛段细节仍在 stage_schedule）")
+                print(f"已按赛段证据清 {cleared} 条重复窗口"
+                      f"（{skipped} 条报名/比赛两边都有证据，保留原样待人工判）")
 
             if args.sync_months:
                 fixed = 0
