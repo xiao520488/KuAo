@@ -347,8 +347,9 @@ def main(argv=None) -> int:
     for row in rows:
         if wanted_ids and int(row["id"]) not in wanted_ids:
             continue
-        if not whitelist.is_whitelisted(row["name"]):
-            continue                      # 白名单之外的一律不碰
+        allowed, _why = whitelist.gate(row["name"])
+        if not allowed:
+            continue                      # 84 项 + 特批（金种子杯）之外的一律不碰
         targets.append(row)
     if args.limit > 0:
         targets = targets[: args.limit]

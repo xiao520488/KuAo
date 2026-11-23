@@ -53,6 +53,17 @@ class GateTest(unittest.TestCase):
             self.assertTrue(ok, f"{name} -> {reason}")
             self.assertIn(idx, reason, f"{name} -> {reason}")
 
+    def test_special_is_not_in_roster_but_gate_allows(self):
+        """金种子杯不在 84 项里，所以 is_whitelisted=False；但 gate 必须放行。
+
+        saikr_whitelist_update.py 之前用 is_whitelisted 过滤，导致这条特批赛事
+        永远拿不到每日更新（2026-11-23 改为 gate）。
+        """
+        name = "湖南省“金种子杯”大学生创业大赛"
+        self.assertFalse(cw.is_whitelisted(name))
+        ok, reason = cw.gate(name)
+        self.assertTrue(ok, reason)
+
 
 class RosterShapeTest(unittest.TestCase):
     def test_roster_has_84_entries(self):
