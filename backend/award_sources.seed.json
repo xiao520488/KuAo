@@ -1,0 +1,175 @@
+{
+  "_comment": "获奖名单来源登记（award_ingest.py --seed 读取）。2026-11-23 来源普查结论：只登记「已亲手抓取验证可解析」的来源；扫描件/百度网盘/二维码一律不进，等人工或 OCR。",
+  "sources": [
+    {
+      "competition_id": 17,
+      "url": "http://www.ciscn.cn/upload/file/20260903/1788428135831218.xlsx",
+      "title": "第十九届（2026）全国大学生信息安全竞赛（作品赛）决赛获奖名单（官方公布）",
+      "source_kind": "official_notice",
+      "years": "2026",
+      "adapter": "xlsx_sheet",
+      "notes": "285 行 × 4 列，openpyxl 直读；公示版与公布版单元格逐格一致，只登公布版，避免重复计数。Rollback: 删 award_sources 行 + awards where source_url 为该 URL。",
+      "parse_spec": {
+        "sheet": "Sheet1",
+        "header_row": 0,
+        "columns": {
+          "作品名称": "title",
+          "参赛学校": "school",
+          "奖项": "award_grade",
+          "编号": "work_no"
+        },
+        "fixed": {"year": 2026, "session": "第19届"}
+      }
+    },
+    {
+      "competition_id": 13,
+      "url": "https://www.cnsoftbei.com/content-1-1363-1.html",
+      "title": "第十五届（2026）中国软件杯 全国总决赛一等奖获奖名单",
+      "source_kind": "official_notice",
+      "years": "2026",
+      "adapter": "html_table",
+      "notes": "正文 HTML 表格，7 列；「团队编号+队名」列按首个空格拆成队伍编号与作品名。",
+      "parse_spec": {
+        "columns": {
+          "赛题编号": "topic",
+          "学校": "school",
+          "队长": "members",
+          "队员1": "members",
+          "队员2": "members",
+          "指导教师": "advisor"
+        },
+        "split_first_space": {"团队编号+队名": ["team_code", "title"]},
+        "group_by": {"key": ["team_code"], "concat": ["members", "advisor"]},
+        "fixed": {"year": 2026, "session": "第15届", "award_grade": "一等奖"}
+      }
+    },
+    {
+      "competition_id": 13,
+      "url": "https://www.cnsoftbei.com/content-1-1362-1.html",
+      "title": "第十五届（2026）中国软件杯 全国总决赛二等奖获奖名单",
+      "source_kind": "official_notice",
+      "years": "2026",
+      "adapter": "html_table",
+      "notes": "139 行；空队员为 &nbsp;，解析后置空。",
+      "parse_spec": {
+        "columns": {
+          "赛题编号": "topic",
+          "学校": "school",
+          "队长": "members",
+          "队员1": "members",
+          "队员2": "members",
+          "指导教师": "advisor"
+        },
+        "split_first_space": {"团队编号+队名": ["team_code", "title"]},
+        "group_by": {"key": ["team_code"], "concat": ["members", "advisor"]},
+        "fixed": {"year": 2026, "session": "第15届", "award_grade": "二等奖"}
+      }
+    },
+    {
+      "competition_id": 13,
+      "url": "https://www.cnsoftbei.com/content-1-1361-1.html",
+      "title": "第十五届（2026）中国软件杯 全国总决赛三等奖获奖名单",
+      "source_kind": "official_notice",
+      "years": "2026",
+      "adapter": "html_table",
+      "notes": "443 行，页面约 299KB，必须整页下载解析（正文抽取器会截断）。",
+      "parse_spec": {
+        "columns": {
+          "赛题编号": "topic",
+          "学校": "school",
+          "队长": "members",
+          "队员1": "members",
+          "队员2": "members",
+          "指导教师": "advisor"
+        },
+        "split_first_space": {"团队编号+队名": ["team_code", "title"]},
+        "group_by": {"key": ["team_code"], "concat": ["members", "advisor"]},
+        "fixed": {"year": 2026, "session": "第15届", "award_grade": "三等奖"}
+      }
+    },
+    {
+      "competition_id": 7,
+      "url": "https://www.fwwb.org.cn/attached/file/20260827/20260827105027_16.pdf",
+      "title": "第十七届（2026）中国大学生服务外包创新创业大赛 全国赛获奖团队详细信息",
+      "source_kind": "official_notice",
+      "years": "2026",
+      "adapter": "pdf_table",
+      "notes": "103 页 13 列真表格；一队多行（合并单元格），必须 fill_down + group_by 按团队编号合并，否则 1479 队会写成 6446 条。",
+      "parse_spec": {
+        "mode": "table",
+        "columns": {
+          "竞赛类别": "track",
+          "奖项等级": "award_grade",
+          "团队编号": "team_code",
+          "团队名称": "title",
+          "参赛报名院校": "school",
+          "赛题名称": "topic",
+          "成员姓名": "members",
+          "指导老师": "advisor"
+        },
+        "fill_down": ["track", "award_grade", "team_code", "title", "school", "topic"],
+        "group_by": {"key": ["team_code"], "concat": ["members", "advisor"]},
+        "fixed": {"year": 2026, "session": "第17届"}
+      }
+    },
+    {
+      "competition_id": 10,
+      "url": "http://jsjds.blcu.edu.cn/system/_content/download.jsp?urltype=news.DownloadAttachUrl&owner=1825439128&wbfileid=088651D8A158F6C09AFA813354DE2433",
+      "title": "2025年（第18届）中国大学生计算机设计大赛 评审结果公示名单",
+      "source_kind": "official_notice",
+      "years": "2025",
+      "adapter": "pdf_table",
+      "notes": "vsb9 站点：附件裸 GET 必撞「请输入验证码下载附件」，必须先 GET 文章页建会话 + 带 Referer，见 bootstrap_url/referer。189 页 8 列 3623 行。",
+      "parse_spec": {
+        "mode": "table",
+        "bootstrap_url": "http://jsjds.blcu.edu.cn/info/1043/2424.htm",
+        "referer": "http://jsjds.blcu.edu.cn/info/1043/2424.htm",
+        "columns": {
+          "大类名称": "track",
+          "拟评奖项": "award_grade",
+          "作品编号": "work_no",
+          "作品名称": "title",
+          "省份": "province",
+          "学校名称": "school",
+          "作者": "members",
+          "指导教师": "advisor"
+        },
+        "fixed": {"year": 2025, "session": "第18届"}
+      }
+    },
+    {
+      "competition_id": 21,
+      "url": "http://socoss.socchina.net/file/ueditor/image/20260824/f66b564847bb484388518923daf853ef.pdf",
+      "title": "第九届（2026）全国大学生嵌入式芯片与系统设计竞赛 应用赛道全国总决赛获奖名单",
+      "source_kind": "official_notice",
+      "years": "2026",
+      "adapter": "pdf_table",
+      "notes": "67 页电子版 PDF（有文字层），但合并单元格会把表抽成 9 列，故用 lines 模式：正则 ^编号 学校 队名$，奖项取段标题。",
+      "parse_spec": {
+        "mode": "lines",
+        "row_regex": "^(?P<work_no>\\d{4,6})\\s+(?P<school>\\S+)\\s+(?P<title>\\S.*)$",
+        "section_regex": "^(?:全国总决赛)?(一等奖|二等奖|三等奖|最佳工程奖|最佳创意奖)$",
+        "dedupe_key": ["title", "school"],
+        "fixed": {"year": 2026, "session": "第9届"}
+      }
+    },
+    {
+      "competition_id": 60,
+      "url": "https://www.mcm.edu.cn/upload_cn/node/799/j7YmQFsf47493bfdf0368e34fb3dfa0f306cf934.pdf",
+      "title": "2026 高教社杯全国大学生数学建模竞赛获奖名单",
+      "source_kind": "official_notice",
+      "years": "2026",
+      "adapter": "pdf_table",
+      "notes": "45 页有文字层 PDF；这张表没有表头，列位固定（序号/组别/省份/学校/队员×3/指导教师），奖项只在「本科组二等奖」「高职高专组一等奖」这类段标题里，且首页（序号 1-21）是扫描图，故默认段=本科组一等奖。",
+      "parse_spec": {
+        "mode": "table",
+        "positional": ["seq", "group", "province", "school", "members", "members", "members", "advisor"],
+        "section_regex": "((?:本科组|高职高专组)?(?:一等奖|二等奖|三等奖))",
+        "section_default": "本科组一等奖",
+        "title_template": "{school}·{members}",
+        "dedupe_key": ["title", "school", "members"],
+        "fixed": {"year": 2026}
+      }
+    }
+  ]
+}

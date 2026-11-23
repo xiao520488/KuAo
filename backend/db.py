@@ -1915,6 +1915,186 @@ def delete_award(award_id: int) -> bool:
 
 
 # ============================================================
+# 九-B、award_sources：获奖名单来源登记表
+# ============================================================
+# 设计口径（2026-11-23，S1 获奖作品补全）：
+#   * 一行 = 一个「赛事 × 公示 URL」，是 award_ingest.py 的**唯一配置源**；
+#     抓哪个页面、用哪个适配器、哪些列映射成 title/school/grade，全在
+#     parse_spec（JSON）里，改解析口径只改数据，不改代码。
+#   * 之所以落库而不放代码常量：来源会 404、会改版、会新增一届，
+#     运维时希望「后台改一行」而不是「改代码重新部署」。
+#   * (competition_id, url) 唯一，重复注册只更新、不新增行。
+#   * 老库（competitions.db）不会重跑 schema_v2.sql，故这里做一次幂等建表。
+
+_AWARD_SOURCE_WRITABLE = (
+    "competition_id", "url", "title", "source_kind", "years",
+    "adapter", "parse_spec", "enabled", "notes",
+)
+
+AWARD_SOURCE_KINDS = ("official_notice", "official_gallery", "saikr", "news")
+AWARD_SOURCE_ADAPTERS = ("html_table", "xlsx_sheet", "docx_table", "pdf_table")
+AWARD_SOURCE_STATUSES = ("ok", "dry_ok", "no_data", "failed", "skipped")
+
+
+def ensure_award_sources(db_path: Optional[str] = None) -> bool:
+    """幂等建 award_sources 表；建过返回 False，本次新建返回 True。"""
+    with get_conn(db_path) as conn:
+        if _table_exists(conn, "award_sources"):
+            return False
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS award_sources (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                competition_id  INTEGER NOT NULL REFERENCES competitions (id) ON DELETE CASCADE,
+                url             TEXT    NOT NULL,
+                title           TEXT,
+                source_kind     TEXT    NOT NULL DEFAULT 'official_notice',
+                years           TEXT,
+                adapter         TEXT    NOT NULL,
+                parse_spec      TEXT    NOT NULL DEFAULT '{}',
+                enabled         INTEGER NOT NULL DEFAULT 1,
+                last_fetched_at TEXT,
+                last_status     TEXT,
+                last_rows       INTEGER NOT NULL DEFAULT 0,
+                last_error      TEXT,
+                notes           TEXT,
+                created_at      TEXT    NOT NULL DEFAULT (datetime('now', 'localtime')),
+                updated_at      TEXT    NOT NULL DEFAULT (datetime('now', 'localtime'))
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_award_sources_comp_url
+                ON award_sources (competition_id, url);
+            CREATE INDEX IF NOT EXISTS idx_award_sources_comp
+                ON award_sources (competition_id, enabled);
+            """
+        )
+        return True
+
+
+def _award_source_row_to_dict(row) -> dict:
+    d = dict(row)
+    try:
+        d["parse_spec_obj"] = json.loads(d.get("parse_spec") or "{}")
+    except (TypeError, ValueError):
+        d["parse_spec_obj"] = {}
+    return d
+
+
+def upsert_award_source(data: dict, db_path: Optional[str] = None) -> int:
+    """按 (competition_id, url) 新增或更新一条来源登记，返回行 id。
+
+    data 里不属于 _AWARD_SOURCE_WRITABLE 的键被忽略；parse_spec 允许传 dict。
+    更新时只覆盖传入的字段，未传的保留原值（避免运维时误清空 parse_spec）。
+    """
+    if not isinstance(data, dict):
+        raise TypeError("data must be a dict")
+    for key in ("competition_id", "url", "adapter"):
+        if not data.get(key):
+            raise ValueError(f"{key} is required")
+    if data["adapter"] not in AWARD_SOURCE_ADAPTERS:
+        raise ValueError(
+            f"adapter 必须是 {AWARD_SOURCE_ADAPTERS} 之一，收到 {data['adapter']!r}"
+        )
+    kind = data.get("source_kind") or "official_notice"
+    if kind not in AWARD_SOURCE_KINDS:
+        raise ValueError(f"source_kind 必须是 {AWARD_SOURCE_KINDS} 之一，收到 {kind!r}")
+
+    ensure_award_sources(db_path)
+    payload = {}
+    for key in _AWARD_SOURCE_WRITABLE:
+        if key not in data:
+            continue
+        val = data[key]
+        if key == "parse_spec":
+            val = val if isinstance(val, str) else json.dumps(val, ensure_ascii=False)
+        if key == "enabled":
+            val = 1 if val else 0
+        payload[key] = val
+    payload.setdefault("source_kind", kind)
+
+    with get_conn(db_path) as conn:
+        existing = conn.execute(
+            "SELECT id FROM award_sources WHERE competition_id = ? AND url = ?",
+            (int(payload["competition_id"]), payload["url"]),
+        ).fetchone()
+        if existing:
+            sets = ", ".join(f"{k} = ?" for k in payload)
+            conn.execute(
+                f"UPDATE award_sources SET {sets}, "
+                "updated_at = datetime('now', 'localtime') WHERE id = ?",
+                [*payload.values(), existing["id"]],
+            )
+            return int(existing["id"])
+        cols = ", ".join(payload)
+        marks = ", ".join("?" * len(payload))
+        cur = conn.execute(
+            f"INSERT INTO award_sources ({cols}) VALUES ({marks})",
+            list(payload.values()),
+        )
+        return int(cur.lastrowid)
+
+
+def get_award_source(source_id: int, db_path: Optional[str] = None) -> Optional[dict]:
+    """按 id 取一条来源登记；不存在返回 None。"""
+    ensure_award_sources(db_path)
+    with get_conn(db_path) as conn:
+        row = conn.execute(
+            "SELECT * FROM award_sources WHERE id = ?", (int(source_id),)
+        ).fetchone()
+    return _award_source_row_to_dict(row) if row else None
+
+
+def list_award_sources(competition_id: Optional[int] = None,
+                       enabled_only: bool = False,
+                       db_path: Optional[str] = None) -> list:
+    """列出来源登记（可按赛事过滤），按赛事 id、来源 id 升序。"""
+    ensure_award_sources(db_path)
+    sql = "SELECT * FROM award_sources WHERE 1 = 1"
+    params: list = []
+    if competition_id is not None:
+        sql += " AND competition_id = ?"
+        params.append(int(competition_id))
+    if enabled_only:
+        sql += " AND enabled = 1"
+    sql += " ORDER BY competition_id, id"
+    with get_conn(db_path) as conn:
+        rows = conn.execute(sql, params).fetchall()
+    return [_award_source_row_to_dict(r) for r in rows]
+
+
+def delete_award_source(source_id: int, db_path: Optional[str] = None) -> bool:
+    """删除一条来源登记；有行被删返回 True。"""
+    ensure_award_sources(db_path)
+    with get_conn(db_path) as conn:
+        cur = conn.execute(
+            "DELETE FROM award_sources WHERE id = ?", (int(source_id),)
+        )
+        return cur.rowcount > 0
+
+
+def mark_award_source_fetch(source_id: int, status: str, *,
+                            rows: int = 0, error: Optional[str] = None,
+                            db_path: Optional[str] = None) -> bool:
+    """记录一次抓取结果（状态 / 本次解析行数 / 错误原文）。
+
+    status 只允许 AWARD_SOURCE_STATUSES；error 截断到 500 字，避免把整段
+    HTML 堆进 last_error。返回是否有行被更新。
+    """
+    if status not in AWARD_SOURCE_STATUSES:
+        raise ValueError(
+            f"status 必须是 {AWARD_SOURCE_STATUSES} 之一，收到 {status!r}"
+        )
+    ensure_award_sources(db_path)
+    with get_conn(db_path) as conn:
+        cur = conn.execute(
+            "UPDATE award_sources SET last_status = ?, last_rows = ?, last_error = ?, "
+            "last_fetched_at = datetime('now', 'localtime'), "
+            "updated_at = datetime('now', 'localtime') WHERE id = ?",
+            (status, int(rows), (error or None) and str(error)[:500], int(source_id)),
+        )
+        return cur.rowcount > 0
+
+
+# ============================================================
 # 十、ai_analysis_cache：AI 分析结果全局缓存
 # ============================================================
 # 目的：单作品深度解析 / 赛事共性分析的结果按「作品 / 赛事」全局落库，

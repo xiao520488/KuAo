@@ -175,7 +175,54 @@ python crawler_official_awards.py --source ncss --apply
   `sampled_ids` 恒为 24 个，模型只能引用样本内 id。
 - 指纹缓存沿用原机制：`PROMPT_VER` 升到 `v5` 后旧缓存自然失效一次，之后同样输入不再重复扣费。
 
+### 0.9 获奖名单第二站：声明式适配器 `award_ingest.py`（2026-11-23）
+
+> slimming 之后没有专用爬虫了：名单来源登记在 `award_sources` 表，`award_ingest.py`
+> 按 `adapter + parse_spec`（JSON）解析。**加一个赛事 = 加一行登记，不改代码。**
+
+**命令（cwd = backend）**
+```bash
+# 看已登记来源与上次状态
+python award_ingest.py --list
+
+# 从 seed 注册/更新来源（幂等，(competition_id,url) 唯一）
+python award_ingest.py --seed
+
+# 演练（默认就是演练：只抓、只打印，不写库）
+python award_ingest.py --source-id 7 --print-rows 5
+
+# 入库（写前自动 backup_db；--approve 可直接 approved，默认 pending）
+python award_ingest.py --all --apply
+
+# 临时登记一个新站点（配合 --spec-file 调试 parse_spec）
+python award_ingest.py --add --competition-id 17 --url https://… --adapter xlsx_sheet \
+    --spec-file /tmp/spec.json --print-rows 3
+```
+
+**四个适配器**：`html_table`（正文表格）、`xlsx_sheet`、`docx_table`、`pdf_table`。
+`pdf_table` 的 `mode`：`table`（pdfplumber 抽表，段标题按 y 坐标"粘"到后续行/页）与
+`lines`（逐行正则 + 段标题，专治合并单元格把列冲乱，如嵌入式芯片竞赛）。
+
+**parse_spec 常用键**：`columns`（源表头→语义字段）、`extra_columns`（拼进 summary）、
+`fill_down`（合并单元格向下填充）、`group_by`（一队多行合并）、`split_first_space`
+（"团队编号+队名"拆列）、`fixed`（year/session/award_grade）、`section_regex` +
+`section_default`（段标题→奖项）、`positional`（无表头时按列位）、`title_template`
+（无作品名时用 `{school}·{members}` 拼）、`bootstrap_url` + `referer`（vsb9 的
+download.jsp 必须先建会话，否则撞验证码页）。
+
+**口径护栏**
+- 扫描件（PDF 无文字层）一律 `failed` + `last_error` 记页数，**不 OCR、不猜**；
+- `content_hash = sha1(赛事|届次|年份|学校|作品名|奖项|赛道)`，与历史数据同一口径；
+- 写库默认 `pending`：注意 `db.list_awards_by_competition` 只过滤 `rejected`，
+  所以 pending **是前台可见的**（这是既有产品口径，不是 bug）；
+- `--apply` 前自动 `backup_db.make_backup`，失败只警告不阻断。
+
+**2026-11-23 实际入库**：服创 #7 1,479 / 计设 #10 3,623 / 软件杯 #13 603 /
+信安 #17 285 / 嵌入式 #21 1,200 / 数模 #60 1,973 = **9,163 条**，六个赛事的
+奖项分布与官网正文自述逐项吻合。来源普查证据在 `out/award_survey/cid-*.md`。
+
 ---
+
 ## 一、架构、数据契约与文件清单
 ### 1.1 三条数据流
 - **新闻获奖**：`crawler_news.py` 抓列表/详情 → `llm.chat_json` 抽奖 → 写 `awards`（按 `source_url` 去重，`content_hash` 唯一索引兜底；匹配不到赛事自动建占位）。

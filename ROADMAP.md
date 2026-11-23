@@ -99,7 +99,7 @@
 | 指标 | 现在 | 目标 | 期限 |
 |---|---|---|---|
 | 完全无日期的赛事 | 26 | 0（无解的人工标注"官方未公布"） | 2 周 |
-| 有获奖作品的赛事 | 17 | 45（T1+T2 全部） | 6 周 |
+| 有获奖作品的赛事 | 9（2026-11-23：真实 5 → 9，+6 个赛事 / +9,163 条） | 45（T1+T2 全部） | 6 周 |
 | 有"作品级"字段的获奖记录 | ~0 | ≥3,000 条（T1 十赛事全覆盖） | 6 周 |
 | 赛事总量 | 85 = 84 项白名单 + 金种子杯（**不扩容**） | 保持 84/84 全覆盖 | — |
 | 覆盖 `last_checked_at` | 49 | 100% | 4 周 |
@@ -156,31 +156,61 @@
 
 **先做 ① 和 ②**：把 T1 十个赛事的名单先补齐（净增最快），再针对有作品库的 3–4 个赛事做 ③。
 
-**新工具：`award_ingest.py`（尚未存在，需要新建）**
+**新工具：`award_ingest.py`（2026-11-23 已上线）+ `award_sources` 表**
 
 ```
-输入：--url / --file / --competition-id --year
-流程：抓取 → 解析（HTML 表格 / PDF / Excel）→ 归一化（title/team/award_grade/year）
-      → LLM 补 summary（可选）→ 去重（现有 content_hash 唯一索引）
-      → 写 review_status='pending' → 后台审核 → approved 才进前台
-输出：入库条数 / 跳过条数 / 失败原因
+输入：--seed（读 award_sources.seed.json）/ --source-id / --all
+流程：抓取 → 按 adapter 解析（html_table / xlsx_sheet / docx_table / pdf_table）
+      → 归一化（columns 映射 / 分段标题→奖项 / 合并单元格 fill_down / 一队多行 group_by）
+      → 去重（content_hash 唯一索引）→ 写 awards（默认 review_status='pending'）
+输出：每个来源的 解析/去重/写入/跳过 行数 + award_sources.last_status
 ```
 
-配套新表：
+设计取舍：**不做通用爬虫，做声明式适配器**。抓哪个页面、哪一列映射成什么字段、
+奖项从哪儿来，全在 `award_sources.parse_spec`（JSON）里——官网改版、换一届，
+只改数据库一行，不改代码。扫描件（无文字层 PDF）一律报 `failed` 并记 `last_error`，
+**不做 OCR、不猜内容**，等人工或离线处理。
+
+配套新表（`schema_v2.sql` 第 15 节，`db.py` 九-B 段）：
 
 ```sql
--- 获奖名单来源登记表：谁在哪个 URL 公示了哪一年的名单
 CREATE TABLE award_sources (
-  id INTEGER PRIMARY KEY,
-  competition_id INTEGER NOT NULL,
-  url TEXT NOT NULL,
-  source_kind TEXT,          -- official_notice / official_gallery / saikr / news
-  years TEXT,                -- '2024,2025'
-  last_fetched_at TEXT,
-  last_status TEXT,          -- ok / failed / no_data
-  notes TEXT
+  id, competition_id, url, title, source_kind, years,
+  adapter,                 -- html_table / xlsx_sheet / docx_table / pdf_table
+  parse_spec,              -- JSON：columns / fixed / section_regex / fill_down / group_by …
+  enabled, last_fetched_at, last_status, last_rows, last_error, notes
 );
+CREATE UNIQUE INDEX ux_award_sources_comp_url ON award_sources (competition_id, url);
 ```
+
+**执行记录（2026-11-23，来源普查 → 入库 9,163 条）**
+
+先做「获奖名单来源普查」：10 个 T1 赛事各派一个核查员，实操抓取、验证可解析，
+产物在 `out/award_survey/cid-*.md`。结论只有 6 个赛事能当天自动化入库：
+
+| 赛事 | 来源形态 | 入库 | 官方口径校验 |
+|---|---|---|---|
+| 服创 #7 | 官网公告 PDF（13 列真表格，一队多行） | 1,479 | 一/二/三等奖 50/288/1141 对照公告一致 |
+| 计设 #10 | vsb9 附件 PDF（8 列，需 cookie+Referer） | 3,623 | 147+989+2487 与公示正文一致 |
+| 软件杯 #13 | 正文 HTML 表格 ×4 页 | 603 | 21+139+443 |
+| 信安 #17 | 官网 xlsx 附件 | 285 | 60+90+120+15 |
+| 嵌入式 #21 | PDF lines 模式（合并单元格冲乱 9 列） | 1,200 | 189+373+638 与正文完全一致（35 条最佳奖去重） |
+| 数模 #60 | PDF table 模式 + 段标题→奖项 | 1,973 | 各段与标题自述名次差 ≤2 |
+
+**仍需人工/OCR 的 4 个**（已确认不是抓取姿势问题）：挑战杯 #2（61 页扫描 PDF）、
+中国机器人大赛 #34（多数扫描 PDF）、CURC #71（中文文本层是坏 CID，需 OCR）、
+系统能力 #14（2026 五份名单全为扫描件；2025 届可解析，留待下一轮）。
+
+**顺带清掉的脏数据**：库内 47 条 `source_type='mock'` 演示行（"四足机器人…/机器人方向第2组"）
+一直是 `approved`，会进前台与 AI 素材，本次统一标 `rejected`（可回滚，未删除）。
+清理后「有获奖作品的赛事」从 17 掉到 **9** —— 那 17 里有 12 个赛事只有 mock 行，
+即之前的覆盖率是虚的；真实口径现在是 9/85，其中 6 个是本次入库的。
+
+**遗留（下一轮先做，不用再查来源）**：
+- 4 个 OCR 赛事（#2 / #34 / #71 / #14-2026）——需要 OCR 管线，不是抓取问题；
+- 系统能力 #14 的 **2025 届**三份 PDF 有文字层，可以直接入库（本轮没做，只是配额问题）；
+- 受 mock 影响生成的 AI 攻略/洞察（如 #21 正文里"特等奖项目…"）需要重生成，否则
+  页面文字仍在描述假数据。
 
 **字段补齐优先级**（对 AI 分析收益排序）：`summary`（作品一句话）→ `source_url`（已有 99.7%）→ 封面图 → `tech_stack` → `detail_md`。
 
@@ -294,7 +324,7 @@ CREATE TABLE award_sources (
 | 过程指标 | 现在 | 目标 |
 |---|---|---|
 | 日期覆盖率 | 59/85（69%） | 100% |
-| 获奖作品覆盖率 | 17/85（20%） | ≥53%（45/85） |
+| 获奖作品覆盖率 | 9/85（11%，2026-11-23：+6 个赛事 / +9,163 条；旧口径 17 含 12 个赛事的 mock 演示行） | ≥53%（45/85） |
 | 作品级字段覆盖 | ~0 | ≥3,000 条 |
 | 赛事总量 | 85（84 项 + 金种子杯，**不扩容**） | 保持 84/84 |
 | 搜索结果收录页数 | 0（无 sitemap） | ≥200 |

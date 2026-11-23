@@ -39,3 +39,16 @@ ginx 均 active；本地仓库干净（未跟踪的只有 out/、shots/、erify
 3. ROADMAP 里的 P0：截止提醒（邮件基建）、收藏云同步、SEO（线上确认无 robots.txt / sitemap.xml）。
 **可复跑脚本**（都在 out/，只读，scp 到 /tmp 后用 PYTHONPATH=/root/KuAo/backend 跑）：data_gap_survey.py（数据体检）、whitelist_audit.py（赛事边界，必须 allowed=85 denied=0）、queue_check.py（事实队列）、pply_dates.py --dry-run（批量写日期）。
 **坑**：PowerShell 直接 ssh kuao "python -c '...'" 引号必炸 → 一律写成 .py/.sh 文件 scp 过去再跑；读中文文件用 read 工具，不要 Get-Content。
+
+## 2026-11-23 S1 获奖作品：6 个赛事 / 9,163 条上线
+
+**做了什么**：先「来源普查」再写工具（ROADMAP 2.3 原计划的顺序是对的）。10 个 T1 赛事各派一个核查员实抓验证（产物 `out/award_survey/cid-*.md`），只有 6 个能当天自动化，然后写声明式工具 `award_ingest.py` + 新表 `award_sources` 入库。
+**结果**：服创 1479 / 计设 3623 / 软件杯 603 / 信安 285 / 嵌入式 1200 / 数模 1973，上线已验证（`GET /api/competitions/21/awards` → total=1200）。奖项分布与官网正文自述逐项吻合（如服创 50/288/1141、计设 147/989/2487）。
+**设计口径（以后加赛事照这个来）**：不加爬虫，加一行 `award_sources`（adapter + parse_spec JSON）；四个 adapter：html_table / xlsx_sheet / docx_table / pdf_table（mode=table 或 lines）；扫描件一律 failed 不 OCR。
+**关键坑（不看代码想不起来）**：
+- 计数对不上先查「合并单元格」：服创 103 页一队多行，不 fill_down+group_by 会把 1479 队写成 6446 条；PDF 段标题只印在段首页，奖项必须按行 y 坐标粘住跨页传递（否则数模 1900 多条全落到第一段）。
+- vsb9 站点（计设 jsjds.blcu.edu.cn）附件裸 GET 必撞「请输入验证码」，必须先 GET 文章页建会话再带 Referer → parse_spec 的 `bootstrap_url` / `referer`。
+- 前端与 AI 的「有获奖作品」判断只看 `review_status<>'rejected'`，**pending 是可见的**；想"审核后才上线"必须改代码，别以为写 pending 就挡住了。
+- 服务器 venv 缺 pdfplumber/openpyxl/python-docx（requirements 有但没装），首次 `--all --apply` 只成功 HTML 那个；`pip install` 后重跑幂等（软件杯 603 条全部 skipped 不重复）。
+**清掉的脏数据**：47 条 `source_type='mock'`（"四足机器人…/机器人方向第2组"）原为 approved，会进前台和 AI 素材，已全部标 rejected（可回滚）。真实覆盖率因此从"17"变 **9/85** —— 旧的 17 里有 12 个赛事只有 mock。
+**下一步（不用再查来源）**：① 系统能力 #14 的 2025 届三份 PDF 有文字层，直接登记即可；② 4 个 OCR 赛事（#2 挑战杯 61 页扫描、#34、#71 坏 CID、#14-2026）；③ 重生成受 mock 影响的 AI 攻略/洞察（#21 正文仍在描述假数据）；④ `award_sources` 不在 sync_prod_safe 白名单，跨机同步靠 `--seed` 在服务器自建。

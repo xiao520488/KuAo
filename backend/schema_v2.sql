@@ -388,3 +388,38 @@ CREATE TABLE IF NOT EXISTS competition_fact_ledger (
 
 CREATE UNIQUE INDEX IF NOT EXISTS ux_cfl_competition_field
     ON competition_fact_ledger (competition_id, field);
+
+
+-- -----------------------------------------------------------------------------
+-- 15. award_sources -- 获奖名单「来源登记表」（award_ingest.py 的唯一配置源）
+--    一行 = 一个「哪个赛事、从哪个 URL、上一届哪一年、用什么适配器解析」。
+--    parse_spec 是 JSON（列映射 / 分段标题→奖项 / 固定值 / 清洗规则），
+--    改解析口径只改这一列，不动代码。
+--    last_status: ok（解析并入库成功）/ dry_ok（只演练）/ no_data（页面无表格）
+--                 failed（抓取或解析异常，last_error 存原文）/ skipped（无变更）
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS award_sources (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    competition_id  INTEGER NOT NULL REFERENCES competitions (id) ON DELETE CASCADE,
+    url             TEXT    NOT NULL,
+    title           TEXT,
+    -- source_kind: official_notice / official_gallery / saikr / news
+    source_kind     TEXT    NOT NULL DEFAULT 'official_notice',
+    years           TEXT,
+    -- adapter: html_table / xlsx_sheet / docx_table / pdf_table
+    adapter         TEXT    NOT NULL,
+    parse_spec      TEXT    NOT NULL DEFAULT '{}',
+    enabled         INTEGER NOT NULL DEFAULT 1,
+    last_fetched_at TEXT,
+    last_status     TEXT,
+    last_rows       INTEGER NOT NULL DEFAULT 0,
+    last_error      TEXT,
+    notes           TEXT,
+    created_at      TEXT    NOT NULL DEFAULT (datetime('now', 'localtime')),
+    updated_at      TEXT    NOT NULL DEFAULT (datetime('now', 'localtime'))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS ux_award_sources_comp_url
+    ON award_sources (competition_id, url);
+CREATE INDEX IF NOT EXISTS idx_award_sources_comp
+    ON award_sources (competition_id, enabled);
