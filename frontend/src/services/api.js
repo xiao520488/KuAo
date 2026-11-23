@@ -292,20 +292,21 @@ export function searchCompetitionList(query, limit = 60) {
 }
 
 /**
- * 关键词检索竞赛（带匹配分，搜索页专用）
+ * 关键词检索竞赛（带匹配分与强弱判定，搜索页专用）
  *
  * GET /api/competitions/search/scored?q=机器人&limit=60
  *
- * 返回 { q, total, best_score, items: [{ ...竞赛字段, match_score }] }。
- * best_score < 0.6 说明只弱命中了类别/简介，前端据此再补一次 AI 语义检索。
+ * 返回 { q, total, best_score, weak, weak_threshold, items: [{ ...竞赛字段, match_score }] }。
+ * `weak` 由后端按 db.SEARCH_WEAK_SCORE 判定（只命中类别/简介时为 true），
+ * 前端不再自己写死阈值；为 true 时再补一次 AI 语义检索。
  *
  * @param {string} query 搜索词
  * @param {number} [limit=60] 最多返回条数
- * @returns {Promise<{ items: Array, bestScore: number }>}
+ * @returns {Promise<{ items: Array, bestScore: number, weak: boolean }>}
  */
 export function searchCompetitionListScored(query, limit = 60) {
   const q = typeof query === 'string' ? query.trim() : ''
-  if (!q) return Promise.resolve({ items: [], bestScore: 0 })
+  if (!q) return Promise.resolve({ items: [], bestScore: 0, weak: false })
   return api
     .get('/competitions/search/scored', { params: { q, limit } })
     .then((data) => {
@@ -317,7 +318,9 @@ export function searchCompetitionListScored(query, limit = 60) {
       const best = Number(data?.best_score)
       return {
         items,
-        bestScore: Number.isFinite(best) ? best : 0
+        bestScore: Number.isFinite(best) ? best : 0,
+        // 后端没回 weak（老版本）时按 0 条处理，避免误触发 AI
+        weak: data?.weak === true
       }
     })
 }

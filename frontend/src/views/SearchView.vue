@@ -50,9 +50,6 @@ onBeforeUnmount(() => {
  */
 const INTENT_HINTS = /(我想|想找|想参加|适合|能不能|可以参加|有没有|推荐|哪些|什么|如何|怎么|准备|方向|寒假|暑假|大一|大二|大三|文科|理科|零基础)/
 
-/** 低于这个分说明关键词只弱命中了类别/简介，需要补一次语义检索 */
-const WEAK_SCORE = 0.6
-
 function looksLikeIntent(q) {
   return q.length >= 10 || INTENT_HINTS.test(q)
 }
@@ -97,13 +94,11 @@ async function runSearch(rawQuery) {
   semanticError.value = ''
 
   try {
-    const { items: kwItems, bestScore } = await searchCompetitionListScored(q)
+    const { items: kwItems, weak } = await searchCompetitionListScored(q)
     let items = kwItems
 
-    // 弱命中口径：只落在类别（0.55）/简介（0.35）说明关键词没抓住用户想找的那一场，
-    // 典型如「大挑」曾被判给了简介里提到它的另一场比赛。这类查询值得再问一次 AI。
-    const weak = kwItems.length > 0 && bestScore < WEAK_SCORE
-
+    // weak 由后端判定（db.SEARCH_WEAK_SCORE）：有结果但最高分只落在类别/简介，
+    // 说明关键词没抓住用户想找的那一场，典型如「大挑」曾被判给简介里提到它的另一场。
     if ((!kwItems.length || weak) && looksLikeIntent(q)) {
       try {
         const res = await searchCompetitions(q)

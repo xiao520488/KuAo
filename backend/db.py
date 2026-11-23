@@ -1063,6 +1063,12 @@ _SYNONYMS = {
 }
 
 
+# 关键词「弱命中」阈值（产品口径 2026-11-23）：低于它说明只命中了类别（0.55）
+# 或简介（0.35），字面没抓住用户想找的那一场 → 搜索页会再补一次 AI 语义检索。
+# 唯一真源在这里；前端不再自己写死（/api/competitions/search/scored 直接回传 weak）。
+SEARCH_WEAK_SCORE = 0.6
+
+
 def search_competitions(query: str, limit: int = 60) -> list:
     """按关键词检索竞赛（名称 > 类别 > 摘要 逐级命中，支持多词叠加）。
 

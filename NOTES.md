@@ -160,3 +160,9 @@ outers.ai._keyword_search 三处打分统一接入别称；另加 EXTRA_ALIASES�
 
 **阈值**：0.6 写在 SearchView.vue 的 WEAK_SCORE，与后端 /scored 描述里的一致；改一处要同步另一处。
 **验证**：	ests/test_search_scored.py 6 例（含「只命中简介 → 分数 < 0.6」「best_score 取全批最高」「空查询」），全量 81 passed / 3 skipped（缺 fastapi/chromadb 的本机项线上会跑）。线上：「大挑」仍是大挑在前且不触发 AI；「我想参加奥林匹克」弱命中→ 8 条 AI 结果领跑。
+
+### 2026-11-23 弱命中阈值收到后端一处
+
+原来的 0.6 写在前端 SearchView.vue 的 WEAK_SCORE 里，改一次要重新构建前端。现在唯一真源是 db.SEARCH_WEAK_SCORE，/api/competitions/search/scored 直接回传 weak（是否弱命中）与 weak_threshold，前端只读不算。
+**口径细节**：0 命中时 weak=false——那是「没搜到」走另一条分支（空态/AI），不是「弱命中」；后端没回 weak 时前端也按 false 处理，避免老接口误触发 AI。
+**验证**：线上 /scored 三态正确——大挑 0.9/weak=false、奥林匹克 0.35/weak=true、量子织布机 0/weak=false；搜索页实测「大挑」2 条不调 AI、「我想参加奥林匹克」8 条带 AI 角标。

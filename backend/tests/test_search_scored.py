@@ -68,7 +68,11 @@ class ScoredEndpointTest(unittest.TestCase):
         db.init_db(self.path)
         db.DB_PATH, self._orig = self.path, db.DB_PATH
         db.add_competition({"name": NAME_XIAO, "category": "创新创业"})
-        db.add_competition({"name": NAME_DA, "category": "科技创新"})
+        cid_da = db.add_competition({"name": NAME_DA, "category": "科技创新"})
+        # 造一个「只出现在简介里」的词，用来验证 weak 判定
+        db.update_competition(cid_da, {
+            "summary": "被誉为大学生科技创新的“奥林匹克”盛会。",
+        })
 
         try:
             from routers.competitions import search_competitions_scored
@@ -86,12 +90,22 @@ class ScoredEndpointTest(unittest.TestCase):
         self.assertEqual(resp.total, len(resp.items))
         self.assertTrue(resp.items)
         self.assertGreaterEqual(resp.best_score, 0.9)
+        self.assertFalse(resp.weak)  # 强命中不该触发 AI 语义兜底
+        self.assertEqual(resp.weak_threshold, db.SEARCH_WEAK_SCORE)
         self.assertTrue(all(0.0 <= it.match_score <= 1.0 for it in resp.items))
+
+    def test_handler_flags_weak_hit(self):
+        """只命中简介 → weak=True，前端据此补 AI；阈值由后端一处给出。"""
+        resp = self._handler(q="奥林匹克", limit=10)
+        self.assertTrue(resp.items)
+        self.assertLess(resp.best_score, resp.weak_threshold)
+        self.assertTrue(resp.weak)
 
     def test_handler_best_score_on_empty(self):
         resp = self._handler(q="量子织布机", limit=10)
         self.assertEqual(resp.total, 0)
         self.assertEqual(resp.best_score, 0.0)
+        self.assertFalse(resp.weak)  # 0 命中不算弱命中，走另一条分支
 
 
 if __name__ == "__main__":

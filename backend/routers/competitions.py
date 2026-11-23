@@ -31,6 +31,7 @@ from db import get_guide_state as db_get_guide_state
 from db import list_awards_by_competition as db_list_awards_by_competition
 from db import count_awards_by_competition as db_count_awards_by_competition
 from db import PUBLIC_AWARDS_CAP
+from db import SEARCH_WEAK_SCORE
 from db import list_competitions as db_list_competitions
 from db import list_hot_competitions as db_list_hot_competitions
 from db import search_competitions as db_search_competitions
@@ -232,7 +233,15 @@ class ScoredSearchResponse(BaseModel):
     best_score: float = Field(
         0.0, ge=0.0, le=1.0,
         description=("最高匹配分。0.9+ 名称/别称命中，0.75 名称包含，"
-                     "0.55 只命中类别，0.35 只命中简介——低于 0.6 视为「弱命中」"),
+                     "0.55 只命中类别，0.35 只命中简介"),
+    )
+    weak: bool = Field(
+        False,
+        description=("是否为弱命中（有结果但 best_score < weak_threshold）。"
+                     "为 true 时前端可补一次 AI 语义检索"),
+    )
+    weak_threshold: float = Field(
+        0.0, ge=0.0, le=1.0, description="弱命中阈值，由后端统一给出，前端不要写死",
     )
     items: List[ScoredCompetition] = Field(default_factory=list)
 
@@ -240,28 +249,33 @@ class ScoredSearchResponse(BaseModel):
 @router.get(
     "/api/competitions/search/scored",
     response_model=ScoredSearchResponse,
-    summary="关键词检索竞赛（带匹配分）",
+    summary="关键词检索竞赛（带匹配分与强弱判定）",
     description=(
-        "与 /api/competitions/search 同一套打分，额外回传每条命中分与全批最高分。\n\n"
-        "搜索页据此判断是否需要补一次 AI 语义检索：`best_score < 0.6` 说明只是"
-        "弱命中（类别/简介），关键词结果可能不是用户想要的那一场。"
+        "与 /api/competitions/search 同一套打分，额外回传每条命中分、全批最高分，"
+        "以及后端判定的 `weak`（是否只是弱命中）。\n\n"
+        "搜索页据此决定是否补一次 AI 语义检索：`weak=true` 说明关键词只落在类别/简介上，"
+        "结果可能不是用户想要的那一场。阈值只维护在 `db.SEARCH_WEAK_SCORE` 一处。"
     ),
 )
 def search_competitions_scored(
     q: str = Query(..., min_length=1, description="搜索词，可含多个词，空格分隔"),
     limit: int = Query(60, ge=1, le=200, description="最多返回条数"),
 ) -> ScoredSearchResponse:
-    """关键词检索（带分，公开接口）。"""
+    """关键词检索（带分、带强弱判定，公开接口）。"""
     scored = db_search_competitions_scored(q, limit=limit)
     items = []
     for score, row in scored:
         comp = _row_to_competition(row).model_dump()
         comp["match_score"] = round(float(score), 4)
         items.append(comp)
+    best = round(max((s for s, _ in scored), default=0.0), 4)
     return ScoredSearchResponse(
         q=q,
         total=len(items),
-        best_score=round(max((s for s, _ in scored), default=0.0), 4),
+        best_score=best,
+        # 0 命中不算「弱命中」：那是另一条分支（前端直接走 AI 或给空态）
+        weak=bool(items) and best < SEARCH_WEAK_SCORE,
+        weak_threshold=SEARCH_WEAK_SCORE,
         items=items,
     )
 
