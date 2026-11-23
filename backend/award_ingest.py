@@ -616,6 +616,11 @@ def normalize_rows(raw_rows: Sequence[dict], spec: dict, source: dict) -> List[d
             if not rec.get("award_grade"):
                 rec["award_grade"] = grade
 
+        grade_allow = spec.get("grade_allow") or []
+        if grade_allow and (rec.get("award_grade") or "") not in grade_allow:
+            # 例外的「优秀组织奖」「机构奖」这类不是队伍奖，按白名单丢掉
+            continue
+
         if any(not rec.get(f) for f in drop_if_empty):
             continue
 

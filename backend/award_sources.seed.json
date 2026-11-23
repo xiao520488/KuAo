@@ -231,6 +231,86 @@
         "dedupe_key": ["title", "school", "award_grade"],
         "fixed": {"year": 2025}
       }
+    },
+    {
+      "competition_id": 59,
+      "url": "http://tjjmds.ai-learning.net/u/cms/tjjmds/202610/16180628ix3r.pdf",
+      "title": "第十二届（2026）全国大学生统计建模大赛全国总决赛获奖名单",
+      "source_kind": "official_notice",
+      "years": "2026",
+      "adapter": "pdf_table",
+      "notes": "67 页有文字层 PDF（68,951 字符），每页 1 张 8 列表；891 行与官方「90+174+627」逐项差 0。赛区/组别是合并单元格，必须 fill_down；drop_if_empty 用 work_no 可顺带丢掉 67 行重复表头、11 行公函正文和 6 行跨页碎片。",
+      "parse_spec": {
+        "mode": "table",
+        "columns": {
+          "序号": "work_no",
+          "参赛赛区": "province",
+          "组别": "category",
+          "参赛单位": "school",
+          "作品名称": "title",
+          "参赛队员": "members",
+          "指导老师": "advisor",
+          "获奖等级": "award_grade"
+        },
+        "fill_down": ["province", "category"],
+        "drop_if_empty": ["work_no"],
+        "dedupe_key": ["title", "school", "award_grade"],
+        "fixed": {"year": 2026, "session": "第十二届", "track": "国赛"}
+      }
+    },
+    {
+      "competition_id": 63,
+      "url": "https://oss.moocollege.com/27834/edit/wyJZRNm9_1793261641432.pdf",
+      "title": "第十九届（2026）全国大学生结构设计竞赛全国总决赛获奖名单",
+      "source_kind": "official_notice",
+      "years": "2026",
+      "adapter": "pdf_table",
+      "notes": "12 页有文字层 PDF，11 页各 1 张 6 列表（首页是红头文件）。表头只印一次且列序固定，故用 positional；名单没有作品名，用 title_template 拼「学校·成员」；末页 4 条「优秀组织奖」与表头行的奖项列不是一二三等奖，用 grade_allow 白名单一并滤掉；一行一队，不需要 fill_down/group_by。",
+      "parse_spec": {
+        "mode": "table",
+        "positional": ["work_no", "school", "members", "advisor", "领队", "award_grade"],
+        "title_template": "{school}·{members}",
+        "header_regex": "序号\\s*学校名称",
+        "grade_allow": ["一等奖", "二等奖", "三等奖", "总冠军（一等奖）",
+                        "二等奖(最佳创意奖)", "二等奖(最佳制作奖)"],
+        "dedupe_key": ["title", "school"],
+        "fixed": {"year": 2026, "session": "第十九届"}
+      }
+    },
+    {
+      "competition_id": 68,
+      "url": "https://wjhg.fltrp.com/c/2025-11-07/539719.shtml",
+      "title": "2025“外研社·国才杯”“理解当代中国”全国大学生外语能力大赛 国际传播综合能力赛项获奖名单",
+      "source_kind": "official_notice",
+      "years": "2025",
+      "adapter": "html_table",
+      "notes": "官方专题站静态 HTML 表 table.huojiangList，1103 行 × 3 列（奖项|姓名|学校），奖项逐行落格不需 section_regex。名单没有「作品名」，用 title_template 拼「学校·姓名」；同模板另有 12 个赛项页，后续按同一 spec 逐条登记。",
+      "parse_spec": {
+        "columns": {
+          "奖项": "award_grade",
+          "姓名": "members",
+          "学校": "school"
+        },
+        "title_template": "{school}·{members}",
+        "dedupe_key": ["title", "school", "award_grade"],
+        "fixed": {"year": 2025, "session": "2025",
+                  "track": "英语组·国际传播综合能力赛项", "category": "国赛"}
+      }
+    },
+    {
+      "competition_id": 67,
+      "url": "https://zhykt.oss-cn-shanghai.aliyuncs.com/ykt/ori/tvheau2qjbvaxgp7erfza/bFt5fyz2WP3AsNzF.pdf",
+      "title": "第八届（2024）全国大学生物流设计大赛获奖名单",
+      "source_kind": "official_notice",
+      "years": "2024",
+      "adapter": "pdf_table",
+      "notes": "第九届（2025）名单只在微信文章里（requests 直接撞验证码页），先降级登记可直连的第八届：7 页 PDF，p1-p2 是扫描图、p3-p7 有文字层，3 列 × 90 行 + 15 行专项奖。「团队名称」是「学校+队名」无分隔符，school 无法自动拆，保留在 title 里，不猜。",
+      "parse_spec": {
+        "mode": "table",
+        "columns": {"序号": "work_no", "团队名称": "title", "奖项": "award_grade"},
+        "dedupe_key": ["title", "award_grade"],
+        "fixed": {"year": 2024, "session": "第八届"}
+      }
     }
   ]
 }
