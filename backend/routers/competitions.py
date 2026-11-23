@@ -30,6 +30,7 @@ from db import get_competition as db_get_competition
 from db import get_guide_state as db_get_guide_state
 from db import list_awards_by_competition as db_list_awards_by_competition
 from db import count_awards_by_competition as db_count_awards_by_competition
+from db import PUBLIC_AWARDS_CAP
 from db import list_competitions as db_list_competitions
 from db import list_hot_competitions as db_list_hot_competitions
 from db import search_competitions as db_search_competitions
@@ -523,6 +524,8 @@ def list_competition_awards(
 
     rows = db_list_awards_by_competition(id, limit=limit, offset=offset)
     items = [_row_to_award(r) for r in rows]
-    # total 必须是库内真实总数（与 list 同一过滤口径），否则前端无法判断「还有没有更多」
-    total = db_count_awards_by_competition(id, exclude_rejected=True)
+    # total 与 list 同一过滤口径，并且不超过单场上限：否则前端「加载更多」
+    # 会一直翻到 300 条之后的空页（那些数据在库但按产品要求不上线）。
+    total = min(db_count_awards_by_competition(id, exclude_rejected=True),
+                PUBLIC_AWARDS_CAP)
     return AwardList(competition_id=id, total=total, items=items)

@@ -1307,22 +1307,58 @@ def _award_row_to_dict(row: sqlite3.Row, url_map: Optional[dict] = None) -> dict
     return d
 
 
+# ============================================================
+# 四、获奖作品（awards）——单场上线配额与奖项优先级
+# ============================================================
+# 单场赛事上线作品上限（产品要求 2026-11-23）：每场最多露出 300 条，
+# 按奖项等级优先级截断，保证高价值作品在前；库里数据不删。
+PUBLIC_AWARDS_CAP = 300
+
+# 奖项等级优先级（数字越小越靠前）：特等/总冠军/冠军 > 金/一等 > 银/二等
+# > 铜/三等 > 优胜/优秀/入围 > 其它。奖项文案在 85 个赛事里写法不统一
+# （「本科组一等奖」「金奖（冠军）」「总冠军（一等奖）」「二等奖(最佳创意奖)」），
+# 所以按关键词分层，不按字符串相等。
+_AWARD_GRADE_RANK_SQL = (
+    "CASE "
+    "WHEN award_grade LIKE '%特等%' OR award_grade LIKE '%总冠军%' "
+    "  OR award_grade LIKE '%冠军%' THEN 0 "
+    "WHEN award_grade LIKE '%金%' OR award_grade LIKE '%一等%' THEN 1 "
+    "WHEN award_grade LIKE '%银%' OR award_grade LIKE '%二等%' THEN 2 "
+    "WHEN award_grade LIKE '%铜%' OR award_grade LIKE '%三等%' THEN 3 "
+    "WHEN award_grade LIKE '%优胜%' OR award_grade LIKE '%优秀%' "
+    "  OR award_grade LIKE '%入围%' THEN 4 "
+    "ELSE 5 END"
+)
+
+
 def list_awards_by_competition(competition_id: int, limit: Optional[int] = None,
                               offset: int = 0) -> list:
-    """按竞赛 id 查询获奖作品列表（按年份倒序、id 升序）。
+    """按竞赛 id 查询获奖作品列表。
+
+    排序（2026-11-23 起）：**奖项等级优先级 → 年份倒序 → id 升序**。
+    单场上线作品数上限 ``PUBLIC_AWARDS_CAP``（300）条——超出只留最靠前的 300 条，
+    保证「金 > 银 > 铜」的高价值作品先露出（如数学建模 1,973 条只上线最高的一批）。
 
     过滤 review_status='rejected' 的人工拒绝脏数据（与路由文档约定一致）。
-    offset 与 limit 配合实现「加载更多」分页；offset 大于总数时返回空列表。
+    offset 与 limit 配合实现「加载更多」分页；offset 超出上限时返回空列表。
     """
+    offset = max(int(offset or 0), 0)
+    if offset >= PUBLIC_AWARDS_CAP:
+        return []
+    remaining = PUBLIC_AWARDS_CAP - offset
+    # 分页永远越不过上限：limit 不传时取到上限为止
+    limit = min(int(limit), remaining) if limit else remaining
+
     sql = ("SELECT * FROM awards WHERE competition_id = ? "
            "AND COALESCE(review_status, 'pending') <> 'rejected' "
-           "ORDER BY CASE WHEN year IS NULL THEN 1 ELSE 0 END ASC, "
+           "ORDER BY " + _AWARD_GRADE_RANK_SQL + " ASC, "
+           "CASE WHEN year IS NULL THEN 1 ELSE 0 END ASC, "
            "year DESC, id ASC")
     params: list = [competition_id]
     if limit or offset:
         sql += " LIMIT ? OFFSET ?"
         params.append(int(limit) if limit else -1)
-        params.append(max(int(offset or 0), 0))
+        params.append(offset)
     with get_conn() as conn:
         rows = conn.execute(sql, params).fetchall()
         url_map = _fetch_source_url_map(
