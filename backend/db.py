@@ -3998,6 +3998,40 @@ def decide_fact_staging(staging_id: int, status: str, *,
             raise ValueError("队列记录不存在")
 
 
+def _refresh_contest_months(conn, competition_id: int) -> None:
+    """按 contest_*_date 回填比赛月份轨（contest_start_month / contest_end_month）。
+
+    与 _refresh_reg_months 对称：官网常有「比赛在某月某日」的精确日期，但
+    contest_*_month 长期空着，详情页按月份兜底时就显示不出比赛时间。
+    """
+    row = conn.execute(
+        "SELECT contest_start_date, contest_end_date FROM competitions WHERE id = ?",
+        (int(competition_id),),
+    ).fetchone()
+    if row is None:
+        return
+
+    def _month(value):
+        text = str(value or "").strip()
+        if len(text) >= 7 and text[4] == "-" and text[5:7].isdigit():
+            return int(text[5:7])
+        return None
+
+    start = _month(row["contest_start_date"])
+    end = _month(row["contest_end_date"])
+    # 只更新推得出来的那一侧：只写开始日时不能把已有的比赛结束月份抹掉。
+    if start is not None:
+        conn.execute(
+            "UPDATE competitions SET contest_start_month = ? WHERE id = ?",
+            (start, int(competition_id)),
+        )
+    if end is not None:
+        conn.execute(
+            "UPDATE competitions SET contest_end_month = ? WHERE id = ?",
+            (end, int(competition_id)),
+        )
+
+
 def _refresh_reg_months(conn, competition_id: int) -> None:
     """按 reg_*_date 回填月份轨（reg_start_month / reg_end_month / reg_cross_year）。
 
@@ -4019,13 +4053,22 @@ def _refresh_reg_months(conn, competition_id: int) -> None:
 
     start = _month(row["reg_start_date"])
     end = _month(row["reg_end_date"])
-    if start is None or end is None:
-        return
-    conn.execute(
-        "UPDATE competitions SET reg_start_month = ?, reg_end_month = ?, "
-        "reg_cross_year = ? WHERE id = ?",
-        (start, end, 1 if end < start else 0, int(competition_id)),
-    )
+    # 与比赛侧同口径：推得出哪一侧就只更新哪一侧，避免"只有报名截止"时两列都不填。
+    if start is not None:
+        conn.execute(
+            "UPDATE competitions SET reg_start_month = ? WHERE id = ?",
+            (start, int(competition_id)),
+        )
+    if end is not None:
+        conn.execute(
+            "UPDATE competitions SET reg_end_month = ? WHERE id = ?",
+            (end, int(competition_id)),
+        )
+    if start is not None and end is not None:
+        conn.execute(
+            "UPDATE competitions SET reg_cross_year = ? WHERE id = ?",
+            (1 if end < start else 0, int(competition_id)),
+        )
 
 
 def set_competition_facts(competition_id: int, patch: dict, *,
@@ -4034,16 +4077,33 @@ def set_competition_facts(competition_id: int, patch: dict, *,
     """采纳/手工校正：写 competitions 并同步台账，返回实际写入的字段。
 
     参数:
-        patch: {field: 'YYYY-MM-DD'|''|None}，值为空表示清空该字段。
+        patch: {field: 'YYYY-MM-DD'|''|None|1-12 整数}，值为空表示清空该字段。
         source_url: 事实来源（官网链接）。
+
+    允许 4 个日期字段 + 4 个月份字段。月份（*_month）用于官网只公布到
+    「2026 年 7 月」这类精度的情况；写日期会顺手回填同侧月份，写月份不会
+    改动同侧已有的精确日期。
     """
     allowed = {"reg_start_date", "reg_end_date",
-               "contest_start_date", "contest_end_date"}
+               "contest_start_date", "contest_end_date",
+               "reg_start_month", "reg_end_month",
+               "contest_start_month", "contest_end_month"}
     fields = {k: v for k, v in (patch or {}).items() if k in allowed}
     if not fields:
         raise ValueError("没有可写入的字段")
-    sets = ", ".join("%s = ?" % k for k in fields)
-    params = [(_date_or_none(v) if v else None) for v in fields.values()]
+
+    values: dict = {}
+    for key, raw in fields.items():
+        if key.endswith("_month"):
+            month = _month_or_none(raw)
+            if raw not in (None, "") and month is None:
+                raise ValueError("月份字段 %s 只接受 1-12：%r" % (key, raw))
+            values[key] = month
+        else:
+            values[key] = _date_or_none(raw) if raw else None
+
+    sets = ", ".join("%s = ?" % k for k in values)
+    params = list(values.values())
     with get_conn() as conn:
         _ensure_fact_tables(conn)
         cur = conn.execute(
@@ -4053,11 +4113,14 @@ def set_competition_facts(competition_id: int, patch: dict, *,
         )
         if cur.rowcount == 0:
             raise ValueError("赛事不存在")
-        # 月份轨是日期的派生兜底值：写入报名日期就顺手回填，避免长期不咬合
-        if {"reg_start_date", "reg_end_date"} & set(fields):
+        # 月份轨是日期的派生兜底值：写入日期就顺手回填，避免长期不咬合
+        if {"reg_start_date", "reg_end_date"} & set(values):
             _refresh_reg_months(conn, int(competition_id))
-        for field in fields:
-            value = _date_or_none(fields[field]) if fields[field] else None
+        if {"contest_start_date", "contest_end_date"} & set(values):
+            _refresh_contest_months(conn, int(competition_id))
+        for field, value in values.items():
+            ledger_value = None if value is None else (
+                str(value) if field.endswith("_month") else value)
             conn.execute(
                 "INSERT INTO competition_fact_ledger "
                 "(competition_id, field, value, source_url, verified_by) "
@@ -4066,7 +4129,7 @@ def set_competition_facts(competition_id: int, patch: dict, *,
                 "value = excluded.value, source_url = excluded.source_url, "
                 "verified_at = datetime('now', 'localtime'), "
                 "verified_by = excluded.verified_by",
-                (int(competition_id), field, value, source_url or "", verified_by),
+                (int(competition_id), field, ledger_value, source_url or "", verified_by),
             )
     return fields
 
