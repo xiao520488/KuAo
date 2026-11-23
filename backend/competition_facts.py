@@ -430,6 +430,26 @@ def sanitize_facts(facts: Dict[str, Any], *, today: Optional[date] = None) -> Di
     if con_s and con_e and con_e < con_s:
         log.warning("[事实] 丢弃比赛结束 %s：早于开始 %s", con_e, con_s)
         clean.pop("contest_end_date", None)
+
+    # 跨对矛盾（2026-11-23 补）：报名和比赛必须属于同一届。
+    # 官网常见「本届报名时间 + 往届比赛时间」并列，模型会把两届拼成一条
+    # （线上实证：#115 报名截止 2026-01-25 配 2025-01-31~02-15 的比赛，
+    #  即报名晚于比赛结束）。这类数据按「比赛时间取自往届」处理：丢比赛对，
+    # 保留报名对（报名原文通常是最新一届的），避免把陈旧赛期写进主表。
+    reg_s, reg_e = clean.get("reg_start_date"), clean.get("reg_end_date")
+    con_s, con_e = clean.get("contest_start_date"), clean.get("contest_end_date")
+    if con_s or con_e:
+        reg_mark = reg_e or reg_s
+        con_mark = con_s or con_e
+        conflict = ""
+        if reg_mark and con_mark and reg_mark > con_mark:
+            conflict = "报名(%s)晚于比赛(%s)" % (reg_mark, con_mark)
+        elif reg_s and con_e and con_e < reg_s:
+            conflict = "比赛结束(%s)早于报名开始(%s)" % (con_e, reg_s)
+        if conflict:
+            log.warning("[事实] 丢弃比赛日期：%s，两者不同届", conflict)
+            clean.pop("contest_start_date", None)
+            clean.pop("contest_end_date", None)
     return clean
 
 
