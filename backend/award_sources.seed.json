@@ -18,7 +18,10 @@
           "奖项": "award_grade",
           "编号": "work_no"
         },
-        "fixed": {"year": 2026, "session": "第19届"}
+        "fixed": {
+          "year": 2026,
+          "session": "第19届"
+        }
       }
     },
     {
@@ -38,9 +41,26 @@
           "队员2": "members",
           "指导教师": "advisor"
         },
-        "split_first_space": {"团队编号+队名": ["team_code", "title"]},
-        "group_by": {"key": ["team_code"], "concat": ["members", "advisor"]},
-        "fixed": {"year": 2026, "session": "第15届", "award_grade": "一等奖"}
+        "split_first_space": {
+          "团队编号+队名": [
+            "team_code",
+            "title"
+          ]
+        },
+        "group_by": {
+          "key": [
+            "team_code"
+          ],
+          "concat": [
+            "members",
+            "advisor"
+          ]
+        },
+        "fixed": {
+          "year": 2026,
+          "session": "第15届",
+          "award_grade": "一等奖"
+        }
       }
     },
     {
@@ -60,9 +80,26 @@
           "队员2": "members",
           "指导教师": "advisor"
         },
-        "split_first_space": {"团队编号+队名": ["team_code", "title"]},
-        "group_by": {"key": ["team_code"], "concat": ["members", "advisor"]},
-        "fixed": {"year": 2026, "session": "第15届", "award_grade": "二等奖"}
+        "split_first_space": {
+          "团队编号+队名": [
+            "team_code",
+            "title"
+          ]
+        },
+        "group_by": {
+          "key": [
+            "team_code"
+          ],
+          "concat": [
+            "members",
+            "advisor"
+          ]
+        },
+        "fixed": {
+          "year": 2026,
+          "session": "第15届",
+          "award_grade": "二等奖"
+        }
       }
     },
     {
@@ -82,9 +119,26 @@
           "队员2": "members",
           "指导教师": "advisor"
         },
-        "split_first_space": {"团队编号+队名": ["team_code", "title"]},
-        "group_by": {"key": ["team_code"], "concat": ["members", "advisor"]},
-        "fixed": {"year": 2026, "session": "第15届", "award_grade": "三等奖"}
+        "split_first_space": {
+          "团队编号+队名": [
+            "team_code",
+            "title"
+          ]
+        },
+        "group_by": {
+          "key": [
+            "team_code"
+          ],
+          "concat": [
+            "members",
+            "advisor"
+          ]
+        },
+        "fixed": {
+          "year": 2026,
+          "session": "第15届",
+          "award_grade": "三等奖"
+        }
       }
     },
     {
@@ -107,9 +161,27 @@
           "成员姓名": "members",
           "指导老师": "advisor"
         },
-        "fill_down": ["track", "award_grade", "team_code", "title", "school", "topic"],
-        "group_by": {"key": ["team_code"], "concat": ["members", "advisor"]},
-        "fixed": {"year": 2026, "session": "第17届"}
+        "fill_down": [
+          "track",
+          "award_grade",
+          "team_code",
+          "title",
+          "school",
+          "topic"
+        ],
+        "group_by": {
+          "key": [
+            "team_code"
+          ],
+          "concat": [
+            "members",
+            "advisor"
+          ]
+        },
+        "fixed": {
+          "year": 2026,
+          "session": "第17届"
+        }
       }
     },
     {
@@ -134,7 +206,10 @@
           "作者": "members",
           "指导教师": "advisor"
         },
-        "fixed": {"year": 2025, "session": "第18届"}
+        "fixed": {
+          "year": 2025,
+          "session": "第18届"
+        }
       }
     },
     {
@@ -149,8 +224,14 @@
         "mode": "lines",
         "row_regex": "^(?P<work_no>\\d{4,6})\\s+(?P<school>\\S+)\\s+(?P<title>\\S.*)$",
         "section_regex": "^(?:全国总决赛)?(一等奖|二等奖|三等奖|最佳工程奖|最佳创意奖)$",
-        "dedupe_key": ["title", "school"],
-        "fixed": {"year": 2026, "session": "第9届"}
+        "dedupe_key": [
+          "title",
+          "school"
+        ],
+        "fixed": {
+          "year": 2026,
+          "session": "第9届"
+        }
       }
     },
     {
@@ -163,12 +244,27 @@
       "notes": "45 页有文字层 PDF；这张表没有表头，列位固定（序号/组别/省份/学校/队员×3/指导教师），奖项只在「本科组二等奖」「高职高专组一等奖」这类段标题里，且首页（序号 1-21）是扫描图，故默认段=本科组一等奖。",
       "parse_spec": {
         "mode": "table",
-        "positional": ["seq", "group", "province", "school", "members", "members", "members", "advisor"],
+        "positional": [
+          "seq",
+          "group",
+          "province",
+          "school",
+          "members",
+          "members",
+          "members",
+          "advisor"
+        ],
         "section_regex": "((?:本科组|高职高专组)?(?:一等奖|二等奖|三等奖))",
         "section_default": "本科组一等奖",
         "title_template": "{school}·{members}",
-        "dedupe_key": ["title", "school", "members"],
-        "fixed": {"year": 2026}
+        "dedupe_key": [
+          "title",
+          "school",
+          "members"
+        ],
+        "fixed": {
+          "year": 2026
+        }
       }
     },
     {
@@ -189,8 +285,15 @@
           "队伍成员": "members",
           "奖项": "award_grade"
         },
-        "dedupe_key": ["title", "school", "award_grade", "track"],
-        "fixed": {"year": 2025}
+        "dedupe_key": [
+          "title",
+          "school",
+          "award_grade",
+          "track"
+        ],
+        "fixed": {
+          "year": 2025
+        }
       }
     },
     {
@@ -212,8 +315,14 @@
           "赛队队员": "members",
           "奖项": "award_grade"
         },
-        "dedupe_key": ["title", "school", "award_grade"],
-        "fixed": {"year": 2025}
+        "dedupe_key": [
+          "title",
+          "school",
+          "award_grade"
+        ],
+        "fixed": {
+          "year": 2025
+        }
       }
     },
     {
@@ -226,10 +335,23 @@
       "notes": "4 页有文字层。6 列：队伍编号|队伍名称|学校|成员名单（合并跨 3 列）；奖项不做列，而是「一等奖/二等奖/三等奖」整行分段，故用 section_regex 取段标题；合并表头导致列位不可靠，改 positional。",
       "parse_spec": {
         "mode": "table",
-        "positional": ["team_code", "title", "school", "members", "members", "members"],
+        "positional": [
+          "team_code",
+          "title",
+          "school",
+          "members",
+          "members",
+          "members"
+        ],
         "section_regex": "^(一等奖|二等奖|三等奖|优胜奖)$",
-        "dedupe_key": ["title", "school", "award_grade"],
-        "fixed": {"year": 2025}
+        "dedupe_key": [
+          "title",
+          "school",
+          "award_grade"
+        ],
+        "fixed": {
+          "year": 2025
+        }
       }
     },
     {
@@ -252,10 +374,23 @@
           "指导老师": "advisor",
           "获奖等级": "award_grade"
         },
-        "fill_down": ["province", "category"],
-        "drop_if_empty": ["work_no"],
-        "dedupe_key": ["title", "school", "award_grade"],
-        "fixed": {"year": 2026, "session": "第十二届", "track": "国赛"}
+        "fill_down": [
+          "province",
+          "category"
+        ],
+        "drop_if_empty": [
+          "work_no"
+        ],
+        "dedupe_key": [
+          "title",
+          "school",
+          "award_grade"
+        ],
+        "fixed": {
+          "year": 2026,
+          "session": "第十二届",
+          "track": "国赛"
+        }
       }
     },
     {
@@ -268,13 +403,32 @@
       "notes": "12 页有文字层 PDF，11 页各 1 张 6 列表（首页是红头文件）。表头只印一次且列序固定，故用 positional；名单没有作品名，用 title_template 拼「学校·成员」；末页 4 条「优秀组织奖」与表头行的奖项列不是一二三等奖，用 grade_allow 白名单一并滤掉；一行一队，不需要 fill_down/group_by。",
       "parse_spec": {
         "mode": "table",
-        "positional": ["work_no", "school", "members", "advisor", "领队", "award_grade"],
+        "positional": [
+          "work_no",
+          "school",
+          "members",
+          "advisor",
+          "领队",
+          "award_grade"
+        ],
         "title_template": "{school}·{members}",
         "header_regex": "序号\\s*学校名称",
-        "grade_allow": ["一等奖", "二等奖", "三等奖", "总冠军（一等奖）",
-                        "二等奖(最佳创意奖)", "二等奖(最佳制作奖)"],
-        "dedupe_key": ["title", "school"],
-        "fixed": {"year": 2026, "session": "第十九届"}
+        "grade_allow": [
+          "一等奖",
+          "二等奖",
+          "三等奖",
+          "总冠军（一等奖）",
+          "二等奖(最佳创意奖)",
+          "二等奖(最佳制作奖)"
+        ],
+        "dedupe_key": [
+          "title",
+          "school"
+        ],
+        "fixed": {
+          "year": 2026,
+          "session": "第十九届"
+        }
       }
     },
     {
@@ -292,9 +446,17 @@
           "学校": "school"
         },
         "title_template": "{school}·{members}",
-        "dedupe_key": ["title", "school", "award_grade"],
-        "fixed": {"year": 2025, "session": "2025",
-                  "track": "英语组·国际传播综合能力赛项", "category": "国赛"}
+        "dedupe_key": [
+          "title",
+          "school",
+          "award_grade"
+        ],
+        "fixed": {
+          "year": 2025,
+          "session": "2025",
+          "track": "英语组·国际传播综合能力赛项",
+          "category": "国赛"
+        }
       }
     },
     {
@@ -307,9 +469,383 @@
       "notes": "第九届（2025）名单只在微信文章里（requests 直接撞验证码页），先降级登记可直连的第八届：7 页 PDF，p1-p2 是扫描图、p3-p7 有文字层，3 列 × 90 行 + 15 行专项奖。「团队名称」是「学校+队名」无分隔符，school 无法自动拆，保留在 title 里，不猜。",
       "parse_spec": {
         "mode": "table",
-        "columns": {"序号": "work_no", "团队名称": "title", "奖项": "award_grade"},
-        "dedupe_key": ["title", "award_grade"],
-        "fixed": {"year": 2024, "session": "第八届"}
+        "columns": {
+          "序号": "work_no",
+          "团队名称": "title",
+          "奖项": "award_grade"
+        },
+        "dedupe_key": [
+          "title",
+          "award_grade"
+        ],
+        "fixed": {
+          "year": 2024,
+          "session": "第八届"
+        }
+      }
+    },
+    {
+      "competition_id": 68,
+      "url": "https://wjhg.fltrp.com/c/2025-12-17/540404.shtml",
+      "title": "2025“外研社·国才杯”“理解当代中国”全国大学生外语能力大赛 英语组·笔译赛项 获奖名单",
+      "source_kind": "official_notice",
+      "years": "2025",
+      "adapter": "html_table",
+      "notes": "与 cid=68 主赛项同一模板（table.huojiangList，3 列 奖项|姓名|学校，奖项逐行落格）。",
+      "parse_spec": {
+        "columns": {
+          "奖项": "award_grade",
+          "姓名": "members",
+          "学校": "school"
+        },
+        "title_template": "{school}·{members}",
+        "dedupe_key": [
+          "title",
+          "school",
+          "award_grade"
+        ],
+        "fixed": {
+          "year": 2025,
+          "session": "2025",
+          "track": "英语组·笔译赛项",
+          "category": "国赛"
+        }
+      }
+    },
+    {
+      "competition_id": 68,
+      "url": "https://wjhg.fltrp.com/c/2025-11-07/539721.shtml",
+      "title": "2025“外研社·国才杯”“理解当代中国”全国大学生外语能力大赛 英语组·口译赛项 获奖名单",
+      "source_kind": "official_notice",
+      "years": "2025",
+      "adapter": "html_table",
+      "notes": "与 cid=68 主赛项同一模板（table.huojiangList，3 列 奖项|姓名|学校，奖项逐行落格）。",
+      "parse_spec": {
+        "columns": {
+          "奖项": "award_grade",
+          "姓名": "members",
+          "学校": "school"
+        },
+        "title_template": "{school}·{members}",
+        "dedupe_key": [
+          "title",
+          "school",
+          "award_grade"
+        ],
+        "fixed": {
+          "year": 2025,
+          "session": "2025",
+          "track": "英语组·口译赛项",
+          "category": "国赛"
+        }
+      }
+    },
+    {
+      "competition_id": 68,
+      "url": "https://wjhg.fltrp.com/c/2025-12-23/540571.shtml",
+      "title": "2025“外研社·国才杯”“理解当代中国”全国大学生外语能力大赛 英语组·短视频赛项 获奖名单",
+      "source_kind": "official_notice",
+      "years": "2025",
+      "adapter": "html_table",
+      "notes": "与 cid=68 主赛项同一模板（table.huojiangList，3 列 奖项|姓名|学校，奖项逐行落格）。",
+      "parse_spec": {
+        "columns": {
+          "奖项": "award_grade",
+          "姓名": "members",
+          "学校": "school"
+        },
+        "title_template": "{school}·{members}",
+        "dedupe_key": [
+          "title",
+          "school",
+          "award_grade"
+        ],
+        "fixed": {
+          "year": 2025,
+          "session": "2025",
+          "track": "英语组·短视频赛项",
+          "category": "国赛"
+        }
+      }
+    },
+    {
+      "competition_id": 68,
+      "url": "https://wjhg.fltrp.com/c/2025-12-24/540579.shtml",
+      "title": "2025“外研社·国才杯”“理解当代中国”全国大学生外语能力大赛 短视频赛项（国际中文组） 获奖名单",
+      "source_kind": "official_notice",
+      "years": "2025",
+      "adapter": "html_table",
+      "notes": "与 cid=68 主赛项同一模板（table.huojiangList，3 列 奖项|姓名|学校，奖项逐行落格）。",
+      "parse_spec": {
+        "columns": {
+          "奖项": "award_grade",
+          "姓名": "members",
+          "学校": "school"
+        },
+        "title_template": "{school}·{members}",
+        "dedupe_key": [
+          "title",
+          "school",
+          "award_grade"
+        ],
+        "fixed": {
+          "year": 2025,
+          "session": "2025",
+          "track": "短视频赛项（国际中文组）",
+          "category": "国赛"
+        }
+      }
+    },
+    {
+      "competition_id": 68,
+      "url": "https://wjhg.fltrp.com/c/2025-12-25/540592.shtml",
+      "title": "2025“外研社·国才杯”“理解当代中国”全国大学生外语能力大赛 多语种组·俄语 获奖名单",
+      "source_kind": "official_notice",
+      "years": "2025",
+      "adapter": "html_table",
+      "notes": "与 cid=68 主赛项同一模板（table.huojiangList，3 列 奖项|姓名|学校，奖项逐行落格）。",
+      "parse_spec": {
+        "columns": {
+          "奖项": "award_grade",
+          "姓名": "members",
+          "学校": "school"
+        },
+        "title_template": "{school}·{members}",
+        "dedupe_key": [
+          "title",
+          "school",
+          "award_grade"
+        ],
+        "fixed": {
+          "year": 2025,
+          "session": "2025",
+          "track": "多语种组·俄语",
+          "category": "国赛"
+        }
+      }
+    },
+    {
+      "competition_id": 68,
+      "url": "https://wjhg.fltrp.com/c/2025-12-25/540593.shtml",
+      "title": "2025“外研社·国才杯”“理解当代中国”全国大学生外语能力大赛 多语种组·德语 获奖名单",
+      "source_kind": "official_notice",
+      "years": "2025",
+      "adapter": "html_table",
+      "notes": "与 cid=68 主赛项同一模板（table.huojiangList，3 列 奖项|姓名|学校，奖项逐行落格）。",
+      "parse_spec": {
+        "columns": {
+          "奖项": "award_grade",
+          "姓名": "members",
+          "学校": "school"
+        },
+        "title_template": "{school}·{members}",
+        "dedupe_key": [
+          "title",
+          "school",
+          "award_grade"
+        ],
+        "fixed": {
+          "year": 2025,
+          "session": "2025",
+          "track": "多语种组·德语",
+          "category": "国赛"
+        }
+      }
+    },
+    {
+      "competition_id": 68,
+      "url": "https://wjhg.fltrp.com/c/2025-12-25/540594.shtml",
+      "title": "2025“外研社·国才杯”“理解当代中国”全国大学生外语能力大赛 多语种组·法语 获奖名单",
+      "source_kind": "official_notice",
+      "years": "2025",
+      "adapter": "html_table",
+      "notes": "与 cid=68 主赛项同一模板（table.huojiangList，3 列 奖项|姓名|学校，奖项逐行落格）。",
+      "parse_spec": {
+        "columns": {
+          "奖项": "award_grade",
+          "姓名": "members",
+          "学校": "school"
+        },
+        "title_template": "{school}·{members}",
+        "dedupe_key": [
+          "title",
+          "school",
+          "award_grade"
+        ],
+        "fixed": {
+          "year": 2025,
+          "session": "2025",
+          "track": "多语种组·法语",
+          "category": "国赛"
+        }
+      }
+    },
+    {
+      "competition_id": 68,
+      "url": "https://wjhg.fltrp.com/c/2025-12-25/540595.shtml",
+      "title": "2025“外研社·国才杯”“理解当代中国”全国大学生外语能力大赛 多语种组·西班牙语 获奖名单",
+      "source_kind": "official_notice",
+      "years": "2025",
+      "adapter": "html_table",
+      "notes": "与 cid=68 主赛项同一模板（table.huojiangList，3 列 奖项|姓名|学校，奖项逐行落格）。",
+      "parse_spec": {
+        "columns": {
+          "奖项": "award_grade",
+          "姓名": "members",
+          "学校": "school"
+        },
+        "title_template": "{school}·{members}",
+        "dedupe_key": [
+          "title",
+          "school",
+          "award_grade"
+        ],
+        "fixed": {
+          "year": 2025,
+          "session": "2025",
+          "track": "多语种组·西班牙语",
+          "category": "国赛"
+        }
+      }
+    },
+    {
+      "competition_id": 68,
+      "url": "https://wjhg.fltrp.com/c/2025-12-25/540596.shtml",
+      "title": "2025“外研社·国才杯”“理解当代中国”全国大学生外语能力大赛 多语种组·阿拉伯语 获奖名单",
+      "source_kind": "official_notice",
+      "years": "2025",
+      "adapter": "html_table",
+      "notes": "与 cid=68 主赛项同一模板（table.huojiangList，3 列 奖项|姓名|学校，奖项逐行落格）。",
+      "parse_spec": {
+        "columns": {
+          "奖项": "award_grade",
+          "姓名": "members",
+          "学校": "school"
+        },
+        "title_template": "{school}·{members}",
+        "dedupe_key": [
+          "title",
+          "school",
+          "award_grade"
+        ],
+        "fixed": {
+          "year": 2025,
+          "session": "2025",
+          "track": "多语种组·阿拉伯语",
+          "category": "国赛"
+        }
+      }
+    },
+    {
+      "competition_id": 68,
+      "url": "https://wjhg.fltrp.com/c/2025-12-25/540597.shtml",
+      "title": "2025“外研社·国才杯”“理解当代中国”全国大学生外语能力大赛 多语种组·日语 获奖名单",
+      "source_kind": "official_notice",
+      "years": "2025",
+      "adapter": "html_table",
+      "notes": "与 cid=68 主赛项同一模板（table.huojiangList，3 列 奖项|姓名|学校，奖项逐行落格）。",
+      "parse_spec": {
+        "columns": {
+          "奖项": "award_grade",
+          "姓名": "members",
+          "学校": "school"
+        },
+        "title_template": "{school}·{members}",
+        "dedupe_key": [
+          "title",
+          "school",
+          "award_grade"
+        ],
+        "fixed": {
+          "year": 2025,
+          "session": "2025",
+          "track": "多语种组·日语",
+          "category": "国赛"
+        }
+      }
+    },
+    {
+      "competition_id": 68,
+      "url": "https://wjhg.fltrp.com/c/2025-12-25/540598.shtml",
+      "title": "2025“外研社·国才杯”“理解当代中国”全国大学生外语能力大赛 多语种组·意大利语 获奖名单",
+      "source_kind": "official_notice",
+      "years": "2025",
+      "adapter": "html_table",
+      "notes": "与 cid=68 主赛项同一模板（table.huojiangList，3 列 奖项|姓名|学校，奖项逐行落格）。",
+      "parse_spec": {
+        "columns": {
+          "奖项": "award_grade",
+          "姓名": "members",
+          "学校": "school"
+        },
+        "title_template": "{school}·{members}",
+        "dedupe_key": [
+          "title",
+          "school",
+          "award_grade"
+        ],
+        "fixed": {
+          "year": 2025,
+          "session": "2025",
+          "track": "多语种组·意大利语",
+          "category": "国赛"
+        }
+      }
+    },
+    {
+      "competition_id": 68,
+      "url": "https://wjhg.fltrp.com/c/2025-12-25/540599.shtml",
+      "title": "2025“外研社·国才杯”“理解当代中国”全国大学生外语能力大赛 多语种组·葡萄牙语 获奖名单",
+      "source_kind": "official_notice",
+      "years": "2025",
+      "adapter": "html_table",
+      "notes": "与 cid=68 主赛项同一模板（table.huojiangList，3 列 奖项|姓名|学校，奖项逐行落格）。",
+      "parse_spec": {
+        "columns": {
+          "奖项": "award_grade",
+          "姓名": "members",
+          "学校": "school"
+        },
+        "title_template": "{school}·{members}",
+        "dedupe_key": [
+          "title",
+          "school",
+          "award_grade"
+        ],
+        "fixed": {
+          "year": 2025,
+          "session": "2025",
+          "track": "多语种组·葡萄牙语",
+          "category": "国赛"
+        }
+      }
+    },
+    {
+      "competition_id": 68,
+      "url": "https://wjhg.fltrp.com/c/2025-12-25/540600.shtml",
+      "title": "2025“外研社·国才杯”“理解当代中国”全国大学生外语能力大赛 多语种组·韩语 获奖名单",
+      "source_kind": "official_notice",
+      "years": "2025",
+      "adapter": "html_table",
+      "notes": "与 cid=68 主赛项同一模板（table.huojiangList，3 列 奖项|姓名|学校，奖项逐行落格）。",
+      "parse_spec": {
+        "columns": {
+          "奖项": "award_grade",
+          "姓名": "members",
+          "学校": "school"
+        },
+        "title_template": "{school}·{members}",
+        "dedupe_key": [
+          "title",
+          "school",
+          "award_grade"
+        ],
+        "fixed": {
+          "year": 2025,
+          "session": "2025",
+          "track": "多语种组·韩语",
+          "category": "国赛"
+        }
       }
     }
   ]
