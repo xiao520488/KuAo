@@ -166,3 +166,15 @@ outers.ai._keyword_search 三处打分统一接入别称；另加 EXTRA_ALIASES�
 原来的 0.6 写在前端 SearchView.vue 的 WEAK_SCORE 里，改一次要重新构建前端。现在唯一真源是 db.SEARCH_WEAK_SCORE，/api/competitions/search/scored 直接回传 weak（是否弱命中）与 weak_threshold，前端只读不算。
 **口径细节**：0 命中时 weak=false——那是「没搜到」走另一条分支（空态/AI），不是「弱命中」；后端没回 weak 时前端也按 false 处理，避免老接口误触发 AI。
 **验证**：线上 /scored 三态正确——大挑 0.9/weak=false、奥林匹克 0.35/weak=true、量子织布机 0/weak=false；搜索页实测「大挑」2 条不调 AI、「我想参加奥林匹克」8 条带 AI 角标。
+
+### 2026-11-23 收尾：搜索与后台这一轮完事
+
+**本轮四件事**（都在线上，提交 1697bdb → 138bc75）：
+1. 后台砍掉「候选赛事」「赛事核对」两个面板（AdminView 1733 → 1187 行），默认面板改「赛事管理」，旧 deep link 自动纠正；详情页去掉「日期尚未人工核对/日期核对于」整行，只留状态徽章。
+2. 修复「搜大挑出来的是小挑」：新增 ackend/search_alias.py，白名单别称按**名称**对齐 competitions.id（序号 ≠ id），三处打分统一接入；另修「大广赛被单字『赛』拆成『大广』」。
+3. 弱命中补 AI：/api/competitions/search/scored 回传 match_score / est_score，est_score < 0.6 且是描述型需求时补一次语义检索；强命中关键词领跑、弱命中 AI 领跑。
+4. 阈值收到后端一处：db.SEARCH_WEAK_SCORE，接口直接回传 weak，前端不再写死。
+
+**测试**：后端 81 passed / 4 skipped（跳过的要 fastapi/chromadb，服务器上 15 passed 全跑）。线上实测：/search?q=大挑 → 2 条大挑在前不调 AI；我想参加奥林匹克 → 8 条带 AI 角标。
+
+**下次开工先看**：① 搜索别名表还只覆盖白名单里的比赛，新增赛事记得在 competition_whitelist.ALIASES 或 search_alias.EXTRA_ALIASES 补俗称；② 候选池/事实队列后端接口与两张表**保留未删**（只下线了前端），要物理删先备份；③ 获奖作品仍是 35,051 条 / 15 赛事 / 85 白名单，缺口在扫描件（OCR 已决定不做）。
