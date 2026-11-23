@@ -885,6 +885,19 @@ def ingest_source(source: dict, *, apply: bool = False, approve: bool = False,
         "skipped": 0, "status": "failed", "error": None,
     }
     try:
+        # parse_spec.skip 非空 = 这个来源已知「不公示作品名」，只公示获奖者名单。
+        # 产品口径（2026-11-23）：名单型记录不作为作品入库（对 AI 解析毫无价值），
+        # 保留来源行是为了留下「已核查过、确实没有作品名」的证据，别反复重抓。
+        skip_reason = str(spec.get("skip") or "").strip()
+        if skip_reason:
+            log.info("跳过（名单型，无作品名）：%s", skip_reason)
+            stats["status"] = "skipped"
+            stats["error"] = skip_reason
+            if apply:
+                db.mark_award_source_fetch(source["id"], "skipped", rows=0,
+                                           error=skip_reason, db_path=db_path)
+            return stats
+
         content, final_url, ctype = fetch_source(source, timeout=timeout)
         fmt = detect_format(final_url or source["url"], ctype, content)
         stats["format"] = fmt

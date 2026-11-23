@@ -1843,9 +1843,12 @@ onBeforeUnmount(() => {
 
       <div
         v-else-if="!works.length"
-        class="rounded-2xl bg-white dark:bg-slate-800 p-10 text-center text-sm text-slate-500 dark:text-slate-400 ring-1 ring-slate-200/70 dark:ring-slate-700"
+        class="rounded-2xl bg-white dark:bg-slate-800 p-10 text-center ring-1 ring-slate-200/70 dark:ring-slate-700"
       >
-        暂无获奖作品数据
+        <p class="text-sm font-medium text-slate-600 dark:text-slate-300">暂未收入获奖作品</p>
+        <p class="mt-2 text-xs text-slate-400 dark:text-slate-500">
+          只有官方公示了作品名的赛事才会收录；只公示获奖者名单的赛事暂不收录，等官网补全后自动出现在这里。
+        </p>
       </div>
 
       <div v-else class="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">
