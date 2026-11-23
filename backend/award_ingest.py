@@ -807,6 +807,9 @@ def _finalize(records: List[dict], spec: Optional[dict] = None) -> List[dict]:
         parts: List[str] = list(rec.pop("_extras", []) or [])
         ignore = set(spec.get("ignore_columns") or [])
         if ignore:
+            # 未映射的原始列会以「标签：值」字符串进入 _extras，按标签过滤
+            parts = [p for p in parts
+                     if not any(p.startswith(f"{label}：") for label in ignore)]
             for key in [k for k in rec if k in ignore]:
                 rec.pop(key, None)
         if rec.get("members"):
