@@ -1639,6 +1639,146 @@
           "证书"
         ]
       }
+    },
+    {
+      "competition_id": 2,
+      "url": "https://www.tiaozhanbei.net/media/ckeditor_uploads/genrui/2026/03/12/第十八届“挑战杯”全国大学生课外学术科技作品竞赛授奖名单.pdf",
+      "title": "第十八届（2023）“挑战杯”全国大学生课外学术科技作品竞赛授奖名单",
+      "source_kind": "official_notice",
+      "years": "2023",
+      "adapter": "pdf_table",
+      "notes": "131 页、有文字层，每页 2 列「作品名称|学校」，1,671 行（内地 1648 + 港澳 23），与公示页正文自述逐项相等。坑：段标题（特等奖/一等奖…）单独占一行，drop_if_empty 必须同时含 title 与 school，否则多出 8 条 title=奖项名 的假记录；1287 条标题在单元格内折行，需 squeeze_cjk_space 去掉中文间空格。第十九届（2025）是 61 页整页位图，需 OCR，未登记。",
+      "parse_spec": {
+        "mode": "table",
+        "columns": {
+          "作品名称": "title",
+          "学校": "school"
+        },
+        "positional": [
+          "title",
+          "school"
+        ],
+        "section_regex": "^(特等奖|一等奖|二等奖|三等奖)$",
+        "drop_if_empty": [
+          "title",
+          "school"
+        ],
+        "squeeze_cjk_space": true,
+        "dedupe_key": [
+          "title",
+          "school",
+          "award_grade"
+        ],
+        "fixed": {
+          "year": 2023,
+          "session": "第十八届"
+        }
+      }
+    },
+    {
+      "competition_id": 3,
+      "url": "https://files.youth.cn/video/xwzx_video/202501/P020250107657789171346.xlsx",
+      "title": "第十四届（2024）“挑战杯”中国大学生创业计划竞赛获奖名单 · 主体赛（附件1）",
+      "source_kind": "official_notice",
+      "years": "2024",
+      "adapter": "xlsx_sheet",
+      "notes": "7 列：赛事名称|获奖情况|省份/区域|学校|项目名称|参赛成员|指导老师。track 由「赛事名称」列给出，不要 fixed 死；「省份/区域」目标字段没有对应项，不要塞进 topic（会变成伪赛题）。主体赛铜奖 1261 条，比官方 1262 少 1 行，是发布侧缺行，不是解析丢失。",
+      "parse_spec": {
+        "sheet": "Sheet1",
+        "header_row": 0,
+        "columns": {
+          "赛事名称": "track",
+          "获奖情况": "award_grade",
+          "学校": "school",
+          "项目名称": "title",
+          "参赛成员": "members",
+          "指导老师": "advisor"
+        },
+        "drop_if_empty": [
+          "title",
+          "school"
+        ],
+        "dedupe_key": [
+          "track",
+          "title",
+          "school",
+          "award_grade"
+        ],
+        "fixed": {
+          "year": 2024,
+          "session": "第十四届"
+        }
+      }
+    },
+    {
+      "competition_id": 3,
+      "url": "https://files.youth.cn/video/xwzx_video/202501/P020250107658048037465.xlsx",
+      "title": "第十四届（2024）“挑战杯”中国大学生创业计划竞赛获奖名单 · 一带一路专项赛（附件2）",
+      "source_kind": "official_notice",
+      "years": "2024",
+      "adapter": "xlsx_sheet",
+      "notes": "7 列：赛事名称|获奖情况|省份/区域|学校|项目名称|参赛成员|指导老师。track 由「赛事名称」列给出，不要 fixed 死；「省份/区域」目标字段没有对应项，不要塞进 topic（会变成伪赛题）。主体赛铜奖 1261 条，比官方 1262 少 1 行，是发布侧缺行，不是解析丢失。",
+      "parse_spec": {
+        "sheet": "Sheet1",
+        "header_row": 0,
+        "columns": {
+          "赛事名称": "track",
+          "获奖情况": "award_grade",
+          "学校": "school",
+          "项目名称": "title",
+          "参赛成员": "members",
+          "指导老师": "advisor"
+        },
+        "drop_if_empty": [
+          "title",
+          "school"
+        ],
+        "dedupe_key": [
+          "track",
+          "title",
+          "school",
+          "award_grade"
+        ],
+        "fixed": {
+          "year": 2024,
+          "session": "第十四届"
+        }
+      }
+    },
+    {
+      "competition_id": 3,
+      "url": "https://files.youth.cn/video/xwzx_video/202501/P020250107658249374346.xlsx",
+      "title": "第十四届（2024）“挑战杯”中国大学生创业计划竞赛获奖名单 · 秦创原专项赛（附件3）",
+      "source_kind": "official_notice",
+      "years": "2024",
+      "adapter": "xlsx_sheet",
+      "notes": "7 列：赛事名称|获奖情况|省份/区域|学校|项目名称|参赛成员|指导老师。track 由「赛事名称」列给出，不要 fixed 死；「省份/区域」目标字段没有对应项，不要塞进 topic（会变成伪赛题）。主体赛铜奖 1261 条，比官方 1262 少 1 行，是发布侧缺行，不是解析丢失。",
+      "parse_spec": {
+        "sheet": "Sheet1",
+        "header_row": 0,
+        "columns": {
+          "赛事名称": "track",
+          "获奖情况": "award_grade",
+          "学校": "school",
+          "项目名称": "title",
+          "参赛成员": "members",
+          "指导老师": "advisor"
+        },
+        "drop_if_empty": [
+          "title",
+          "school"
+        ],
+        "dedupe_key": [
+          "track",
+          "title",
+          "school",
+          "award_grade"
+        ],
+        "fixed": {
+          "year": 2024,
+          "session": "第十四届"
+        }
+      }
     }
   ]
 }

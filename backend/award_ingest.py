@@ -797,6 +797,11 @@ def _finalize(records: List[dict], spec: Optional[dict] = None) -> List[dict]:
         if strip_chars and rec.get("title"):
             # 大广赛第 18 届标题带书名号《…》，第 17 届不带，入库统一去掉
             rec["title"] = str(rec["title"]).strip(strip_chars).strip()
+        if spec.get("squeeze_cjk_space") and rec.get("title"):
+            # PDF 单元格折行会把「基于深度学习的 图像识别」拆出空格，
+            # 只挤压「中文 空格 中文」，英文单词之间的空格必须保留
+            rec["title"] = re.sub(r"(?<=[\u4e00-\u9fa5])\s+(?=[\u4e00-\u9fa5])", "",
+                                  str(rec["title"]))
         if _norm_key(rec.get("title")) in header_words:
             continue
         parts: List[str] = list(rec.pop("_extras", []) or [])
